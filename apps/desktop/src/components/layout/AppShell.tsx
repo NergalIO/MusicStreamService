@@ -3,6 +3,7 @@ import { useEffect, useRef } from 'react';
 import { useLocation, useNavigate, useOutlet } from 'react-router-dom';
 import { DeviceCodeDialog } from '@/components/connectors/DeviceCodeDialog';
 import { VkLoginDialog } from '@/components/connectors/VkLoginDialog';
+import { UpdateDialog } from '@/components/update/UpdateDialog';
 import { ScrollContainerContext } from '@/components/layout/scroll-context';
 import { LobbyBar } from '@/components/lobby/LobbyBar';
 import { Sidebar } from '@/components/layout/Sidebar';
@@ -26,6 +27,7 @@ import { usePlayerController } from '@/hooks/usePlayerController';
 import { useDownloadsStore } from '@/store/downloads-store';
 import { usePlaybackStore } from '@/store/playback-store';
 import { useSettingsStore } from '@/store/settings-store';
+import { initUpdateStore } from '@/store/update-store';
 
 function scrollRouteKey(pathname: string, search: string): string {
   return pathname + search;
@@ -47,6 +49,7 @@ export function AppShell() {
 
   useEffect(() => useDownloadsStore.getState().init(), []);
   useEffect(() => initRelayClient(), []);
+  useEffect(() => initUpdateStore(), []);
 
   useEffect(() => {
     const apply = (url: string) => {
@@ -124,6 +127,7 @@ export function AppShell() {
       <UploadDropZone />
       <DeviceCodeDialog />
       <VkLoginDialog />
+      <UpdateDialog />
       <Onboarding />
     </div>
   );

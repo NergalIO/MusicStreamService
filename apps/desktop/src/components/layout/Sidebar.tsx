@@ -34,6 +34,7 @@ import { cn } from '@/lib/utils';
 import { usePlayerStore } from '@/store/player-store';
 import { useSettingsStore } from '@/store/settings-store';
 import { type SidebarSectionId, useSidebarStore } from '@/store/sidebar-store';
+import { hasUpdateBadge, useUpdateStore } from '@/store/update-store';
 
 const NARROW_WIDTH = 960;
 
@@ -56,6 +57,7 @@ function Item({
   end,
   image,
   indent,
+  badge,
 }: {
   to: string;
   icon: LucideIcon;
@@ -63,14 +65,15 @@ function Item({
   end?: boolean;
   image?: string | null;
   indent?: boolean;
+  badge?: boolean;
 }) {
   const collapsed = useContext(CollapsedContext);
   return (
     <NavLink
       to={to}
       end={end}
-      title={collapsed ? label : undefined}
-      aria-label={collapsed ? label : undefined}
+      title={collapsed ? (badge ? `${label} — есть обновление` : label) : undefined}
+      aria-label={collapsed ? (badge ? `${label}, есть обновление` : label) : undefined}
       className={({ isActive }) =>
         cn(
           'relative flex h-8 items-center gap-2.5 rounded-md border-l-2 text-[13px] transition-colors',
@@ -83,12 +86,20 @@ function Item({
     >
       {({ isActive }) => (
         <>
-          {image ? (
-            <img src={image} alt="" draggable={false} className={cn('shrink-0 rounded-[3px] object-cover', collapsed ? 'h-5 w-5' : 'h-4 w-4')} />
-          ) : (
-            <Icon size={collapsed ? 18 : 16} className={cn('shrink-0', isActive ? 'text-primary' : 'text-primary/80')} />
+          <span className="relative shrink-0">
+            {image ? (
+              <img src={image} alt="" draggable={false} className={cn('rounded-[3px] object-cover', collapsed ? 'h-5 w-5' : 'h-4 w-4')} />
+            ) : (
+              <Icon size={collapsed ? 18 : 16} className={cn(isActive ? 'text-primary' : 'text-primary/80')} />
+            )}
+            {badge && collapsed && (
+              <span className="absolute -right-0.5 -top-0.5 h-1.5 w-1.5 rounded-full bg-primary" aria-hidden />
+            )}
+          </span>
+          {!collapsed && <span className="min-w-0 flex-1 truncate">{label}</span>}
+          {badge && !collapsed && (
+            <span className="h-1.5 w-1.5 shrink-0 rounded-full bg-primary" title="Доступно обновление" aria-hidden />
           )}
-          {!collapsed && <span className="truncate">{label}</span>}
         </>
       )}
     </NavLink>
@@ -249,6 +260,7 @@ export function Sidebar() {
   const setCollapsed = useSettingsStore((s) => s.setSidebarCollapsed);
   const narrow = useNarrowWindow();
   const collapsed = preferCollapsed || narrow;
+  const updateBadge = hasUpdateBadge(useUpdateStore((s) => s.status));
 
   return (
     <CollapsedContext.Provider value={collapsed}>
@@ -328,7 +340,7 @@ export function Sidebar() {
         <div className={cn('space-y-0.5 border-t border-border py-3', collapsed ? 'px-2' : 'px-3')}>
           <Item to="/subscription" icon={Sparkles} label="Подписка" />
           <Item to="/stats" icon={BarChart3} label="Статистика" />
-          <Item to="/settings" icon={Settings} label="Настройки" />
+          <Item to="/settings" icon={Settings} label="Настройки" badge={updateBadge} />
           <button
             type="button"
             title={email ? `Выйти (${email})` : 'Выйти'}

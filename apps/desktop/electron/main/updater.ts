@@ -7,10 +7,21 @@ import { spawn } from 'node:child_process';
 import { log } from './logger.js';
 
 export type UpdateStatus = {
-  state: 'idle' | 'checking' | 'available' | 'not-available' | 'downloaded' | 'error' | 'dev';
+  state:
+    | 'idle'
+    | 'checking'
+    | 'available'
+    | 'not-available'
+    | 'downloading'
+    | 'downloaded'
+    | 'installing'
+    | 'error'
+    | 'dev';
   version?: string;
+  currentVersion?: string;
   message?: string;
   downloadUrl?: string;
+  progress?: number;
 };
 
 type GhRelease = {
@@ -20,6 +31,16 @@ type GhRelease = {
 
 let pendingDownloadUrl: string | null = null;
 let pendingVersion: string | null = null;
+let installInFlight = false;
+let lastStatus: UpdateStatus = { state: 'idle' };
+
+function currentVersion(): string {
+  return normalizeVersion(app.getVersion());
+}
+
+function withMeta(status: UpdateStatus): UpdateStatus {
+  return { ...status, currentVersion: currentVersion() };
+}
 
 function githubRepo(): string {
   const env = process.env.MSS_GITHUB_REPO?.trim();
@@ -80,19 +101,19 @@ function fetchJson<T>(url: string): Promise<T> {
 
 async function checkGitHubRelease(): Promise<UpdateStatus> {
   const repo = githubRepo();
-  const current = normalizeVersion(app.getVersion());
+  const current = currentVersion();
   const release = await fetchJson<GhRelease>(`https://api.github.com/repos/${repo}/releases/latest`);
   const latest = normalizeVersion(release.tag_name);
   const asset = release.assets.find((a) => a.name === exeAssetName());
   if (!asset) {
-    return { state: 'error', message: `Нет asset ${exeAssetName()} в последнем релизе` };
+    return withMeta({ state: 'error', message: `Нет файла установщика в последнем релизе` });
   }
   pendingDownloadUrl = asset.browser_download_url;
   pendingVersion = latest;
   if (latest !== current) {
-    return { state: 'available', version: latest, downloadUrl: asset.browser_download_url };
+    return withMeta({ state: 'available', version: latest, downloadUrl: asset.browser_download_url });
   }
-  return { state: 'not-available', version: latest };
+  return withMeta({ state: 'not-available', version: latest });
 }
 
 function bootstrapUpdatePath(): string | null {
@@ -105,38 +126,71 @@ function bootstrapUpdatePath(): string | null {
   return null;
 }
 
-function downloadFile(url: string, dest: string): Promise<void> {
+const INSTALLER_ARGS = ['/S', '--updated', '/CLOSEAPPLICATIONS'];
+
+function launchInstaller(exePath: string): void {
+  spawn(exePath, INSTALLER_ARGS, {
+    detached: true,
+    stdio: 'ignore',
+    windowsHide: true,
+  }).unref();
+}
+
+function downloadFile(
+  url: string,
+  dest: string,
+  onProgress: (received: number, total: number) => void,
+): Promise<void> {
   return new Promise((resolve, reject) => {
     const file = fs.createWriteStream(dest);
+    const fail = (err: unknown) => {
+      file.close();
+      fs.unlink(dest, () => undefined);
+      reject(err instanceof Error ? err : new Error(String(err)));
+    };
     https
       .get(url, { headers: { 'User-Agent': 'MusicStreamService-Desktop' } }, (res) => {
         if (res.statusCode && res.statusCode >= 300 && res.statusCode < 400 && res.headers.location) {
           file.close();
-          fs.unlinkSync(dest);
-          downloadFile(res.headers.location, dest).then(resolve, reject);
+          fs.unlink(dest, () => undefined);
+          downloadFile(res.headers.location, dest, onProgress).then(resolve, reject);
           return;
         }
         if (res.statusCode !== 200) {
-          reject(new Error(`Download ${res.statusCode}`));
+          fail(new Error(`Download ${res.statusCode}`));
           return;
         }
+        const total = Number(res.headers['content-length']) || 0;
+        let received = 0;
+        res.on('data', (chunk: Buffer) => {
+          received += chunk.length;
+          onProgress(received, total);
+        });
         res.pipe(file);
         file.on('finish', () => {
           file.close();
           resolve();
         });
       })
-      .on('error', reject);
+      .on('error', fail);
   });
 }
 
+function delay(ms: number): Promise<void> {
+  return new Promise((resolve) => setTimeout(resolve, ms));
+}
+
 export function initUpdater(getMainWindow: () => BrowserWindow | null): void {
+  lastStatus = withMeta({ state: 'idle' });
   const send = (payload: UpdateStatus) => {
-    getMainWindow()?.webContents.send('update:status', payload);
+    lastStatus = withMeta(payload);
+    getMainWindow()?.webContents.send('update:status', lastStatus);
   };
 
+  ipcMain.handle('update:status', (): UpdateStatus => withMeta(lastStatus));
+
   ipcMain.handle('update:check', async (): Promise<UpdateStatus> => {
-    if (!app.isPackaged) return { state: 'dev' };
+    if (!app.isPackaged) return withMeta({ state: 'dev' });
     send({ state: 'checking' });
     try {
       const status = await checkGitHubRelease();
@@ -145,14 +199,35 @@ export function initUpdater(getMainWindow: () => BrowserWindow | null): void {
     } catch (e) {
       const message = e instanceof Error ? e.message : String(e);
       log.warn('updater check failed', message);
-      const err = { state: 'error' as const, message };
+      const err = withMeta({ state: 'error', message });
       send(err);
       return err;
     }
   });
 
   ipcMain.handle('update:install', async (): Promise<UpdateStatus> => {
-    if (!app.isPackaged) return { state: 'dev' };
+    if (!app.isPackaged) return withMeta({ state: 'dev' });
+    if (installInFlight) {
+      return withMeta({
+        state: 'installing',
+        version: pendingVersion ?? undefined,
+        message: 'Закрываем приложение и запускаем установщик…',
+      });
+    }
+    installInFlight = true;
+
+    const quitAfterInstaller = async (version?: string) => {
+      const status = withMeta({
+        state: 'installing',
+        version,
+        message: 'Закрываем приложение и запускаем установщик. MusicStream откроется снова.',
+      });
+      send(status);
+      await delay(700);
+      app.quit();
+      return status;
+    };
+
     const bootstrap = bootstrapUpdatePath();
     if (bootstrap) {
       spawn(
@@ -171,27 +246,37 @@ export function initUpdater(getMainWindow: () => BrowserWindow | null): void {
         ],
         { detached: true, stdio: 'ignore', windowsHide: true },
       ).unref();
-      setTimeout(() => app.quit(), 400);
-      return { state: 'downloaded', message: 'Запущена локальная пересборка через bootstrap' };
+      return quitAfterInstaller(pendingVersion ?? undefined);
     }
+
     const url = pendingDownloadUrl;
     if (!url) {
-      return { state: 'error', message: 'Сначала проверьте обновления' };
+      installInFlight = false;
+      const err = withMeta({ state: 'error', message: 'Сначала проверьте обновления' });
+      send(err);
+      return err;
     }
+
     const dest = path.join(app.getPath('temp'), exeAssetName());
+    const version = pendingVersion ?? undefined;
     try {
-      await downloadFile(url, dest);
-      send({ state: 'downloaded', version: pendingVersion ?? undefined });
-      spawn(dest, ['/S', '/CLOSEAPPLICATIONS'], {
-        detached: true,
-        stdio: 'ignore',
-        windowsHide: true,
-      }).unref();
-      setTimeout(() => app.quit(), 400);
-      return { state: 'downloaded', version: pendingVersion ?? undefined };
+      send({ state: 'downloading', version, progress: 0 });
+      let lastPercent = -1;
+      await downloadFile(url, dest, (received, total) => {
+        const progress = total > 0 ? Math.min(100, Math.round((received / total) * 100)) : 0;
+        if (progress === lastPercent) return;
+        lastPercent = progress;
+        send({ state: 'downloading', version, progress });
+      });
+      send({ state: 'downloaded', version, progress: 100 });
+      launchInstaller(dest);
+      return quitAfterInstaller(version);
     } catch (e) {
+      installInFlight = false;
       const message = e instanceof Error ? e.message : String(e);
-      return { state: 'error', message };
+      const err = withMeta({ state: 'error', version, message });
+      send(err);
+      return err;
     }
   });
 

@@ -108,9 +108,20 @@ export interface SystemSettings {
 }
 
 export type UpdateStatus = {
-  state: 'idle' | 'checking' | 'available' | 'not-available' | 'downloaded' | 'error' | 'dev';
+  state:
+    | 'idle'
+    | 'checking'
+    | 'available'
+    | 'not-available'
+    | 'downloading'
+    | 'downloaded'
+    | 'installing'
+    | 'error'
+    | 'dev';
   version?: string;
+  currentVersion?: string;
   message?: string;
+  progress?: number;
 };
 
 export type LogLevel = 'error' | 'warn' | 'info' | 'debug';
@@ -133,7 +144,8 @@ const api = {
     saveTextFile: (defaultName: string, content: string, filters?: { name: string; extensions: string[] }[]) =>
       ipcRenderer.invoke('system:saveTextFile', defaultName, content, filters) as Promise<string | null>,
     checkForUpdate: () => ipcRenderer.invoke('update:check') as Promise<UpdateStatus>,
-    installUpdate: () => ipcRenderer.invoke('update:install') as Promise<void>,
+    installUpdate: () => ipcRenderer.invoke('update:install') as Promise<UpdateStatus>,
+    updateStatus: () => ipcRenderer.invoke('update:status') as Promise<UpdateStatus>,
     onUpdate: (cb: (status: UpdateStatus) => void) => subscribe('update:status', cb),
     onDeepLink: (cb: (url: string) => void) => subscribe('deep-link', cb),
     exportReport: () => ipcRenderer.invoke('system:exportReport') as Promise<string | null>,

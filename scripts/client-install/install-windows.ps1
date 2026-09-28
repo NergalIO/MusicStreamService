@@ -80,7 +80,7 @@ Save-InstalledMeta $installRoot @{
 Write-Host ""
 Write-Host "Готово: $exe" -ForegroundColor Green
 if ($Quiet -and $RunInstaller) {
-    Start-Process -FilePath $exe -ArgumentList '/S', '/CLOSEAPPLICATIONS' -WindowStyle Hidden
+    Start-Process -FilePath $exe -ArgumentList '/S', '--updated', '/CLOSEAPPLICATIONS' -WindowStyle Hidden
 } elseif ($RunInstaller -or ((Read-Host "Запустить установщик сейчас? [Y/n]") -ne "n")) {
     Start-Process -FilePath $exe -Wait
 }

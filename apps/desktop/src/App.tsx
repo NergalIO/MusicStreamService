@@ -9,7 +9,7 @@ import {
   useParams,
 } from 'react-router-dom';
 import { libraryPath } from '@/lib/service-routes';
-import { toast, Toaster } from 'sonner';
+import { Toaster } from 'sonner';
 import { AppShell } from '@/components/layout/AppShell';
 import { loadSession } from '@/lib/api';
 import { getApiBaseUrl, setApiBaseUrl } from '@/lib/api-base';
@@ -48,30 +48,6 @@ function RequireAuth({ children }: { children: React.ReactNode }) {
 function Appearance() {
   const coverUrl = usePlayerStore((s) => s.current?.coverUrl);
   const dark = useApplyAppearance(coverUrl);
-  useEffect(() => {
-    return window.electronAPI?.system.onUpdate((s) => {
-      if (s.state === 'available') {
-        toast(`Доступна версия ${s.version ?? ''}`.trim(), {
-          id: 'mss-update',
-          duration: Infinity,
-          action: {
-            label: 'Обновить',
-            onClick: () => void window.electronAPI.system.installUpdate(),
-          },
-        });
-        return;
-      }
-      if (s.state !== 'downloaded') return;
-      toast('Обновление готово — откройте установщик или перезапустите', {
-        id: 'mss-update',
-        duration: Infinity,
-        action: {
-          label: 'Установить',
-          onClick: () => void window.electronAPI.system.installUpdate(),
-        },
-      });
-    });
-  }, []);
   return <Toaster theme={dark ? 'dark' : 'light'} position="bottom-right" richColors closeButton />;
 }
 

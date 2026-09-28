@@ -11,23 +11,26 @@ export function Dialog({
   title,
   children,
   className,
+  closable = true,
 }: {
   open: boolean;
   onClose: () => void;
   title?: ReactNode;
   children: ReactNode;
   className?: string;
+  /** false — нельзя закрыть крестиком, кликом по фону и Escape */
+  closable?: boolean;
 }) {
   const panelRef = useRef<HTMLDivElement>(null);
   const titleId = useId();
   useFocusTrap(panelRef, open);
 
   useEffect(() => {
-    if (!open) return;
+    if (!open || !closable) return;
     const onKey = (e: KeyboardEvent) => e.key === 'Escape' && onClose();
     window.addEventListener('keydown', onKey);
     return () => window.removeEventListener('keydown', onKey);
-  }, [open, onClose]);
+  }, [open, onClose, closable]);
 
   return createPortal(
     <AnimatePresence>
@@ -37,7 +40,7 @@ export function Dialog({
           initial={{ opacity: 0 }}
           animate={{ opacity: 1 }}
           exit={{ opacity: 0 }}
-          onMouseDown={onClose}
+          onMouseDown={closable ? onClose : undefined}
         >
           <motion.div
             ref={panelRef}
@@ -55,14 +58,16 @@ export function Dialog({
             transition={{ type: 'spring', stiffness: 420, damping: 32 }}
             onMouseDown={(e) => e.stopPropagation()}
           >
-            <button
-              type="button"
-              aria-label="Закрыть"
-              onClick={onClose}
-              className="absolute right-4 top-4 rounded-full p-1 text-muted transition-colors hover:bg-foreground/10 hover:text-foreground"
-            >
-              <X size={16} />
-            </button>
+            {closable && (
+              <button
+                type="button"
+                aria-label="Закрыть"
+                onClick={onClose}
+                className="absolute right-4 top-4 rounded-full p-1 text-muted transition-colors hover:bg-foreground/10 hover:text-foreground"
+              >
+                <X size={16} />
+              </button>
+            )}
             {title && (
               <h2 id={titleId} className="mb-4 pr-8 text-lg font-semibold">
                 {title}

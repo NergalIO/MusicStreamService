@@ -29,6 +29,7 @@ import { ACCENTS, COVER_ACCENT } from '@/lib/appearance';
 import { formatBytes, formatTrackCount } from '@/lib/format';
 import { isCompressible, useDownloadsStore } from '@/store/downloads-store';
 import { compressionKbps, useSettingsStore, type DownloadCompression } from '@/store/settings-store';
+import { useUpdateStore } from '@/store/update-store';
 import { toast } from 'sonner';
 
 const QUALITY_OPTIONS: { value: Quality; label: string }[] = [
@@ -388,35 +389,38 @@ function AppearanceSection() {
 
 function AboutSection() {
   const navigate = useNavigate();
-  const [version, setVersion] = useState<string | null>(null);
-  const [checking, setChecking] = useState(false);
   const email = loadSession()?.user.email;
-  useEffect(() => {
-    void window.electronAPI?.system.version().then(setVersion);
-  }, []);
-
-  const checkUpdate = async () => {
-    if (!window.electronAPI) return;
-    setChecking(true);
-    try {
-      const status = await window.electronAPI.system.checkForUpdate();
-      if (status.state === 'dev') toast.message('Проверка обновлений доступна в установленной версии');
-      else if (status.state === 'error') toast.error(status.message ?? 'Не удалось проверить обновления');
-      else if (status.state === 'not-available') toast.success('Установлена актуальная версия');
-      else if (status.state === 'available')
-        toast(`Доступна ${status.version} — нажмите «Обновить» в уведомлении или проверьте снова`, {
-          action: { label: 'Обновить', onClick: () => void window.electronAPI.system.installUpdate() },
-        });
-      else if (status.state === 'downloaded') toast('Откройте установщик из уведомления');
-      else toast.message(status.version ? `Найдена версия ${status.version}` : 'Ищем обновление…');
-    } finally {
-      setChecking(false);
-    }
-  };
+  const status = useUpdateStore((s) => s.status);
+  const currentVersion = useUpdateStore((s) => s.currentVersion);
+  const check = useUpdateStore((s) => s.check);
+  const install = useUpdateStore((s) => s.install);
+  const version = status.currentVersion ?? currentVersion;
+  const checking = status.state === 'checking';
+  const installing = status.state === 'downloading' || status.state === 'installing';
 
   const exportReport = async () => {
     const saved = await window.electronAPI.system.exportReport();
     if (saved) toast.success('Отчёт сохранён');
+  };
+
+  const updateSubtitle = (() => {
+    if (!window.electronAPI) return undefined;
+    if (status.state === 'dev') return 'Проверка доступна в установленной версии';
+    if (status.state === 'checking') return 'Проверяем…';
+    if (status.state === 'downloading') return `Скачивание ${status.progress ?? 0}%`;
+    if (status.state === 'installing') return 'Закрываем приложение и запускаем установщик';
+    if (status.state === 'error') return status.message ?? 'Не удалось проверить обновления';
+    if (status.state === 'available') return `Доступна ${status.version}`;
+    if (status.state === 'not-available') return 'Установлена актуальная версия';
+    return version ? `Версия ${version}` : 'Проверьте наличие обновлений';
+  })();
+
+  const onCheck = async () => {
+    const next = await check();
+    if (!next) return;
+    if (next.state === 'dev') toast.message('Проверка обновлений доступна в установленной версии');
+    else if (next.state === 'not-available') toast.success('Установлена актуальная версия');
+    else if (next.state === 'error') toast.error(next.message ?? 'Не удалось проверить обновления');
   };
 
   return (
@@ -426,11 +430,18 @@ function AboutSection() {
       </Row>
       {window.electronAPI && (
         <>
-          <Row title="Обновления" subtitle="GitHub Releases: cloud .exe или локальная пересборка bootstrap">
-            <Button variant="secondary" size="sm" disabled={checking} onClick={() => void checkUpdate()}>
-              {checking && <Loader2 size={14} className="animate-spin" />}
-              Проверить
-            </Button>
+          <Row title="Обновления" subtitle={updateSubtitle}>
+            {status.state === 'available' || installing || (status.state === 'error' && status.version) ? (
+              <Button size="sm" disabled={installing} onClick={() => void install()}>
+                {installing && <Loader2 size={14} className="animate-spin" />}
+                {status.state === 'error' ? 'Повторить установку' : 'Перезапустить и установить'}
+              </Button>
+            ) : (
+              <Button variant="secondary" size="sm" disabled={checking} onClick={() => void onCheck()}>
+                {checking && <Loader2 size={14} className="animate-spin" />}
+                Проверить обновления
+              </Button>
+            )}
           </Row>
           <Row title="Логи приложения" subtitle="Пригодятся, если что-то сломалось. Токены в логи не пишутся">
             <Button variant="ghost" size="sm" onClick={() => void window.electronAPI.system.openLogs()}>
