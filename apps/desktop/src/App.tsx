@@ -38,12 +38,23 @@ function Appearance() {
   const dark = useApplyAppearance(coverUrl);
   useEffect(() => {
     return window.electronAPI?.system.onUpdate((s) => {
+      if (s.state === 'available') {
+        toast(`Доступна версия ${s.version ?? ''}`.trim(), {
+          id: 'mss-update',
+          duration: Infinity,
+          action: {
+            label: 'Обновить',
+            onClick: () => void window.electronAPI.system.installUpdate(),
+          },
+        });
+        return;
+      }
       if (s.state !== 'downloaded') return;
-      toast('Доступно обновление — перезапустить', {
+      toast('Обновление готово — откройте установщик или перезапустите', {
         id: 'mss-update',
         duration: Infinity,
         action: {
-          label: 'Перезапустить',
+          label: 'Установить',
           onClick: () => void window.electronAPI.system.installUpdate(),
         },
       });

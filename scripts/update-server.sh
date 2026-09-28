@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# Git pull + пересборка API/worker, Windows (.exe через Wine Docker) и Android APK.
+# Git pull + пересборка API/worker. Клиенты (.exe/.apk) — GitHub Releases (см. scripts/client-install).
 #
 #   ./scripts/update-server.sh
 #   ./scripts/update-server.sh --watch
@@ -16,8 +16,8 @@ APK_IMAGE_DEFAULT="mss-apk:local"
 WATCH=0
 FORCE=0
 RESET=0
-DO_CLIENT="${BUILD_CLIENT:-1}"
-DO_APK="${BUILD_APK:-1}"
+DO_CLIENT="${BUILD_CLIENT:-0}"
+DO_APK="${BUILD_APK:-0}"
 FORCE_CLIENT=0
 FORCE_APK=0
 

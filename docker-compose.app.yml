@@ -1,0 +1,79 @@
+# Полный стек MSS в Docker: migrate + API + worker (вместе с docker-compose.yml).
+#
+#   docker compose -f docker-compose.yml -f docker-compose.app.yml up -d --build
+#
+services:
+  postgres:
+    ports:
+      - '127.0.0.1:5432:5432'
+    healthcheck:
+      test: ['CMD-SHELL', 'pg_isready -U mss -d mss']
+      interval: 5s
+      timeout: 5s
+      retries: 10
+
+  redis:
+    ports:
+      - '127.0.0.1:6379:6379'
+
+  migrate:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    env_file: .env
+    environment:
+      DATABASE_URL: postgresql://${POSTGRES_USER:-mss}:${POSTGRES_PASSWORD:-mss}@postgres:5432/${POSTGRES_DB:-mss}
+      REDIS_URL: redis://redis:6379
+    command: ['node', 'apps/api/dist/db/migrate.js']
+    depends_on:
+      postgres:
+        condition: service_healthy
+    restart: 'no'
+
+  api:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    env_file: .env
+    environment:
+      DATABASE_URL: postgresql://${POSTGRES_USER:-mss}:${POSTGRES_PASSWORD:-mss}@postgres:5432/${POSTGRES_DB:-mss}
+      REDIS_URL: redis://redis:6379
+      MINIO_ENDPOINT: minio
+    ports:
+      - '${API_PORT:-3001}:3001'
+    volumes:
+      - mss_object_store:/app/data/object-store
+      - mss_uploads:/app/tmp/uploads
+    depends_on:
+      migrate:
+        condition: service_completed_successfully
+      redis:
+        condition: service_started
+    restart: unless-stopped
+    command: ['pnpm', '--filter', '@mss/api', 'start']
+
+  worker:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    env_file: .env
+    environment:
+      DATABASE_URL: postgresql://${POSTGRES_USER:-mss}:${POSTGRES_PASSWORD:-mss}@postgres:5432/${POSTGRES_DB:-mss}
+      REDIS_URL: redis://redis:6379
+      MINIO_ENDPOINT: minio
+    volumes:
+      - mss_object_store:/app/data/object-store
+      - mss_uploads:/app/tmp/uploads
+    depends_on:
+      migrate:
+        condition: service_completed_successfully
+      api:
+        condition: service_started
+      redis:
+        condition: service_started
+    restart: unless-stopped
+    command: ['pnpm', '--filter', '@mss/worker', 'start']
+
+volumes:
+  mss_object_store:
+  mss_uploads:

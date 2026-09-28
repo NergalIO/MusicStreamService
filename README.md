@@ -9,7 +9,14 @@
 - Docker (PostgreSQL, Redis; **MinIO не обязателен** — см. ниже)
 - FFmpeg в PATH (для worker)
 
-## Быстрый старт
+## Установка на VPS (production)
+
+- **Docker (рекомендуется):** одна команда на VPS (клон + Docker + секреты + seed):  
+  `curl -fsSL https://raw.githubusercontent.com/NergalIO/MusicStreamService/main/scripts/install-docker-vps.sh | sudo bash`  
+  Подробности: **[deploy/README.md](deploy/README.md)** (вариант A).
+- **systemd + Node на хосте:** тот же [deploy/README.md](deploy/README.md) (вариант B).
+
+## Быстрый старт (локально)
 
 ```bash
 cp .env.example .env
@@ -43,7 +50,16 @@ pnpm dev
 
 Spotify: `SPOTIFY_CLIENT_ID`, redirect `http://127.0.0.1:8765/callback`.
 
-## Сборка установщика
+## Установка клиентов (пользователям)
+
+| Платформа | Основной путь | Быстрый запасной |
+|-----------|---------------|------------------|
+| **Windows** | [`scripts/client-install/install-windows.cmd`](scripts/client-install/install-windows.cmd) — исходники с GitHub Release, сборка на ПК | `MusicStreamService-setup.exe` с GitHub Releases (CI) |
+| **Android** | `mss-android.apk` с GitHub Releases (CI) | — |
+
+На VPS задайте `GITHUB_REPO` в `.env` — лендинг покажет ссылки. Клиенты **не** собираются на сервере (`BUILD_CLIENT=0`, `BUILD_APK=0`). Релиз: tag `v*` → [`.github/workflows/release.yml`](.github/workflows/release.yml).
+
+## Сборка установщика (разработка)
 
 ```bash
 pnpm --filter @mss/desktop dist

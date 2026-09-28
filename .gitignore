@@ -10,6 +10,8 @@ out/
 .env
 .env.*
 !.env.example
+!.env.docker.example
+.mss-install-credentials
 
 # TLS / signing keys
 *.pem

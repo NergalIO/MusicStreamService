@@ -249,7 +249,11 @@ function AboutSection() {
       if (status.state === 'dev') toast.message('Проверка обновлений доступна в установленной версии');
       else if (status.state === 'error') toast.error(status.message ?? 'Не удалось проверить обновления');
       else if (status.state === 'not-available') toast.success('Установлена актуальная версия');
-      else if (status.state === 'downloaded') toast('Обновление уже скачано — можно перезапустить');
+      else if (status.state === 'available')
+        toast(`Доступна ${status.version} — нажмите «Обновить» в уведомлении или проверьте снова`, {
+          action: { label: 'Обновить', onClick: () => void window.electronAPI.system.installUpdate() },
+        });
+      else if (status.state === 'downloaded') toast('Откройте установщик из уведомления');
       else toast.message(status.version ? `Найдена версия ${status.version}` : 'Ищем обновление…');
     } finally {
       setChecking(false);
@@ -268,7 +272,7 @@ function AboutSection() {
       </Row>
       {window.electronAPI && (
         <>
-          <Row title="Обновления" subtitle="Скачивается в фоне, затем достаточно перезапустить">
+          <Row title="Обновления" subtitle="GitHub Releases: cloud .exe или локальная пересборка bootstrap">
             <Button variant="secondary" size="sm" disabled={checking} onClick={() => void checkUpdate()}>
               {checking && <Loader2 size={14} className="animate-spin" />}
               Проверить

@@ -1,12 +1,8 @@
-# Релизные сборки (не в git)
+# Релизные сборки (legacy)
 
-Сюда попадают артеfactы после `./scripts/update-server.sh` на VPS:
+Клиенты больше **не собираются на VPS** по умолчанию (`BUILD_CLIENT=0`, `BUILD_APK=0`).
 
-- `MusicStreamService-setup.exe` — Windows (NSIS)
-- `mss-android.apk` — Android
+- **Windows:** [`scripts/client-install/`](../scripts/client-install/) или `.exe` из [GitHub Releases](https://github.com/mss/MusicStreamService/releases).
+- **Android:** `mss-android.apk` из GitHub Releases (CI).
 
-Имена можно переопределить через `RELEASE_WINDOWS_FILE` и `RELEASE_ANDROID_FILE` в `.env`.
-
-Landing отдаёт файлы по `{PUBLIC_BASE_PATH}/downloads/…`.
-
-Сборка APK на слабом VPS: тонкий Docker-образ (как RF4 Spots, без NDK/эмулятора), кэш Gradle в volume `mss-gradle-cache`. При нехватке RAM: `GRADLE_JVM_ARGS=-Xmx768m` в `.env` или `BUILD_APK=0` / `./scripts/update-server.sh --no-apk`.
+Эта папка оставлена для ручной отладки (`update-server.sh --client --apk`) и старых ссылок.

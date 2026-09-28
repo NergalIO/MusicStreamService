@@ -21,9 +21,11 @@ Kotlin + Jetpack Compose клиент с MSS API, коннекторами Spoti
 - WebSocket presence: `wss://your-domain/MusicStreamService/ws` (тот же host/path, что и REST).
 - Для HTTPS на реальном домене используйте release-сборку или network security config; cleartext `http://10.0.2.2` — только для эмулятора.
 
-## VPS
+## Установка для пользователей
 
-APK для лендинга собирается на сервере: `./scripts/update-server.sh` (см. корневой `scripts/` и `data/releases/README.md`).
+Скачайте **`mss-android.apk`** с [GitHub Releases](https://github.com/mss/MusicStreamService/releases) (сборка в CI при tag `v*`). Лендинг MSS подставит прямую ссылку, если задан `GITHUB_REPO` на сервере.
+
+Локальная сборка разработчиком: `gradlew.bat :app:assembleDebug`.
 
 ## Модули
 

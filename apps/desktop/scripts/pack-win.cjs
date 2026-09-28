@@ -10,6 +10,12 @@ const releaseDir = path.resolve(
 );
 const releasesDest = path.join(repoRoot, 'data', 'releases');
 const CANONICAL_EXE = process.env.RELEASE_WINDOWS_FILE || 'MusicStreamService-setup.exe';
+const isCi =
+  process.env.GITHUB_ACTIONS === 'true' ||
+  process.env.CI === 'true' ||
+  process.env.PACK_CI === '1';
+const skipPublishReleases =
+  isCi || process.env.PACK_SKIP_RELEASES === '1' || process.env.PACK_ON_SERVER !== '1';
 
 function sleep(ms) {
   Atomics.wait(new Int32Array(new SharedArrayBuffer(4)), 0, 0, ms);
@@ -111,5 +117,15 @@ if (!exePath) {
   console.error('Установщик .exe не найден в', releaseDir);
   process.exit(1);
 }
+
+if (skipPublishReleases) {
+  const ciOut = path.join(releaseDir, CANONICAL_EXE);
+  if (path.resolve(exePath) !== path.resolve(ciOut)) {
+    fs.copyFileSync(exePath, ciOut);
+  }
+  console.log('PACK_OUTPUT', ciOut);
+  process.exit(0);
+}
+
 publishToReleases(exePath);
 process.exit(0);

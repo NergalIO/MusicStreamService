@@ -1,5 +1,6 @@
-# По умолчанию только Postgres + Redis (лёгкие образы).
-# Файлы треков: STORAGE_BACKEND=local (см. .env) — MinIO не нужен.
+# Postgres + Redis (dev и база для docker-compose.app.yml).
+# Полный стек (API + worker): docker compose -f docker-compose.yml -f docker-compose.app.yml up -d --build
+# или: ./scripts/install-docker-vps.sh
 #
 # MinIO (опционально): docker compose --profile s3 up -d
 # Образы minio/minio на Docker Hub часто недоступны или качаются очень долго.
@@ -8,9 +9,9 @@ services:
   postgres:
     image: postgres:16-alpine
     environment:
-      POSTGRES_USER: mss
-      POSTGRES_PASSWORD: mss
-      POSTGRES_DB: mss
+      POSTGRES_USER: ${POSTGRES_USER:-mss}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-mss}
+      POSTGRES_DB: ${POSTGRES_DB:-mss}
     ports:
       - '5432:5432'
     volumes:

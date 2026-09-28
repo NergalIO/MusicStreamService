@@ -1,8 +1,10 @@
 async function initDownloads() {
-  const winBtn = document.getElementById('btn-windows');
+  const bootstrapBtn = document.getElementById('btn-win-bootstrap');
+  const exeBtn = document.getElementById('btn-win-exe');
   const apkBtn = document.getElementById('btn-android');
+  const releaseBtn = document.getElementById('btn-github-release');
   const hint = document.getElementById('dl-hint');
-  if (!winBtn || !apkBtn || !hint) return;
+  if (!bootstrapBtn || !exeBtn || !apkBtn || !releaseBtn || !hint) return;
 
   try {
     const res = await fetch('site/downloads');
@@ -10,33 +12,35 @@ async function initDownloads() {
     const data = await res.json();
     let any = false;
 
-    if (data.windows?.available) {
-      winBtn.hidden = false;
-      if (data.windows.href) winBtn.setAttribute('href', data.windows.href.replace(/^\//, ''));
+    if (data.windowsBootstrap?.available && data.windowsBootstrap.cmdHref) {
+      bootstrapBtn.hidden = false;
+      bootstrapBtn.setAttribute('href', data.windowsBootstrap.cmdHref.replace(/^\//, ''));
       any = true;
-    } else {
-      winBtn.classList.add('disabled');
-      winBtn.removeAttribute('hidden');
-      winBtn.setAttribute('aria-disabled', 'true');
-      winBtn.textContent = 'Windows — сборка скоро';
     }
 
-    if (data.android?.available) {
+    if (data.windowsExe?.available && data.windowsExe.href) {
+      exeBtn.hidden = false;
+      exeBtn.setAttribute('href', data.windowsExe.href);
+      any = true;
+    }
+
+    if (data.androidApk?.available && data.androidApk.href) {
       apkBtn.hidden = false;
-      if (data.android.href) apkBtn.setAttribute('href', data.android.href.replace(/^\//, ''));
+      apkBtn.setAttribute('href', data.androidApk.href);
       any = true;
-    } else {
-      apkBtn.classList.add('disabled');
-      apkBtn.removeAttribute('hidden');
-      apkBtn.setAttribute('aria-disabled', 'true');
-      apkBtn.textContent = 'Android — сборка скоро';
     }
 
+    if (data.release?.githubReleasePage) {
+      releaseBtn.hidden = false;
+      releaseBtn.setAttribute('href', data.release.githubReleasePage);
+    }
+
+    const tag = data.release?.tag ? ` (${data.release.tag})` : '';
     hint.textContent = any
-      ? 'Актуальные установщики готовы к скачиванию.'
-      : 'Установщики появятся после первой сборки на сервере.';
+      ? `Клиенты доступны через GitHub Releases${tag}.`
+      : 'Укажите GITHUB_REPO на сервере и опубликуйте tag v* с assets, либо положите bootstrap в downloads/.';
   } catch {
-    hint.textContent = 'Не удалось проверить сборки. Попробуйте позже.';
+    hint.textContent = 'Не удалось загрузить ссылки. Попробуйте позже.';
   }
 }
 

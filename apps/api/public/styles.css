@@ -105,6 +105,27 @@ body {
   background: var(--accent-hover);
 }
 
+.btn-secondary {
+  background: #2a3140;
+  color: var(--text);
+  border: 1px solid #3d4659;
+}
+
+.btn-secondary:hover {
+  background: #343d4f;
+}
+
+.btn-ghost {
+  background: transparent;
+  color: var(--muted);
+  border: 1px solid #333944;
+}
+
+.btn-ghost:hover {
+  color: var(--text);
+  border-color: #4a5366;
+}
+
 .btn[disabled],
 .btn.disabled {
   pointer-events: none;

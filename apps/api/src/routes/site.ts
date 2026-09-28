@@ -3,6 +3,7 @@ import path from 'node:path';
 import fastifyStatic from '@fastify/static';
 import type { FastifyInstance } from 'fastify';
 import { config } from '../config.js';
+import { fetchLatestReleaseDownloads } from '../lib/github-releases.js';
 
 function fileExists(filePath: string): boolean {
   try {
@@ -16,6 +17,7 @@ function fileExists(filePath: string): boolean {
 export async function siteRoutes(app: FastifyInstance) {
   fs.mkdirSync(config.releasesDir, { recursive: true });
   const baseHref = config.basePath ? `${config.basePath}/` : '/';
+  const dlPrefix = 'downloads';
 
   app.get('/', async (_req, reply) => {
     const indexPath = path.join(config.publicDir, 'index.html');
@@ -29,19 +31,39 @@ export async function siteRoutes(app: FastifyInstance) {
   });
 
   app.get('/site/downloads', async () => {
-    const winPath = path.join(config.releasesDir, config.releaseFiles.windows);
-    const apkPath = path.join(config.releasesDir, config.releaseFiles.android);
-    const dlPrefix = 'downloads';
+    const gh = await fetchLatestReleaseDownloads();
+    const bootstrapCmd = `${dlPrefix}/install-windows.cmd`;
+    const bootstrapPs1 = `${dlPrefix}/install-windows.ps1`;
+    const hasBootstrap =
+      fileExists(path.join(config.publicDir, 'downloads', 'install-windows.cmd')) ||
+      fileExists(path.join(config.publicDir, 'downloads', 'install-windows.ps1'));
+
+    const legacyWin = path.join(config.releasesDir, config.releaseFiles.windows);
+    const legacyApk = path.join(config.releasesDir, config.releaseFiles.android);
+
     return {
-      windows: {
-        available: fileExists(winPath),
-        href: `${dlPrefix}/${config.releaseFiles.windows}`,
-        fileName: config.releaseFiles.windows,
+      windowsBootstrap: {
+        available: hasBootstrap,
+        cmdHref: hasBootstrap ? bootstrapCmd : null,
+        ps1Href: fileExists(path.join(config.publicDir, 'downloads', 'install-windows.ps1'))
+          ? bootstrapPs1
+          : null,
       },
-      android: {
-        available: fileExists(apkPath),
-        href: `${dlPrefix}/${config.releaseFiles.android}`,
+      windowsExe: {
+        available: Boolean(gh.windowsExeUrl) || fileExists(legacyWin),
+        href: gh.windowsExeUrl ?? (fileExists(legacyWin) ? `${dlPrefix}/${config.releaseFiles.windows}` : null),
+        fileName: config.releaseFiles.windows,
+        source: gh.windowsExeUrl ? 'github' : fileExists(legacyWin) ? 'legacy' : null,
+      },
+      androidApk: {
+        available: Boolean(gh.androidApkUrl) || fileExists(legacyApk),
+        href: gh.androidApkUrl ?? (fileExists(legacyApk) ? `${dlPrefix}/${config.releaseFiles.android}` : null),
         fileName: config.releaseFiles.android,
+        source: gh.androidApkUrl ? 'github' : fileExists(legacyApk) ? 'legacy' : null,
+      },
+      release: {
+        tag: gh.tag,
+        githubReleasePage: gh.githubReleasePage,
       },
     };
   });

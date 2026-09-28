@@ -45,6 +45,11 @@ export const config = {
     windows: process.env.RELEASE_WINDOWS_FILE ?? 'MusicStreamService-setup.exe',
     android: process.env.RELEASE_ANDROID_FILE ?? 'mss-android.apk',
   },
+  /** owner/repo — для ссылок на GitHub Releases (лендинг) */
+  githubRepo: process.env.GITHUB_REPO ?? '',
+  githubToken: process.env.GITHUB_TOKEN ?? '',
+  githubReleaseExeName: process.env.GITHUB_RELEASE_EXE_NAME ?? 'MusicStreamService-setup.exe',
+  githubReleaseApkName: process.env.GITHUB_RELEASE_APK_NAME ?? 'mss-android.apk',
   databaseUrl: process.env.DATABASE_URL ?? 'postgresql://mss:mss@localhost:5432/mss',
   jwtSecret: process.env.JWT_SECRET ?? 'dev-secret-change-me',
   offlineHkdfSecret: process.env.OFFLINE_HKDF_SECRET ?? 'offline-dev-secret',
