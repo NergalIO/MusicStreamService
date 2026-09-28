@@ -6,6 +6,16 @@ const SDK_SRC = 'https://sdk.scdn.co/spotify-player.js';
 const PLAYER_NAME = 'MusicStream';
 const DEVICE_WAIT_MS = 25_000;
 
+function mapSpotifySdkError(raw: string): string {
+  if (/invalid token scopes?/i.test(raw)) {
+    return (
+      'Invalid token scopes: в токене нет streaming. Отключите Spotify в Настройках MSS, удалите приложение на ' +
+      'open.spotify.com/account/apps и подключите снова с подтверждением всех разрешений.'
+    );
+  }
+  return raw;
+}
+
 export type SpotifyPlayerEvent =
   | 'play'
   | 'pause'
@@ -243,7 +253,8 @@ class SpotifyWebPlayer {
           });
           player.addListener('player_state_changed', (state) => this.handleState(state as SpotifyPlaybackState | null));
           const noteError = (msg: unknown) => {
-            sdkError = typeof msg === 'string' ? msg : (msg as { message?: string })?.message ?? 'Spotify SDK error';
+            const raw = typeof msg === 'string' ? msg : (msg as { message?: string })?.message ?? 'Spotify SDK error';
+            sdkError = mapSpotifySdkError(raw);
           };
           player.addListener('authentication_error', noteError);
           player.addListener('account_error', noteError);

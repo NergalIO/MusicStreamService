@@ -86,11 +86,17 @@ function syncPresence(): void {
   void window.electronAPI.presence.connect(token);
 }
 
+function syncRelayToken(): void {
+  const token = accessToken;
+  if (token) void window.electronAPI?.presence?.updateAccessToken(token);
+}
+
 export function saveSession(s: AuthSession): void {
   accessToken = s.accessToken;
   refreshToken = s.refreshToken;
   localStorage.setItem('mss_session', JSON.stringify(s));
   syncPresence();
+  syncRelayToken();
 }
 
 export function clearSession(): void {
@@ -117,6 +123,7 @@ export async function refreshAccess(): Promise<boolean> {
   accessToken = data.accessToken;
   const session = loadSession();
   if (session) saveSession({ ...session, accessToken: data.accessToken });
+  else syncRelayToken();
   return true;
 }
 

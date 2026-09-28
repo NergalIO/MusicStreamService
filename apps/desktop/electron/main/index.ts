@@ -48,6 +48,7 @@ import {
   saveOffline,
 } from './offline-store.js';
 import { initLocalTracks, registerLocalTracksIpc } from './local-tracks-ipc.js';
+import { registerRelayBridge } from './relay-bridge.js';
 import { ensureRendererServer, rendererPageUrl } from './renderer-server.js';
 import { fileStreamUrl, handleStreamProtocol, registerStreamScheme } from './stream-protocol.js';
 import { loadBounds, persistBounds } from './window-bounds.js';
@@ -211,6 +212,7 @@ app.whenReady().then(async () => {
   registerCrashIpc();
 
   mainWindow = createMainWindow(launchedHidden());
+  registerRelayBridge({ getWindows: () => (mainWindow && !mainWindow.isDestroyed() ? [mainWindow] : []) });
   attachDeepLinkWindow(mainWindow);
   initMedia({
     getMainWindow: () => mainWindow,

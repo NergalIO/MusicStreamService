@@ -159,7 +159,13 @@ const api = {
   },
   presence: {
     connect: (accessToken: string) => ipcRenderer.invoke('presence:connect', accessToken) as Promise<void>,
+    updateAccessToken: (accessToken: string) =>
+      ipcRenderer.invoke('presence:updateAccessToken', accessToken) as Promise<void>,
     disconnect: () => ipcRenderer.invoke('presence:disconnect') as Promise<void>,
+  },
+  relay: {
+    provideFile: (sessionId: string) => ipcRenderer.invoke('relay:provideFile', sessionId) as Promise<void>,
+    onEvent: (cb: (payload: unknown) => void) => subscribe('relay:event', cb),
   },
   offline: {
     list: () => ipcRenderer.invoke('offline:list') as Promise<{ trackId: string; path: string }[]>,

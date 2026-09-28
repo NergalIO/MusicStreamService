@@ -95,5 +95,7 @@ export async function reconnectSource(id: string, queryClient: QueryClient): Pro
 export function isSpotifyScopeError(error: unknown): boolean {
   const msg = error instanceof Error ? error.message : String(error ?? '');
   if (/allowlist|User Management|403 Forbidden для/i.test(msg)) return false;
-  return /недостаточно прав spotify|подтвердив доступ/i.test(msg);
+  return /invalid token scopes|нет права streaming|недостаточно прав spotify|scope streaming|подтвердив доступ/i.test(
+    msg,
+  );
 }

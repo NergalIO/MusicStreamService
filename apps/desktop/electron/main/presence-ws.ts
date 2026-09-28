@@ -1,9 +1,11 @@
-import fs from 'node:fs';
+import { openAsBlob } from 'node:fs';
 import path from 'node:path';
+import { dialog } from 'electron';
 import WebSocket from 'ws';
 import { getAppSettings } from './app-settings.js';
+import { bindLocalTrack, prepareLocalFile, resolveLocalTrackPath } from './local-tracks.js';
+import { emitRelayEvent, getRelayAccessToken } from './relay-bridge.js';
 import { toastMain } from './toast.js';
-import { resolveLocalTrackPath } from './local-tracks.js';
 
 function resolveApiBase(): string {
   const fromSettings = getAppSettings().apiPublicUrl?.trim();
@@ -15,7 +17,7 @@ function resolveApiBase(): string {
 
 let socket: WebSocket | null = null;
 let pingTimer: ReturnType<typeof setInterval> | null = null;
-let accessToken: string | null = null;
+let wsAccessToken: string | null = null;
 
 interface RelayUploadMessage {
   type: 'relay_upload';
@@ -26,19 +28,45 @@ interface RelayUploadMessage {
   token: string;
 }
 
-async function uploadRelayFile(msg: RelayUploadMessage, token: string): Promise<void> {
-  const filePath = await resolveLocalTrackPath(msg.trackId);
-  if (!filePath) throw new Error('Локальный файл не найден');
+const pendingRelays = new Map<string, RelayUploadMessage>();
+const relayInFlight = new Set<string>();
 
-  const buf = await fs.promises.readFile(filePath);
-  const blob = new Blob([buf]);
+async function pickAudioFileForTrack(title: string): Promise<string | null> {
+  const { canceled, filePaths } = await dialog.showOpenDialog({
+    title: `Укажите файл для «${title}»`,
+    message: 'MSS нужен исходный аудioфайл, чтобы другой пользователь мог послушать трек.',
+    properties: ['openFile'],
+    filters: [{ name: 'Audio', extensions: ['mp3', 'flac', 'm4a', 'aac', 'ogg', 'opus', 'wav', 'wma', 'aiff', 'ape', 'wv', 'webm'] }],
+  });
+  if (canceled || !filePaths[0]) return null;
+  return filePaths[0];
+}
+
+async function resolveRelayFilePath(trackId: string, title: string, interactive: boolean): Promise<string> {
+  const existing = await resolveLocalTrackPath(trackId);
+  if (existing) return existing;
+
+  if (!interactive) {
+    throw new Error('need_file');
+  }
+
+  const picked = await pickAudioFileForTrack(title);
+  if (!picked) throw new Error('need_file');
+
+  const prepared = await prepareLocalFile(picked);
+  await bindLocalTrack(trackId, { path: prepared.path, contentHash: prepared.contentHash });
+  return prepared.path;
+}
+
+async function uploadRelayFile(msg: RelayUploadMessage, filePath: string, bearer: string): Promise<void> {
+  const blob = await openAsBlob(filePath);
   const form = new FormData();
   form.append('file', blob, path.basename(filePath));
 
   const res = await fetch(msg.uploadUrl, {
     method: 'POST',
     headers: {
-      Authorization: `Bearer ${token}`,
+      Authorization: `Bearer ${bearer}`,
       'X-Relay-Token': msg.token,
     },
     body: form,
@@ -49,16 +77,59 @@ async function uploadRelayFile(msg: RelayUploadMessage, token: string): Promise<
   }
 }
 
-function handleMessage(raw: WebSocket.RawData, token: string): void {
+export async function fulfillRelayUpload(sessionId: string, interactive: boolean): Promise<void> {
+  const msg = pendingRelays.get(sessionId);
+  if (!msg) throw new Error('Запрос устарел — попросите слушателя снова открыть трек');
+
+  const bearer = getRelayAccessToken();
+  if (!bearer) throw new Error('Войдите в аккаунт MSS');
+
+  if (relayInFlight.has(sessionId)) return;
+  relayInFlight.add(sessionId);
+
+  emitRelayEvent({
+    phase: 'start',
+    sessionId: msg.sessionId,
+    trackId: msg.trackId,
+    title: msg.title,
+  });
+  emitRelayEvent({ phase: 'uploading', sessionId: msg.sessionId });
+
+  try {
+    const filePath = await resolveRelayFilePath(msg.trackId, msg.title, interactive);
+    await uploadRelayFile(msg, filePath, bearer);
+    emitRelayEvent({ phase: 'done', sessionId: msg.sessionId, title: msg.title });
+    toastMain(`Трек «${msg.title}» отправлен на сервер — другой пользователь может слушать`);
+    pendingRelays.delete(sessionId);
+  } catch (e) {
+    const raw = e instanceof Error ? e.message : String(e);
+    const needFile = raw === 'need_file';
+    const error = needFile
+      ? 'Укажите файл на этом компьютере — без него другие не смогут слушать'
+      : raw;
+    emitRelayEvent({
+      phase: 'failed',
+      sessionId: msg.sessionId,
+      title: msg.title,
+      error,
+      needFile,
+    });
+    toastMain(needFile ? `Нужен файл для «${msg.title}» — нажмите «Указать файл» в панели внизу` : error);
+    if (!needFile) pendingRelays.delete(sessionId);
+    throw e;
+  } finally {
+    relayInFlight.delete(sessionId);
+  }
+}
+
+function handleMessage(raw: WebSocket.RawData): void {
   try {
     const msg = JSON.parse(String(raw)) as RelayUploadMessage & { type: string };
-    if (msg.type === 'relay_upload') {
-      toastMain(`Сервер запрашивает трек «${msg.title}» для другого пользователя`);
-      void uploadRelayFile(msg, token).catch((e) => {
-        console.warn('relay upload failed', e);
-        toastMain(e instanceof Error ? e.message : 'Не удалось отдать трек');
-      });
-    }
+    if (msg.type !== 'relay_upload') return;
+
+    pendingRelays.set(msg.sessionId, msg);
+    toastMain(`Запрос на «${msg.title}» — отдаём файл на сервер…`);
+    void fulfillRelayUpload(msg.sessionId, true).catch(() => undefined);
   } catch {
     /* ignore */
   }
@@ -66,14 +137,14 @@ function handleMessage(raw: WebSocket.RawData, token: string): void {
 
 export function connectPresenceWs(token: string): void {
   if (
-    accessToken === token &&
+    wsAccessToken === token &&
     socket &&
     (socket.readyState === WebSocket.OPEN || socket.readyState === WebSocket.CONNECTING)
   ) {
     return;
   }
   disconnectPresenceWs();
-  accessToken = token;
+  wsAccessToken = token;
 
   const httpBase = resolveApiBase();
   const url = `${httpBase.replace(/^http/, 'ws')}/ws?token=${encodeURIComponent(token)}`;
@@ -92,7 +163,7 @@ export function connectPresenceWs(token: string): void {
   });
 
   ws.on('message', (data) => {
-    if (accessToken) handleMessage(data, accessToken);
+    handleMessage(data);
   });
 
   ws.on('close', () => {
@@ -108,7 +179,7 @@ export function disconnectPresenceWs(): void {
   pingTimer = null;
   const ws = socket;
   socket = null;
-  accessToken = null;
+  wsAccessToken = null;
   if (!ws) return;
 
   ws.removeAllListeners();

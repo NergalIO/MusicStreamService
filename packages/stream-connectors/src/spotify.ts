@@ -21,6 +21,23 @@ const SPOTIFY_ARTIST_ALBUMS_PAGE_MAX = 10;
 const SPOTIFY_SCOPES =
   'user-read-email streaming user-modify-playback-state user-read-playback-state user-library-read playlist-read-private playlist-read-collaborative user-top-read';
 
+/** Web Playback SDK требует scope `streaming` в access token. */
+export const SPOTIFY_MISSING_STREAMING_MSG =
+  'В токене Spotify нет права streaming (Invalid token scopes). ' +
+  'Настройки MSS → отключите Spotify → на https://open.spotify.com/account/apps удалите это приложение → подключите Spotify снова и подтвердите все галочки. ' +
+  'Premium нужен на том аккаунте, которым вы слушаете, не только у владельца приложения в Dashboard.';
+
+function hasStreamingScope(scope?: string): boolean {
+  if (!scope) return false;
+  return scope.split(/\s+/).includes('streaming');
+}
+
+function assertStreamingScope(scope: string | undefined, clearVault: () => void): void {
+  if (hasStreamingScope(scope)) return;
+  clearVault();
+  throw new Error(SPOTIFY_MISSING_STREAMING_MSG);
+}
+
 function clampLimit(limit: number, max = 50): number {
   const n = Number(limit);
   if (!Number.isFinite(n) || n < 1) return Math.min(50, max);
@@ -180,7 +197,12 @@ export function createSpotifyConnector(opts: SpotifyConnectorOptions): StreamCon
   async function refreshIfNeeded(): Promise<string | null> {
     const t = loadTokens();
     if (!t) return null;
-    if (Date.now() < t.expires_at - 60_000) return t.access_token;
+    const accessFresh = Date.now() < t.expires_at - 60_000;
+    if (accessFresh && t.scope) {
+      assertStreamingScope(t.scope, () => vault.delete(VAULT_KEY));
+      return t.access_token;
+    }
+    /* accessFresh без scope — обновим токен, чтобы прочитать scope из ответа Spotify. */
     const body = new URLSearchParams({
       grant_type: 'refresh_token',
       refresh_token: t.refresh_token,
@@ -200,11 +222,15 @@ export function createSpotifyConnector(opts: SpotifyConnectorOptions): StreamCon
       access_token: string;
       expires_in: number;
       refresh_token?: string;
+      scope?: string;
     };
+    const scope = data.scope ?? t.scope;
+    assertStreamingScope(scope, () => vault.delete(VAULT_KEY));
     const next: SpotifyTokens = {
       access_token: data.access_token,
       refresh_token: data.refresh_token ?? t.refresh_token,
       expires_at: Date.now() + data.expires_in * 1000,
+      scope,
     };
     saveTokens(next);
     return next.access_token;
@@ -335,6 +361,12 @@ export function createSpotifyConnector(opts: SpotifyConnectorOptions): StreamCon
           };
           if (!data.refresh_token) {
             reject(new Error('Spotify не выдал refresh_token — удалите приложение на spotify.com/account/apps и подключите снова'));
+            return;
+          }
+          try {
+            assertStreamingScope(data.scope, () => vault.delete(VAULT_KEY));
+          } catch (e) {
+            reject(e);
             return;
           }
           saveTokens({

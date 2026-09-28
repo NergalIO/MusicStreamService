@@ -13,7 +13,9 @@ import { TrackContextMenuHost } from '@/components/tracks/TrackContextMenu';
 import { UploadDropZone } from '@/components/uploads/UploadDropZone';
 import { ErrorBoundary } from '@/components/ui/states';
 import { DownloadPanel } from '@/components/downloads/DownloadPanel';
+import { RelayPanel } from '@/components/uploads/RelayPanel';
 import { UploadPanel } from '@/components/uploads/UploadPanel';
+import { initRelayClient } from '@/lib/relay-client';
 import { applyDeepLink } from '@/lib/deep-links';
 import { useHotkeys } from '@/hooks/useHotkeys';
 import { usePlayerController } from '@/hooks/usePlayerController';
@@ -37,6 +39,7 @@ export function AppShell() {
   const lastLink = useRef({ url: '', at: 0 });
 
   useEffect(() => useDownloadsStore.getState().init(), []);
+  useEffect(() => initRelayClient(), []);
 
   useEffect(() => {
     const apply = (url: string) => {
@@ -96,6 +99,7 @@ export function AppShell() {
         </ScrollContainerContext.Provider>
         <NowPlaying />
         <div className="no-drag pointer-events-none absolute bottom-6 left-6 z-40 flex w-[360px] flex-col gap-3">
+          <RelayPanel />
           <DownloadPanel />
           <UploadPanel />
         </div>
