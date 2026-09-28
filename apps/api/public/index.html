@@ -32,33 +32,15 @@
         </article>
       </section>
 
-      <section class="downloads is-loading" aria-labelledby="dl-title">
-        <h2 id="dl-title">Скачать</h2>
-        <div class="buttons">
-          <a id="btn-win-bootstrap" class="btn btn-primary" href="downloads/install-windows.cmd" hidden>
-            Windows — установить (сборка на ПК)
-          </a>
-          <a id="btn-win-exe" class="btn btn-secondary" href="#" hidden rel="noopener">
-            Windows — готовый .exe (GitHub)
-          </a>
-          <a id="btn-android" class="btn btn-primary" href="#" hidden rel="noopener">
-            Android — APK (GitHub)
-          </a>
-          <a id="btn-github-release" class="btn btn-ghost" href="#" hidden rel="noopener">
-            Все релизы на GitHub
-          </a>
+      <section class="downloads is-loading" aria-label="Скачать клиент">
+        <div class="download-actions">
+          <button type="button" id="btn-download" class="btn btn-primary" disabled aria-haspopup="menu" aria-expanded="false">
+            Скачать
+          </button>
+          <div id="download-menu" class="download-menu" hidden role="menu" aria-label="Выбор платформы"></div>
         </div>
-        <p id="dl-hint" class="hint">Проверяем ссылки…</p>
-        <p class="hint">Android: включите «Неизвестные источники» для sideload APK.</p>
+        <p id="dl-hint" class="hint" hidden></p>
       </section>
-
-      <footer class="foot">
-        <p>
-          Сервер:
-          <a href="{{API_PUBLIC_URL}}">{{API_PUBLIC_URL}}</a>
-          <span class="foot-muted"> · префикс API <code>{{BASE_PATH}}</code></span>
-        </p>
-      </footer>
     </main>
     <script src="landing.js"></script>
   </body>

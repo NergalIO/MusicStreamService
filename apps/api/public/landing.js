@@ -10,61 +10,85 @@ function stripEmptyHash() {
   history.replaceState(null, '', location.pathname + location.search);
 }
 
+function closeMenu(menu, trigger) {
+  menu.hidden = true;
+  trigger.setAttribute('aria-expanded', 'false');
+}
+
+function openMenu(menu, trigger) {
+  menu.hidden = false;
+  trigger.setAttribute('aria-expanded', 'true');
+}
+
+function toggleMenu(menu, trigger) {
+  if (menu.hidden) openMenu(menu, trigger);
+  else closeMenu(menu, trigger);
+}
+
 async function initDownloads() {
   const section = document.querySelector('.downloads');
-  const bootstrapBtn = document.getElementById('btn-win-bootstrap');
-  const exeBtn = document.getElementById('btn-win-exe');
-  const apkBtn = document.getElementById('btn-android');
-  const releaseBtn = document.getElementById('btn-github-release');
+  const trigger = document.getElementById('btn-download');
+  const menu = document.getElementById('download-menu');
   const hint = document.getElementById('dl-hint');
-  if (!bootstrapBtn || !exeBtn || !apkBtn || !releaseBtn || !hint) return;
+  if (!trigger || !menu || !hint) return;
 
   section?.classList.add('is-loading');
+  hint.hidden = true;
+
+  const items = [];
 
   try {
     const res = await fetch(apiUrl('site/downloads'));
     if (!res.ok) throw new Error(String(res.status));
     const data = await res.json();
-    const available = [];
-
-    if (data.windowsBootstrap?.available && data.windowsBootstrap.cmdHref) {
-      bootstrapBtn.hidden = false;
-      bootstrapBtn.href = apiUrl(data.windowsBootstrap.cmdHref);
-      available.push('Windows (bootstrap)');
-    }
 
     if (data.windowsExe?.available && data.windowsExe.href) {
-      exeBtn.hidden = false;
-      exeBtn.href = data.windowsExe.href;
-      available.push('Windows (.exe)');
+      items.push({
+        label: 'Windows',
+        subtitle: 'Установщик .exe',
+        href: data.windowsExe.href,
+      });
     }
 
     if (data.androidApk?.available && data.androidApk.href) {
-      apkBtn.hidden = false;
-      apkBtn.href = data.androidApk.href;
-      available.push('Android (APK)');
+      items.push({
+        label: 'Android',
+        subtitle: 'APK для sideload',
+        href: data.androidApk.href,
+      });
     }
 
-    if (data.release?.githubReleasePage) {
-      releaseBtn.hidden = false;
-      releaseBtn.href = data.release.githubReleasePage;
+    menu.replaceChildren();
+    for (const item of items) {
+      const link = document.createElement('a');
+      link.className = 'download-menu-item';
+      link.role = 'menuitem';
+      link.href = item.href;
+      link.rel = 'noopener';
+      link.innerHTML = `<span class="download-menu-label">${item.label}</span><span class="download-menu-sub">${item.subtitle}</span>`;
+      link.addEventListener('click', () => closeMenu(menu, trigger));
+      menu.appendChild(link);
     }
 
-    const tag = data.release?.tag ? ` · ${data.release.tag}` : '';
-    const ghReady = data.windowsExe?.available || data.androidApk?.available;
-
-    if (available.length === 0) {
+    if (items.length === 0) {
+      trigger.disabled = true;
+      hint.hidden = false;
       hint.textContent =
-        'Пока нет готовых установщиков. Задайте GITHUB_REPO на сервере и опубликуйте tag v* с assets, либо положите bootstrap в public/downloads/.';
-    } else if (ghReady) {
-      hint.textContent = `Скачивание: ${available.join(', ')}${tag}.`;
-    } else if (data.windowsBootstrap?.available) {
-      hint.textContent =
-        'Windows: bootstrap соберёт клиент на вашем ПК. .exe и APK появятся после GitHub Release (tag v*).';
+        'Пока нет готовых установщиков. Опубликуйте GitHub Release (tag v*) с .exe и APK или проверьте GITHUB_REPO на сервере.';
     } else {
-      hint.textContent = `Доступно: ${available.join(', ')}${tag}.`;
+      trigger.disabled = false;
+      trigger.addEventListener('click', (e) => {
+        e.stopPropagation();
+        toggleMenu(menu, trigger);
+      });
+      document.addEventListener('click', () => closeMenu(menu, trigger));
+      document.addEventListener('keydown', (e) => {
+        if (e.key === 'Escape') closeMenu(menu, trigger);
+      });
     }
   } catch {
+    trigger.disabled = true;
+    hint.hidden = false;
     hint.textContent = 'Не удалось загрузить ссылки. Проверьте API и обновите страницу.';
   } finally {
     section?.classList.remove('is-loading');
