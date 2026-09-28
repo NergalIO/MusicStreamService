@@ -48,6 +48,7 @@ import {
   saveOffline,
 } from './offline-store.js';
 import { initLocalTracks, registerLocalTracksIpc } from './local-tracks-ipc.js';
+import { handleRendererProtocol, registerRendererScheme, rendererLoadUrl } from './renderer-protocol.js';
 import { fileStreamUrl, handleStreamProtocol, registerStreamScheme } from './stream-protocol.js';
 import { loadBounds, persistBounds } from './window-bounds.js';
 import { attachWindowState, registerWindowControls } from './window-controls.js';
@@ -55,6 +56,7 @@ import { attachWindowState, registerWindowControls } from './window-controls.js'
 initLogging();
 initCrashReporter();
 registerStreamScheme();
+registerRendererScheme();
 
 let mainWindow: BrowserWindow | null = null;
 
@@ -109,7 +111,7 @@ function createRendererWindow(
   if (process.env.ELECTRON_RENDERER_URL) {
     win.loadURL(`${process.env.ELECTRON_RENDERER_URL}${search}`);
   } else {
-    win.loadFile(path.join(__dirname, '../renderer/index.html'), query ? { query } : undefined);
+    win.loadURL(rendererLoadUrl(query));
   }
   return win;
 }
@@ -195,6 +197,7 @@ app.whenReady().then(async () => {
   await initLocalTracks();
   initConnectors();
   handleStreamProtocol();
+  handleRendererProtocol();
 
   registerAppIpc();
   registerLocalTracksIpc();

@@ -3,6 +3,8 @@
  */
 
 const SDK_SRC = 'https://sdk.scdn.co/spotify-player.js';
+const PLAYER_NAME = 'MusicStream';
+const DEVICE_WAIT_MS = 25_000;
 
 export type SpotifyPlayerEvent =
   | 'play'
@@ -52,6 +54,20 @@ async function spotifyToken(): Promise<string> {
   const token = await window.electronAPI.connectors.accessToken('spotify');
   if (!token) throw new Error('Spotify не подключён — войдите в Настройках');
   return token;
+}
+
+function sleep(ms: number): Promise<void> {
+  return new Promise((r) => setTimeout(r, ms));
+}
+
+async function discoverDeviceId(token: string): Promise<string | null> {
+  const res = await fetch('https://api.spotify.com/v1/me/player/devices', {
+    headers: { Authorization: `Bearer ${token}` },
+  });
+  if (!res.ok) return null;
+  const data = (await res.json()) as { devices?: { id: string; name: string }[] };
+  const device = data.devices?.find((d) => d.name === PLAYER_NAME);
+  return device?.id ?? null;
 }
 
 function loadSdk(): Promise<void> {
@@ -128,58 +144,81 @@ class SpotifyWebPlayer {
     }
   }
 
+  private async waitForDeviceId(_player: SpotifyPlayerInstance): Promise<void> {
+    if (this.deviceId) return;
+    const deadline = Date.now() + DEVICE_WAIT_MS;
+
+    while (!this.deviceId && Date.now() < deadline) {
+      try {
+        const token = await spotifyToken();
+        const id = await discoverDeviceId(token);
+        if (id) {
+          this.deviceId = id;
+          break;
+        }
+      } catch {
+        /* retry */
+      }
+      await sleep(400);
+    }
+
+    if (!this.deviceId) {
+      throw new Error(
+        'Spotify не зарегистрировал плеер. Нужен Premium, scope streaming и переподключение Spotify в Настройках. Перезапустите приложение после обновления.',
+      );
+    }
+  }
+
   private async ensureReady(): Promise<SpotifyPlayerInstance> {
     if (this.player && this.deviceId) return this.player;
     if (!this.initPromise) {
       this.initPromise = (async () => {
-        await loadSdk();
-        if (!window.Spotify) throw new Error('Spotify SDK недоступен');
-        const player = new window.Spotify.Player({
-          name: 'MusicStream',
-          volume: 0.85,
-          getOAuthToken: (cb) => {
-            void spotifyToken()
-              .then(cb)
-              .catch(() => undefined);
-          },
-        });
-        player.addListener('ready', ({ device_id }: { device_id: string }) => {
-          this.deviceId = device_id;
-        });
-        player.addListener('not_ready', () => {
-          this.deviceId = null;
-        });
-        player.addListener('player_state_changed', (state) => this.handleState(state as SpotifyPlaybackState | null));
-        player.addListener('authentication_error', () => this.emit('error'));
-        player.addListener('account_error', () => this.emit('error'));
-        player.addListener('playback_error', () => this.emit('error'));
-        player.addListener('initialization_error', () => this.emit('error'));
-
-        const connected = await player.connect();
-        if (!connected) {
-          throw new Error(
-            'Spotify Web Playback не подключился. Нужен Premium и повторный вход в Spotify в Настройках (scope streaming).',
-          );
-        }
-        this.player = player;
-        await new Promise<void>((resolve, reject) => {
-          if (this.deviceId) {
-            resolve();
-            return;
-          }
-          const timeout = setTimeout(
-            () => reject(new Error('Spotify не выдал device id — перезапустите приложение')),
-            25_000,
-          );
-          player.addListener('ready', ({ device_id }: { device_id: string }) => {
-            clearTimeout(timeout);
-            this.deviceId = device_id;
-            resolve();
+        try {
+          await loadSdk();
+          if (!window.Spotify) throw new Error('Spotify SDK недоступен');
+          const player = new window.Spotify.Player({
+            name: PLAYER_NAME,
+            volume: 0.85,
+            getOAuthToken: (cb) => {
+              void spotifyToken()
+                .then((t) => cb(t))
+                .catch(() => cb(''));
+            },
           });
-        });
+          player.addListener('ready', ({ device_id }: { device_id: string }) => {
+            this.deviceId = device_id;
+          });
+          player.addListener('not_ready', () => {
+            this.deviceId = null;
+          });
+          player.addListener('player_state_changed', (state) => this.handleState(state as SpotifyPlaybackState | null));
+          player.addListener('authentication_error', () => this.emit('error'));
+          player.addListener('account_error', () => this.emit('error'));
+          player.addListener('playback_error', () => this.emit('error'));
+          player.addListener('initialization_error', () => this.emit('error'));
+
+          const connected = await player.connect();
+          if (!connected) {
+            throw new Error(
+              'Spotify Web Playback не подключился. Нужен Premium и повторный вход в Spotify в Настройках (scope streaming).',
+            );
+          }
+          this.player = player;
+          await this.waitForDeviceId(player);
+        } catch (e) {
+          this.initPromise = null;
+          this.player = null;
+          this.deviceId = null;
+          throw e;
+        }
       })();
     }
-    await this.initPromise;
+    try {
+      await this.initPromise;
+    } catch (e) {
+      this.initPromise = null;
+      throw e;
+    }
     if (!this.player || !this.deviceId) throw new Error('Spotify player not ready');
     return this.player;
   }
