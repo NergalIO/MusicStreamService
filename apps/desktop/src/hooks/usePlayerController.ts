@@ -477,7 +477,22 @@ export function usePlayerController(): void {
         if (!s.retried) {
           s.retried = true;
           invalidateStream(s.track, useSettingsStore.getState().quality);
-          usePlayerStore.getState().replay(s.lastTime);
+          void (async () => {
+            try {
+              const stream = await resolveStream(s.track, useSettingsStore.getState().quality);
+              if (stream.fallbackPreviewUrl) {
+                getSpotifyWebPlayer().stop();
+                usePlaybackStore.setState({ preview: true });
+                await engine.play(proxyUrl(stream.fallbackPreviewUrl), {
+                  gainDb: normalizationGainDb(s.track.loudnessLufs),
+                });
+                return;
+              }
+            } catch {
+              /* retry SDK below */
+            }
+            usePlayerStore.getState().replay(s.lastTime);
+          })();
           return;
         }
         handlePlaybackFailure('Ошибка Spotify Web Playback', true);

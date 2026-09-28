@@ -75,12 +75,15 @@ export function registerConnectorIpc(): void {
       throw e instanceof Error ? e : new Error(String(e));
     }
   });
-  ipcMain.handle('connectors:artistTracks', async (_e, id: string, artistId: string, limit: number) => {
-    const c = connectorRegistry.get(id);
-    if (!c?.getArtistTracks || c.getAuthStatus() === 'disconnected') return [];
-    const safeLimit = Number.isFinite(limit) && limit > 0 ? limit : 50;
-    return c.getArtistTracks(artistId, safeLimit);
-  });
+  ipcMain.handle(
+    'connectors:artistTracks',
+    async (_e, id: string, artistId: string, limit: number, artistName?: string) => {
+      const c = connectorRegistry.get(id);
+      if (!c?.getArtistTracks || c.getAuthStatus() === 'disconnected') return [];
+      const safeLimit = Number.isFinite(limit) && limit > 0 ? limit : 50;
+      return c.getArtistTracks(artistId, safeLimit, artistName);
+    },
+  );
   ipcMain.handle('connectors:homeTracks', async (_e, id: string, limit: number) => {
     const c = connectorRegistry.get(id);
     if (!c?.getHomeTracks || c.getAuthStatus() === 'disconnected') return [];

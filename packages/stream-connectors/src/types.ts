@@ -27,7 +27,7 @@ export interface StreamConnector {
   getAccount?(): Promise<ExternalAccount | null>;
   search(query: string, limit: number): Promise<UnifiedTrack[]>;
   searchArtists?(query: string, limit: number): Promise<UnifiedArtist[]>;
-  getArtistTracks?(artistId: string, limit: number): Promise<UnifiedTrack[]>;
+  getArtistTracks?(artistId: string, limit: number, artistName?: string): Promise<UnifiedTrack[]>;
   listPlaylists?(): Promise<UnifiedPlaylist[]>;
   getPlaylist?(id: string): Promise<PlaylistWithTracks>;
   getSavedTracks?(limit: number): Promise<UnifiedTrack[]>;

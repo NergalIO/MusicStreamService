@@ -247,7 +247,16 @@ class SpotifyWebPlayer {
             getOAuthToken: (cb) => {
               void spotifyToken()
                 .then((t) => cb(t))
-                .catch(() => cb(''));
+                .catch(async (e) => {
+                  const msg = e instanceof Error ? e.message : String(e);
+                  console.error('Spotify token for Web Playback:', msg);
+                  await sleep(400);
+                  try {
+                    cb(await spotifyToken());
+                  } catch {
+                    if (this.activeUri) this.emit('error');
+                  }
+                });
             },
           });
           player.addListener('ready', ({ device_id }: { device_id: string }) => {
@@ -261,9 +270,13 @@ class SpotifyWebPlayer {
             const raw = typeof msg === 'string' ? msg : (msg as { message?: string })?.message ?? 'Spotify SDK error';
             sdkError = mapSpotifySdkError(raw);
           };
-          player.addListener('authentication_error', noteError);
-          player.addListener('account_error', noteError);
-          player.addListener('playback_error', noteError);
+          const onRuntimeError = (msg: unknown) => {
+            noteError(msg);
+            if (this.activeUri) this.emit('error');
+          };
+          player.addListener('authentication_error', onRuntimeError);
+          player.addListener('account_error', onRuntimeError);
+          player.addListener('playback_error', onRuntimeError);
           player.addListener('initialization_error', noteError);
 
           const connected = await player.connect();

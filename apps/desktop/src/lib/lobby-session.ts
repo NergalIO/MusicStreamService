@@ -5,6 +5,7 @@ import { startLobbyBroadcast, stopLobbyBroadcast } from '@/lib/lobby-broadcast';
 import { appendLobbyAudioChunk, setLobbyListenPaused, startLobbyListen, stopLobbyListen } from '@/lib/lobby-listen';
 import { useLobbyStore } from '@/store/lobby-store';
 import { notifyLobbyPresence } from '@/lib/lobby-discord';
+import { forgetActiveLobby, rememberActiveLobby } from '@/lib/lobby-route';
 
 let client: LobbyWsClient | null = null;
 
@@ -64,6 +65,7 @@ function inferRole(lobby: LobbyDto): LobbyMemberRole {
 export function connectLobbySession(lobby: LobbyDto, role: LobbyMemberRole): void {
   disconnectLobbySession();
   useLobbyStore.getState().setLobby(lobby, role);
+  rememberActiveLobby(lobby.id);
   useLobbyStore.getState().setWsStatus('connecting');
 
   client = new LobbyWsClient(handleWsEvent, {
@@ -107,5 +109,6 @@ export function disconnectLobbySession(): void {
   client = null;
   useLobbyStore.getState().setWsClient(null);
   useLobbyStore.getState().reset();
+  forgetActiveLobby();
   notifyLobbyPresence(null, null);
 }

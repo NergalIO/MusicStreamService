@@ -210,8 +210,8 @@ const api = {
       ipcRenderer.invoke('connectors:search', id, query, limit) as Promise<UnifiedTrack[]>,
     searchArtists: (id: string, query: string, limit: number) =>
       ipcRenderer.invoke('connectors:searchArtists', id, query, limit) as Promise<UnifiedArtist[]>,
-    artistTracks: (id: string, artistId: string, limit: number) =>
-      ipcRenderer.invoke('connectors:artistTracks', id, artistId, limit) as Promise<UnifiedTrack[]>,
+    artistTracks: (id: string, artistId: string, limit: number, artistName?: string) =>
+      ipcRenderer.invoke('connectors:artistTracks', id, artistId, limit, artistName) as Promise<UnifiedTrack[]>,
     homeTracks: (id: string, limit: number) =>
       ipcRenderer.invoke('connectors:homeTracks', id, limit) as Promise<UnifiedTrack[]>,
     resolvePlayback: (id: string, track: UnifiedTrack, quality?: Quality) =>

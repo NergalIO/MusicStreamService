@@ -1,6 +1,7 @@
 import { DoorOpen, Radio } from 'lucide-react';
 import { useLocation, useNavigate } from 'react-router-dom';
 import { Button } from '@/components/ui/button';
+import { lobbyPath } from '@/lib/lobby-route';
 import { leaveCurrentLobby } from '@/lib/lobby-session';
 import { useLobbyStore } from '@/store/lobby-store';
 
@@ -45,7 +46,7 @@ export function LobbyBar() {
         )}
       </div>
       {!onRoom && (
-        <Button size="sm" variant="secondary" onClick={() => navigate(`/lobby/${lobby.id}`)}>
+        <Button size="sm" variant="secondary" onClick={() => navigate(lobbyPath(lobby.id))}>
           Комната
         </Button>
       )}
@@ -54,7 +55,7 @@ export function LobbyBar() {
         variant={role === 'host' ? 'danger' : 'ghost'}
         onClick={() => {
           void leaveCurrentLobby().finally(() => {
-            if (location.pathname.startsWith('/lobby')) navigate('/lobby');
+            if (location.pathname.startsWith('/lobby')) navigate(lobbyPath());
           });
         }}
       >

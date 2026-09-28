@@ -123,7 +123,10 @@ export function ArtistPage() {
         .then(async (artist) => {
           if (!artist) return put(source, []);
           if (!cancelled) setRefs((prev) => ({ ...prev, [source]: artist }));
-          put(source, await window.electronAPI.connectors.artistTracks(source, artist.id, ARTIST_TRACKS_LIMIT));
+          put(
+            source,
+            await window.electronAPI.connectors.artistTracks(source, artist.id, ARTIST_TRACKS_LIMIT, artist.name),
+          );
         })
         .catch(() => fail(source));
     }

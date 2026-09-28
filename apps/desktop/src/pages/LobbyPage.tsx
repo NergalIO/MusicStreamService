@@ -15,6 +15,7 @@ import {
   rejectSuggestion,
   suggestTrack,
 } from '@/lib/lobby-api';
+import { lobbyPath, readActiveLobbyId } from '@/lib/lobby-route';
 import { connectLobbySession, disconnectLobbySession, leaveCurrentLobby } from '@/lib/lobby-session';
 import { loadSession } from '@/lib/api';
 import { useLobbyStore } from '@/store/lobby-store';
@@ -35,6 +36,13 @@ export function LobbyPage() {
   const wsStatus = useLobbyStore((s) => s.wsStatus);
   const [joinCode, setJoinCode] = useState(search.get('code') ?? '');
   const current = usePlayerStore((s) => s.current);
+  const rememberedId = readActiveLobbyId();
+  const routeLobbyId = id ?? lobby?.id ?? rememberedId ?? null;
+
+  useEffect(() => {
+    if (!routeLobbyId || id === routeLobbyId) return;
+    navigate(lobbyPath(routeLobbyId), { replace: true });
+  }, [id, routeLobbyId, navigate]);
 
   const createMut = useMutation({
     mutationFn: () => createLobby({ title: 'Listening party' }),
@@ -73,20 +81,21 @@ export function LobbyPage() {
   }, [search, id, lobby]);
 
   useEffect(() => {
-    if (!id || lobby?.id === id) return;
-    void fetchLobby(id)
+    const lobbyId = id ?? routeLobbyId;
+    if (!lobbyId || lobby?.id === lobbyId) return;
+    void fetchLobby(lobbyId)
       .then((dto) => {
         const session = loadSession();
         const r = session?.user.id === dto.hostUserId ? 'host' : 'guest';
         connectLobbySession(dto, r);
       })
       .catch((e) => toast.error(e instanceof Error ? e.message : 'Лобби недоступно'));
-  }, [id, lobby?.id]);
+  }, [id, routeLobbyId, lobby?.id]);
 
   const queue = lobby?.queue.filter((q) => q.status !== 'rejected') ?? [];
   const suggestions = queue.filter((q) => q.status === 'suggested');
 
-  if (!lobby && !id) {
+  if (!lobby && !routeLobbyId) {
     return (
       <div className="mx-auto max-w-lg space-y-6 pt-8">
         <h1 className="text-2xl font-semibold">Listening party</h1>

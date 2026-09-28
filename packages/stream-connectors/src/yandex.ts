@@ -148,7 +148,7 @@ export function createYandexConnector(opts: YandexConnectorOptions): YandexConne
       );
       return (data.artists?.results ?? []).slice(0, limit).map(mapArtist);
     },
-    async getArtistTracks(artistId: string, limit: number): Promise<UnifiedTrack[]> {
+    async getArtistTracks(artistId: string, limit: number, _artistName?: string): Promise<UnifiedTrack[]> {
       if (client.status !== 'connected') return [];
       type Page = { tracks?: YTrack[]; pager?: { total: number } };
       const pagePath = (page: number) =>
