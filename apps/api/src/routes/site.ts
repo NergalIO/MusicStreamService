@@ -26,7 +26,8 @@ export async function siteRoutes(app: FastifyInstance) {
     }
     let html = fs.readFileSync(indexPath, 'utf8');
     html = html.replaceAll('{{BASE_HREF}}', baseHref);
-    html = html.replaceAll('{{BASE_PATH}}', config.basePath);
+    html = html.replaceAll('{{BASE_PATH}}', config.basePath || '/');
+    html = html.replaceAll('{{API_PUBLIC_URL}}', config.publicUrl);
     return reply.type('text/html; charset=utf-8').send(html);
   });
 

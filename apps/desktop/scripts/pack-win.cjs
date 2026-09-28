@@ -93,7 +93,9 @@ if (!process.env.API_PUBLIC_URL) {
 const buildStatus = run('pnpm', ['run', 'build'], desktopDir);
 if (buildStatus !== 0) process.exit(buildStatus);
 
-const builderArgs = ['electron-builder', '--win', 'nsis'];
+const builderArgs = ['electron-builder', '--win', 'nsis', '--publish', 'never'];
+// Релиз на GitHub — только через .github/workflows/release.yml (softprops/action-gh-release).
+// Иначе при checkout tag electron-builder требует GH_TOKEN и падает после сборки NSIS.
 if (process.platform === 'win32') {
   builderArgs.push('-c.electronDist=node_modules/electron/dist');
 }

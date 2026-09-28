@@ -14,6 +14,11 @@
   box-sizing: border-box;
 }
 
+/* .btn { display } иначе перебивает UA-правило для [hidden] — «пустые» кнопки остаются на экране */
+[hidden] {
+  display: none !important;
+}
+
 body {
   margin: 0;
   min-height: 100vh;
@@ -54,6 +59,12 @@ body {
   margin: 2.5rem 0;
 }
 
+@media (min-width: 640px) {
+  .features {
+    grid-template-columns: repeat(3, 1fr);
+  }
+}
+
 .features article {
   background: var(--surface);
   border-radius: var(--radius);
@@ -75,6 +86,11 @@ body {
 
 .downloads h2 {
   margin-bottom: 1rem;
+}
+
+.downloads.is-loading .buttons {
+  opacity: 0.35;
+  pointer-events: none;
 }
 
 .buttons {
@@ -143,8 +159,24 @@ body {
   margin-top: 3rem;
   color: var(--muted);
   font-size: 0.8rem;
+  line-height: 1.5;
+}
+
+.foot-muted {
+  color: var(--muted);
 }
 
 .foot code {
   color: var(--text);
+  font-size: 0.85em;
+}
+
+.foot a {
+  color: var(--accent-hover);
+  text-decoration: none;
+  word-break: break-all;
+}
+
+.foot a:hover {
+  text-decoration: underline;
 }

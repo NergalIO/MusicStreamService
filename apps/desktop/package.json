@@ -80,10 +80,6 @@
         ]
       }
     ],
-    "publish": {
-      "provider": "github",
-      "owner": "mss",
-      "repo": "MusicStreamService"
-    }
+    "publish": null
   }
 }

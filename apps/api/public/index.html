@@ -32,7 +32,7 @@
         </article>
       </section>
 
-      <section class="downloads" aria-labelledby="dl-title">
+      <section class="downloads is-loading" aria-labelledby="dl-title">
         <h2 id="dl-title">Скачать</h2>
         <div class="buttons">
           <a id="btn-win-bootstrap" class="btn btn-primary" href="downloads/install-windows.cmd" hidden>
@@ -53,7 +53,11 @@
       </section>
 
       <footer class="foot">
-        <p>API: <code>{{BASE_PATH}}</code> или корень сервиса на вашем домене.</p>
+        <p>
+          Сервер:
+          <a href="{{API_PUBLIC_URL}}">{{API_PUBLIC_URL}}</a>
+          <span class="foot-muted"> · префикс API <code>{{BASE_PATH}}</code></span>
+        </p>
       </footer>
     </main>
     <script src="landing.js"></script>
