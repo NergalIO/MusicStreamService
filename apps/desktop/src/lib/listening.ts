@@ -65,7 +65,12 @@ export function recordPlay(track: UnifiedTrack, playedSeconds: number, finished:
     artists: track.artists?.slice(0, 20),
     album: track.album?.slice(0, 500),
     albumId: track.albumId?.slice(0, 100),
-    coverUrl: /^https?:\/\//.test(track.coverUrl ?? '') || track.coverUrl?.startsWith('/api/') ? track.coverUrl : undefined,
+    coverUrl:
+      /^https?:\/\//.test(track.coverUrl ?? '') ||
+      track.coverUrl?.startsWith('/api/') ||
+      track.coverUrl?.includes('/covers/')
+        ? track.coverUrl
+        : undefined,
     durationMs: track.durationMs ? Math.round(track.durationMs) : undefined,
     playedMs: Math.round(playedSeconds * 1000),
     completed: finished,

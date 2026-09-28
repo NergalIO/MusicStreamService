@@ -1,5 +1,6 @@
 import type { Quality, UnifiedTrack } from '@mss/shared';
 import { loadSession } from '@/lib/api';
+import { apiMediaUrl } from '@/lib/api-base';
 import { downloadedFileUrl } from '@/store/downloads-store';
 
 export interface ResolvedStream {
@@ -36,7 +37,7 @@ async function resolveLocal(track: PlayableTrack): Promise<ResolvedStream> {
   }
   const localUrl = await window.electronAPI?.localTracks?.resolvePlayUrl(track.id).catch(() => null);
   if (localUrl) return { url: localUrl, preview: false };
-  return { url: track.streamUrl ?? `/api/stream/${track.id}`, preview: false };
+  return { url: track.streamUrl ?? apiMediaUrl(`/stream/${track.id}`), preview: false };
 }
 
 async function resolveExternal(track: PlayableTrack, quality: Quality): Promise<ResolvedStream> {

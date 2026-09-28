@@ -4,9 +4,14 @@ import { defineConfig, externalizeDepsPlugin } from 'electron-vite';
 import { loadEnv } from 'vite';
 
 const repoRoot = resolve(__dirname, '../..');
-const env = loadEnv('development', repoRoot, '');
+const env = {
+  ...loadEnv('development', repoRoot, ''),
+  ...loadEnv('production', repoRoot, ''),
+  ...process.env,
+};
 const publicBasePath = (env.PUBLIC_BASE_PATH ?? '').replace(/\/$/, '');
 const apiTarget = env.API_DEV_TARGET ?? 'http://127.0.0.1:3001';
+const apiPublicUrl = (env.API_PUBLIC_URL ?? '').replace(/\/$/, '');
 
 export default defineConfig({
   main: {
@@ -30,6 +35,9 @@ export default defineConfig({
     },
   },
   renderer: {
+    define: {
+      'import.meta.env.VITE_API_PUBLIC_URL': JSON.stringify(apiPublicUrl),
+    },
     resolve: {
       alias: {
         '@': resolve(__dirname, 'src'),

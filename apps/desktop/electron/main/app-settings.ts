@@ -19,6 +19,8 @@ export interface AppSettings {
   /** Application ID из Discord Developer Portal (если не задан DISCORD_CLIENT_ID в .env). */
   discordClientId?: string;
   trayHintShown: boolean;
+  /** REST API (как API_PUBLIC_URL на сервере), для presence и fallback без bake в сборке */
+  apiPublicUrl?: string;
 }
 
 export interface SystemSettings extends AppSettings {

@@ -12,6 +12,7 @@ import { libraryPath } from '@/lib/service-routes';
 import { toast, Toaster } from 'sonner';
 import { AppShell } from '@/components/layout/AppShell';
 import { loadSession } from '@/lib/api';
+import { getApiBaseUrl, setApiBaseUrl } from '@/lib/api-base';
 import { useApplyAppearance } from '@/lib/appearance';
 import { usePlayerStore } from '@/store/player-store';
 import { AlbumPage } from '@/pages/AlbumPage';
@@ -84,9 +85,22 @@ function AppRouter({ children }: { children: React.ReactNode }) {
   return <Router>{children}</Router>;
 }
 
+function ApiBaseBootstrap() {
+  useEffect(() => {
+    if (import.meta.env.DEV) return;
+    if (getApiBaseUrl()) return;
+    void window.electronAPI?.system.getSettings().then((s) => {
+      const url = s.apiPublicUrl?.trim();
+      if (url) setApiBaseUrl(url);
+    });
+  }, []);
+  return null;
+}
+
 function AppRoutes() {
   return (
     <AppRouter>
+      <ApiBaseBootstrap />
       <Appearance />
       <Routes>
         <Route path="/login" element={<LoginPage />} />

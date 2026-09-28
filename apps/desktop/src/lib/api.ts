@@ -1,4 +1,4 @@
-const API_BASE = '/api';
+import { apiUrl } from './api-base.js';
 
 export interface AuthSession {
   accessToken: string;
@@ -49,7 +49,7 @@ export function currentAccessToken(): string | null {
 
 export async function refreshAccess(): Promise<boolean> {
   if (!refreshToken) return false;
-  const res = await fetch(`${API_BASE}/auth/refresh`, {
+  const res = await fetch(apiUrl('/auth/refresh'), {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
     body: JSON.stringify({ refreshToken }),
@@ -65,12 +65,12 @@ export async function refreshAccess(): Promise<boolean> {
 export async function apiFetch<T>(path: string, init?: RequestInit): Promise<T> {
   const headers = new Headers(init?.headers);
   if (accessToken) headers.set('Authorization', `Bearer ${accessToken}`);
-  let res = await fetch(`${API_BASE}${path}`, { ...init, headers });
+  let res = await fetch(apiUrl(path), { ...init, headers });
   if (res.status === 401 && refreshToken) {
     const ok = await refreshAccess();
     if (ok) {
       headers.set('Authorization', `Bearer ${accessToken}`);
-      res = await fetch(`${API_BASE}${path}`, { ...init, headers });
+      res = await fetch(apiUrl(path), { ...init, headers });
     }
   }
   if (!res.ok) {

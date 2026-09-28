@@ -6,9 +6,11 @@ import { Button } from '@/components/ui/button';
 import { Input } from '@/components/ui/input';
 import { apiFetch, saveSession } from '@/lib/api';
 import type { AuthSession } from '@/lib/api';
+import { getApiBaseUrl, setApiBaseUrl } from '@/lib/api-base';
 
 export function LoginPage() {
   const nav = useNavigate();
+  const [serverUrl, setServerUrl] = useState(() => getApiBaseUrl());
   const [email, setEmail] = useState('');
   const [password, setPassword] = useState('');
   const [mode, setMode] = useState<'login' | 'register'>('login');
@@ -19,6 +21,16 @@ export function LoginPage() {
     setError(null);
     setSubmitting(true);
     try {
+      if (!import.meta.env.DEV) {
+        const base = serverUrl.trim();
+        if (!base) {
+          setError('Укажите URL сервера (как на лендинге, с /MusicStreamService)');
+          setSubmitting(false);
+          return;
+        }
+        setApiBaseUrl(base);
+        await window.electronAPI?.system.setSettings({ apiPublicUrl: base });
+      }
       const path = mode === 'login' ? '/auth/login' : '/auth/register';
       const data = await apiFetch<AuthSession>(path, {
         method: 'POST',
@@ -54,6 +66,14 @@ export function LoginPage() {
             <div role="alert" className="rounded-lg border border-danger/30 bg-danger/10 px-3 py-2 text-sm text-danger">
               {error}
             </div>
+          )}
+          {!import.meta.env.DEV && (
+            <Input
+              placeholder="https://your-domain/MusicStreamService"
+              value={serverUrl}
+              onChange={(e) => setServerUrl(e.target.value)}
+              autoComplete="url"
+            />
           )}
           <Input placeholder="Email" value={email} onChange={(e) => setEmail(e.target.value)} autoComplete="email" />
           <Input

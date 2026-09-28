@@ -1,5 +1,6 @@
 import type { UnifiedTrack } from '@mss/shared';
 import { toast } from 'sonner';
+import { apiMediaUrl } from '@/lib/api-base';
 import { formatTrackCount } from '@/lib/format';
 import { addTracksToPlaylist, createPlaylist, updatePlaylist } from '@/lib/mss-library';
 import { downloadKey, useDownloadsStore } from '@/store/downloads-store';
@@ -18,7 +19,7 @@ export function externalUrl(track: UnifiedTrack): string | null {
 function trackLocation(track: UnifiedTrack & { streamUrl?: string }): string | null {
   const downloaded = useDownloadsStore.getState().items[downloadKey(track)];
   if (downloaded) return downloaded.path;
-  if (track.source === 'local') return new URL(track.streamUrl ?? `/api/stream/${track.id}`, location.href).href;
+  if (track.source === 'local') return track.streamUrl ?? apiMediaUrl(`/stream/${track.id}`);
   return externalUrl(track);
 }
 

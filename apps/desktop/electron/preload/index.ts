@@ -87,6 +87,8 @@ export interface SystemSettings {
   discordShowOnPause: boolean;
   openAtLogin: boolean;
   discordClientIdFromEnv: boolean;
+  /** Публичный URL API (как на лендинге), для REST и presence WS */
+  apiPublicUrl?: string;
 }
 
 export type UpdateStatus = {

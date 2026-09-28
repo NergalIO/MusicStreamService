@@ -1,10 +1,17 @@
 import fs from 'node:fs';
 import path from 'node:path';
 import WebSocket from 'ws';
+import { getAppSettings } from './app-settings.js';
 import { toastMain } from './toast.js';
 import { resolveLocalTrackPath } from './local-tracks.js';
 
-const API_BASE = process.env.API_PUBLIC_URL ?? 'http://127.0.0.1:3001';
+function resolveApiBase(): string {
+  const fromSettings = getAppSettings().apiPublicUrl?.trim();
+  if (fromSettings) return fromSettings.replace(/\/$/, '');
+  const fromEnv = process.env.API_PUBLIC_URL?.trim();
+  if (fromEnv) return fromEnv.replace(/\/$/, '');
+  return 'http://127.0.0.1:3001';
+}
 
 let socket: WebSocket | null = null;
 let pingTimer: ReturnType<typeof setInterval> | null = null;
@@ -68,7 +75,7 @@ export function connectPresenceWs(token: string): void {
   disconnectPresenceWs();
   accessToken = token;
 
-  const httpBase = API_BASE.replace(/\/$/, '');
+  const httpBase = resolveApiBase();
   const url = `${httpBase.replace(/^http/, 'ws')}/ws?token=${encodeURIComponent(token)}`;
   const ws = new WebSocket(url);
   socket = ws;

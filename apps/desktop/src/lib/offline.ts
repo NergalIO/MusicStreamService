@@ -1,11 +1,12 @@
 import { toast } from 'sonner';
 import { loadSession } from '@/lib/api';
+import { apiUrl } from '@/lib/api-base';
 
 export async function downloadOffline(trackId: string): Promise<void> {
   try {
     const session = loadSession();
     const deviceId = await window.electronAPI.getDeviceId();
-    const res = await fetch(`/api/tracks/${trackId}/offline-package`, {
+    const res = await fetch(apiUrl(`/tracks/${trackId}/offline-package`), {
       headers: { Authorization: `Bearer ${session?.accessToken}`, 'X-Device-Id': deviceId },
     });
     if (!res.ok) throw new Error((await res.text()) || res.statusText);

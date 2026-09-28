@@ -1,4 +1,5 @@
 import type { PlaylistEntryDto, SourceId, TrackAvailability, UnifiedTrack } from '@mss/shared';
+import { apiMediaUrl } from '@/lib/api-base';
 
 export type SourceFilterId = SourceId | 'all';
 
@@ -68,10 +69,12 @@ export function mapLocalTrack(
     album: t.album ?? undefined,
     durationMs: t.durationMs ?? undefined,
     loudnessLufs: t.loudnessLufs ?? undefined,
-    coverUrl: t.coverUrl ? `/api/covers/${t.id}${coverVersion(t.coverUrl)}` : undefined,
+    coverUrl: t.coverUrl
+      ? apiMediaUrl(`/covers/${t.id}${coverVersion(t.coverUrl)}`)
+      : undefined,
     playable,
     unplayableReason,
-    streamUrl: t.streamUrl ?? `/api/stream/${t.id}`,
+    streamUrl: t.streamUrl ?? apiMediaUrl(`/stream/${t.id}`),
   };
 }
 

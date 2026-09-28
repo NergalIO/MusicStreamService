@@ -19,6 +19,8 @@ import {
   type ConnectorStatus,
 } from '@/lib/connectors';
 import { clearSession, loadSession } from '@/lib/api';
+import { getApiBaseUrl, setApiBaseUrl } from '@/lib/api-base';
+import { Input } from '@/components/ui/input';
 import { ACCENTS, COVER_ACCENT } from '@/lib/appearance';
 import { formatBytes, formatTrackCount } from '@/lib/format';
 import { isCompressible, useDownloadsStore } from '@/store/downloads-store';
@@ -149,8 +151,23 @@ export function useSystemSettings() {
 function SystemSection() {
   const [system, update] = useSystemSettings();
   if (!window.electronAPI || !system) return null;
+  const serverUrl = system.apiPublicUrl ?? getApiBaseUrl();
   return (
     <Section title="Система">
+      {!import.meta.env.DEV && (
+        <Row title="Сервер" subtitle="Публичный URL API, как на странице загрузки (с /MusicStreamService)">
+          <Input
+            className="max-w-md"
+            placeholder="https://your-domain/MusicStreamService"
+            value={serverUrl}
+            onChange={(e) => {
+              const v = e.target.value;
+              update({ apiPublicUrl: v || undefined });
+              if (v.trim()) setApiBaseUrl(v);
+            }}
+          />
+        </Row>
+      )}
       <Row title="Сворачивать в трей при закрытии" subtitle="Крестик прячет окно, музыка продолжает играть">
         <Switch checked={system.closeToTray} onChange={(v) => update({ closeToTray: v })} label="Сворачивать в трей" />
       </Row>
