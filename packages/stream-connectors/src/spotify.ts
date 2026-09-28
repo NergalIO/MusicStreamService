@@ -11,7 +11,8 @@ import type {
 import type { StreamConnector, TokenVault } from './types.js';
 
 const VAULT_KEY = 'spotify_tokens';
-const MAX_ARTIST_ALBUMS = 40;
+/** Меньше запросов к API — в Dev Mode общая квота на аккаунт разработчика. */
+const MAX_ARTIST_ALBUMS = 12;
 const MAX_PLAYLISTS = 100;
 /** Dev Mode (Feb 2026+): GET /search limit max 10 — больше даёт 400 Invalid limit. */
 const SPOTIFY_SEARCH_PAGE_MAX = 10;
@@ -111,6 +112,16 @@ function spotifyApiErrorMessage(status: number, raw: string, _path: string): str
   }
   if (status === 400 && /invalid limit/i.test(detail)) {
     return `Spotify: некорректный limit (Dev Mode: search ≤ ${SPOTIFY_SEARCH_PAGE_MAX}). Обновите приложение.`;
+  }
+  if (status === 429 || apiReason === 'QUOTA_EXCEEDED' || /QUOTA_EXCEEDED/i.test(detail)) {
+    return (
+      'Исчерпана месячная квота Spotify Web API (Development Mode на аккаунте разработчика). ' +
+      'Подождите сброса квоты или запросите Extended Quota в developer.spotify.com/dashboard → приложение → Extension Request. ' +
+      'Пока квота исчерпана, воспроизведение и загрузка каталога Spotify недоступны.'
+    );
+  }
+  if (status === 429) {
+    return 'Spotify просит подождать (rate limit). Повторите через минуту.';
   }
   return apiReason || apiMessage || raw || `Spotify API ${status}`;
 }
@@ -435,16 +446,13 @@ export function createSpotifyConnector(opts: SpotifyConnectorOptions): StreamCon
         }
         for (const chunk of chunks) {
           if (byId.size >= cap) break;
-          const results = await Promise.all(
-            chunk.map((album) =>
-              spotifyGet<{ items: SpotifyAlbumTrack[] }>(`/albums/${album.id}/tracks`, {
-                limit: '50',
-                market: 'from_token',
-              }).then((r) => ({ album, items: r?.items ?? [] })),
-            ),
-          );
-          for (const { album, items } of results) {
-            for (const t of items) {
+          for (const album of chunk) {
+            if (byId.size >= cap) break;
+            const page = await spotifyGet<{ items: SpotifyAlbumTrack[] }>(`/albums/${album.id}/tracks`, {
+              limit: '50',
+              market: 'from_token',
+            });
+            for (const t of page?.items ?? []) {
               if (!t.artists.some((a) => a.id === artistId)) continue;
               add(mapSpotifyTrack({ ...t, album }));
             }
@@ -569,17 +577,9 @@ export function createSpotifyConnector(opts: SpotifyConnectorOptions): StreamCon
       return out;
     },
     async resolvePlayback(track: UnifiedTrack): Promise<PlaybackHandle> {
-      const token = await refreshIfNeeded();
-      if (!token) throw new Error('Spotify not connected');
-      const res = await fetch(`https://api.spotify.com/v1/tracks/${track.id}`, {
-        headers: { Authorization: `Bearer ${token}` },
-      });
-      if (!res.ok) {
-        const err = await res.text().catch(() => '');
-        throw new Error(spotifyApiErrorMessage(res.status, err, `/tracks/${track.id}`));
-      }
-      const data = (await res.json()) as { uri: string; preview_url: string | null };
-      return { kind: 'spotifySdk', trackUri: data.uri, previewUrl: data.preview_url ?? undefined };
+      if (!loadTokens()?.refresh_token) throw new Error('Spotify не подключён');
+      // URI детерминирован; GET /tracks/{id} тратит квоту Dev Mode без пользы для Web Playback SDK.
+      return { kind: 'spotifySdk', trackUri: `spotify:track:${track.id}` };
     },
   };
 }

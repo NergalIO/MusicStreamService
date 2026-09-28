@@ -338,9 +338,16 @@ class SpotifyWebPlayer {
       }
       let detail = body.trim();
       try {
-        const j = JSON.parse(body) as { error?: { message?: string } };
+        const j = JSON.parse(body) as { error?: { message?: string; reason?: string } };
+        const reason = j.error?.reason ?? '';
         detail = j.error?.message ?? detail;
-      } catch {
+        if (res.status === 429 || reason === 'QUOTA_EXCEEDED' || /QUOTA_EXCEEDED/i.test(body)) {
+          throw new Error(
+            'Исчерпана квота Spotify Web API (Development Mode). Подождите или запросите Extended Quota в Spotify Developer Dashboard.',
+          );
+        }
+      } catch (e) {
+        if (e instanceof Error && e.message.includes('квота Spotify')) throw e;
         /* raw body */
       }
       throw new Error(detail || `Spotify не начал воспроизведение (${res.status})`);
