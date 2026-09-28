@@ -2,11 +2,14 @@ import { BrowserWindow, shell } from 'electron';
 import type { DeviceCodePrompt, LoginPrompt, LoginReply } from '@mss/shared';
 import {
   ConnectorRegistry,
+  createSpotifyWebConnector,
   createVkConnector,
   createYandexConnector,
   type YandexConnector,
 } from '@mss/stream-connectors';
 import { clientSecret } from './client-secrets.js';
+import { spotifyPathfinder, spotifySpclient } from './spotify-pathfinder.js';
+import { isSpotifyLoggedIn, spotifyWebLogout } from './spotify-web-session.js';
 import { yandexCustomOAuthEnabled } from './user-client-secrets.js';
 import { tokenVault } from './token-vault.js';
 import { openKateOAuthWindow } from './vk-oauth.js';
@@ -94,9 +97,25 @@ function registerVk(): void {
   );
 }
 
+function registerSpotify(): void {
+  connectorRegistry.register(
+    createSpotifyWebConnector({
+      query: spotifyPathfinder,
+      spclient: spotifySpclient,
+      timeZone: Intl.DateTimeFormat().resolvedOptions().timeZone,
+      loggedIn: isSpotifyLoggedIn,
+      connect: async () => {
+        throw new Error('Войдите в Spotify во встроенном веб-плеере: боковая панель → Spotify → Веб-плеер');
+      },
+      disconnect: spotifyWebLogout,
+    }),
+  );
+}
+
 export function initConnectors(): void {
   registerYandex();
   registerVk();
+  registerSpotify();
 }
 
 /** После смены ключей в настройках — пересобрать коннекторы без перезапуска приложения. */

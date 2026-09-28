@@ -220,16 +220,57 @@ async function saveFile(
   return { path: target, codec: file.codec, bitrate, size: file.data.length };
 }
 
+function matchKey(s: string): string {
+  return s
+    .toLowerCase()
+    .replace(/ё/g, 'е')
+    .replace(/\s*[([].*?[)\]]/g, '')
+    .replace(/\s+-\s+.*$/, '')
+    .replace(/\s(feat|ft)\.?\s.*$/, '')
+    .replace(/[^\p{L}\p{N}]+/gu, ' ')
+    .trim();
+}
+
+/**
+ * Поток Spotify зашифрован Widevine и файлом не отдаётся — скачиваем тот же трек
+ * из подключённой Яндекс Музыки или VK, сверяя название, исполнителя и длительность.
+ */
+async function findDownloadableCopy(track: UnifiedTrack): Promise<UnifiedTrack> {
+  const title = matchKey(track.title);
+  const mainArtist = track.artists?.[0]?.name ?? track.artist.split(',')[0] ?? '';
+  const artist = matchKey(mainArtist);
+  const sources = ['yandex', 'vk'].filter((id) => connectorRegistry.get(id)?.getAuthStatus() === 'connected');
+  if (!sources.length) {
+    throw new Error('Spotify не отдаёт файлы — подключите Яндекс Музыку или VK, и трек скачается оттуда');
+  }
+  const plainTitle = track.title.replace(/\s*[([].*?[)\]]/g, '').replace(/\s+-\s+.*$/, '');
+  for (const id of sources) {
+    const found = await connectorRegistry
+      .get(id)!
+      .search(`${mainArtist} ${plainTitle}`, 10)
+      .catch(() => [] as UnifiedTrack[]);
+    const match = found.find((t) => {
+      if (!t.playable || matchKey(t.title) !== title) return false;
+      if (!matchKey(t.artist).includes(artist)) return false;
+      return !track.durationMs || !t.durationMs || Math.abs(t.durationMs - track.durationMs) <= 5000;
+    });
+    if (match) return match;
+  }
+  throw new Error('Не нашли этот трек в Яндекс Музыке и VK — Spotify не отдаёт файлы для скачивания');
+}
+
 async function performDownload(track: UnifiedTrack, quality: Quality, compressKbps: number): Promise<DownloadRecord> {
   const key = downloadKey(track);
   throwIfCancelled(key);
   const controller = new AbortController();
   abortControllers.set(key, controller);
   try {
-    const connector = connectorRegistry.get(track.source);
-    if (!connector) throw new Error(`Источник ${track.source} не подключён`);
+    const source = track.source === 'spotify' ? await findDownloadableCopy(track) : track;
+    throwIfCancelled(key);
+    const connector = connectorRegistry.get(source.source);
+    if (!connector) throw new Error(`Источник ${source.source} не подключён`);
 
-    const handle = await connector.resolvePlayback(track, { quality });
+    const handle = await connector.resolvePlayback(source, { quality });
     throwIfCancelled(key);
     if (handle.kind !== 'mediaUrl') throw new Error('Этот источник не отдаёт файлы для загрузки');
     if (handle.preview) throw new Error('Доступно только превью — для загрузки нужна подписка');

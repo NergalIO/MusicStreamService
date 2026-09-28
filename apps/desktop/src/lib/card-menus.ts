@@ -1,4 +1,4 @@
-import type { PlaylistEntryDto, UnifiedAlbum, UnifiedPlaylist, UnifiedTrack } from '@mss/shared';
+import type { AlbumWithTracks, PlaylistEntryDto, UnifiedAlbum, UnifiedPlaylist, UnifiedTrack } from '@mss/shared';
 import { Copy, Download, FileDown, Link2, ListEnd, ListPlus, ListStart, MicVocal, Pin, PinOff, Play, Radio, Shuffle } from 'lucide-react';
 import { toast } from 'sonner';
 import { openPlaylistPicker } from '@/components/tracks/PlaylistPicker';
@@ -15,10 +15,14 @@ import { canDownload, downloadKey, useDownloadsStore } from '@/store/downloads-s
 import { usePlayerStore, type PlayContext } from '@/store/player-store';
 import { useSidebarStore } from '@/store/sidebar-store';
 
+export function loadAlbum(source: 'yandex' | 'spotify', id: string): Promise<AlbumWithTracks> {
+  return source === 'spotify' ? window.electronAPI.connectors.album('spotify', id) : window.electronAPI.yandex.album(id);
+}
+
 /** Те же ключи, что у страниц альбома и плейлиста: повторный переход откроется из кэша. */
-export function loadAlbumTracks(id: string): Promise<UnifiedTrack[]> {
+export function loadAlbumTracks(id: string, source: 'yandex' | 'spotify' = 'yandex'): Promise<UnifiedTrack[]> {
   return queryClient
-    .fetchQuery({ queryKey: ['album', 'yandex', id], queryFn: () => window.electronAPI.yandex.album(id), staleTime: 30 * 60_000 })
+    .fetchQuery({ queryKey: ['album', source, id], queryFn: () => loadAlbum(source, id), staleTime: 30 * 60_000 })
     .then((a) => a.tracks);
 }
 
@@ -29,19 +33,20 @@ export function loadPlaylistTracks(p: Pick<UnifiedPlaylist, 'source' | 'id'>): P
       queryFn: async () => (await apiFetch<{ items: PlaylistEntryDto[] }>(`/playlists/${p.id}/tracks`)).items.map(mapPlaylistEntry),
     });
   }
-  if (p.source === 'yandex' || p.source === 'vk') {
+  if (p.source === 'yandex' || p.source === 'vk' || p.source === 'spotify') {
+    const source = p.source;
     return queryClient
       .fetchQuery({
-        queryKey: [p.source, 'playlist', p.id],
+        queryKey: [source, 'playlist', p.id],
         queryFn: () =>
-          p.source === 'yandex'
+          source === 'yandex'
             ? window.electronAPI.yandex.playlist(p.id)
-            : window.electronAPI.connectors.getPlaylist('vk', p.id),
+            : window.electronAPI.connectors.getPlaylist(source, p.id),
         staleTime: 5 * 60_000,
       })
       .then((pl) => pl.tracks);
   }
-  throw new Error('Плейлисты Spotify открываются в разделе Spotify');
+  throw new Error('Этот источник не поддерживает плейлисты');
 }
 
 function withTracks(load: () => Promise<UnifiedTrack[]>, run: (tracks: UnifiedTrack[]) => void): () => void {
@@ -95,7 +100,7 @@ function downloadAllItem(load: () => Promise<UnifiedTrack[]>): MenuItem {
 }
 
 export function albumMenu(album: UnifiedAlbum): MenuSpec {
-  const load = () => loadAlbumTracks(album.id);
+  const load = () => loadAlbumTracks(album.id, album.source === 'spotify' ? 'spotify' : 'yandex');
   const context: PlayContext = { type: 'album', title: album.title, path: albumLink(album) };
   const artist = album.artists?.[0];
   return {
@@ -125,7 +130,12 @@ export function albumMenu(album: UnifiedAlbum): MenuSpec {
         {
           icon: Copy,
           label: 'Скопировать ссылку',
-          action: () => void navigator.clipboard.writeText(`https://music.yandex.ru/album/${album.id}`),
+          action: () =>
+            void navigator.clipboard.writeText(
+              album.source === 'spotify'
+                ? `https://open.spotify.com/album/${album.id}`
+                : `https://music.yandex.ru/album/${album.id}`,
+            ),
         },
         {
           icon: Link2,
@@ -142,7 +152,9 @@ export function playlistMenu(playlist: UnifiedPlaylist): MenuSpec {
   const context: PlayContext = { type: 'playlist', title: playlist.title, path: playlistPath(playlist) };
   const external = playlist.source !== 'local';
   const pinSource =
-    playlist.source === 'local' || playlist.source === 'yandex' || playlist.source === 'vk' ? playlist.source : null;
+    playlist.source === 'local' || playlist.source === 'yandex' || playlist.source === 'vk' || playlist.source === 'spotify'
+      ? playlist.source
+      : null;
   const pinned = pinSource ? useSidebarStore.getState().isPinned(pinSource, playlist.id) : false;
   return {
     title: playlist.title,
@@ -189,8 +201,9 @@ export function playlistMenu(playlist: UnifiedPlaylist): MenuSpec {
 export function artistMenu(group: ArtistGroup): MenuSpec {
   const yandex = group.refs.yandex;
   const vk = group.refs.vk;
-  const source = yandex ? 'yandex' : vk ? 'vk' : null;
-  const artist = yandex ?? vk;
+  const spotify = group.refs.spotify;
+  const source = yandex ? 'yandex' : vk ? 'vk' : spotify ? 'spotify' : null;
+  const artist = yandex ?? vk ?? spotify;
   const loadPopular = () => window.electronAPI.connectors.artistTracks(source!, artist!.id, 50, artist!.name);
   const context: PlayContext = { type: 'artist', title: group.name, path: artistPath(group.name, group.refs) };
   return {

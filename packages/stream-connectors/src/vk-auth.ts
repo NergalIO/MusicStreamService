@@ -113,6 +113,34 @@ export function vkOtpAlreadySent(verification: string): boolean {
   return /^(sms|otp|call|callreset|push)/.test(verification);
 }
 
+export function vkQrBrowserUrl(session: Pick<QrSession, 'authUrl' | 'authCode'>): string {
+  if (session.authCode) return `https://qr.vk.ru/ca?q=${encodeURIComponent(session.authCode)}`;
+  try {
+    const q = new URL(session.authUrl).searchParams.get('q');
+    if (q) return `https://qr.vk.ru/ca?q=${encodeURIComponent(q)}`;
+  } catch {
+    /* ignore */
+  }
+  if (session.authUrl && !/oauth\.vk\./i.test(session.authUrl) && !/id\.vk\./i.test(session.authUrl)) {
+    return session.authUrl;
+  }
+  return 'https://m.vk.com/login';
+}
+
+/** Короткий код с экрана подтверждения в VK, не hash из URL. */
+export function vkQrDisplayCode(authCode: string): string | undefined {
+  const trimmed = authCode.trim();
+  if (trimmed.length >= 4 && trimmed.length <= 12 && /^[a-zA-Z0-9-]+$/.test(trimmed)) return trimmed.toUpperCase();
+  return undefined;
+}
+
+/** Официальный мобильный логин VK (SMS). Kate/Android authorize в вебе даёт «direct auth». */
+export function vkSmsLoginUrl(session: Pick<QrSession, 'authUrl' | 'authCode'>): string {
+  const confirm = vkQrBrowserUrl(session);
+  if (/m\.vk\.(com|ru)\/login/i.test(confirm)) return confirm;
+  return `https://m.vk.com/login?to=${encodeURIComponent(confirm)}`;
+}
+
 export function kateAuthorizeUrl(): string {
   const params = new URLSearchParams({
     client_id: VK_KATE_CLIENT_ID,
@@ -151,6 +179,9 @@ export function oauthRedirectError(url: string): string | null {
   const err = hash.get('error') || parsed.searchParams.get('error');
   if (!err) return null;
   const desc = hash.get('error_description') || parsed.searchParams.get('error_description') || err;
+  if (/direct auth|incorrect app/i.test(desc)) {
+    return 'VK не разрешает веб-вход через это приложение. Попробуйте QR-код или пароль';
+  }
   if (/access.?denied/i.test(err) || /access.?denied/i.test(desc)) {
     return 'VK отклонил веб-вход. Попробуйте QR-код или пароль';
   }
@@ -400,7 +431,7 @@ export async function getKateLoginAnonymToken(): Promise<string> {
   return token;
 }
 
-export async function startQrSession(deviceName: string, signal?: AbortSignal): Promise<QrSession> {
+export async function startQrSession(deviceName: string, signal?: AbortSignal, deviceId?: string): Promise<QrSession> {
   const anonymToken = await getAndroidAnonymToken(signal);
   const json = await apiMethod(
     'auth.getAuthCode',
@@ -409,6 +440,7 @@ export async function startQrSession(deviceName: string, signal?: AbortSignal): 
       scope: KATE_SCOPE_ALL,
       anonymous_token: anonymToken,
       device_name: deviceName,
+      device_id: deviceId,
       v: AUTH_API_VERSION,
     },
     undefined,
@@ -466,7 +498,7 @@ export async function kateTokenFromAndroidToken(androidToken: string, signal?: A
     { signal, skipAppHeaders: true },
   );
   for (let i = 0; i < 12; i++) {
-    const check = await checkQr(session, signal);
+    const check = await checkQr(session, signal, {}, false);
     if (check.status === 2) return check.token;
     if (check.status === 3) throw new VkAuthError('VK отклонил подтверждение входа');
     if (check.status === 4) throw new VkAuthError('Сессия входа истекла. Попробуйте ещё раз');
@@ -475,7 +507,108 @@ export async function kateTokenFromAndroidToken(androidToken: string, signal?: A
   throw new VkAuthError('Не удалось получить токен Kate после входа по SMS');
 }
 
-export async function checkQr(session: QrSession, signal?: AbortSignal): Promise<QrCheck> {
+export function normalizeQrConfirmCode(input: string): string {
+  return input.replace(/\D/g, '');
+}
+
+export async function confirmQr(session: QrSession, code: string, signal?: AbortSignal): Promise<QrCheck> {
+  const digits = normalizeQrConfirmCode(code);
+  if (digits.length < 4) throw new VkAuthError('Введите код из приложения VK');
+  return checkQr(session, signal, { hash: digits, code: digits, confirm_code: digits });
+}
+
+async function postLoginAct(
+  act: string,
+  body: Record<string, string | undefined>,
+  cookies: Map<string, string>,
+  signal?: AbortSignal,
+  allowNonJson = false,
+): Promise<Json> {
+  const params = new URLSearchParams();
+  for (const [k, v] of Object.entries(body)) {
+    if (v !== undefined && v !== '') params.set(k, v);
+  }
+  const res = await fetchFollow(
+    `${LOGIN_URL}?act=${act}`,
+    {
+      method: 'POST',
+      signal,
+      headers: {
+        'Content-Type': 'application/x-www-form-urlencoded',
+        'User-Agent': BROWSER_UA,
+        Origin: 'https://id.vk.com',
+        Referer: 'https://id.vk.com/',
+      },
+      body: params,
+    },
+    cookies,
+  );
+  const text = await res.text();
+  try {
+    const json = JSON.parse(text) as Json;
+    const err = apiError(json);
+    if (err) {
+      if (allowNonJson) return {};
+      throw err;
+    }
+    return json;
+  } catch (e) {
+    if (e instanceof VkAuthError) throw e;
+    if (allowNonJson) return {};
+    throw new VkAuthError('VK вернул не JSON');
+  }
+}
+
+async function exchangeSuperAppToken(superAppToken: string, signal?: AbortSignal): Promise<VkTokenResponse> {
+  const cookies = new Map<string, string>();
+  const to = Buffer.from('https://oauth.vk.com/blank.html', 'utf8').toString('base64');
+  await postLoginAct(
+    'connect_code_auth',
+    {
+      token: superAppToken,
+      app_id: VK_KATE_CLIENT_ID,
+      oauth_scope: KATE_SCOPE_ALL,
+      oauth_force_hash: '1',
+      is_registration: '0',
+      oauth_response_type: 'token',
+      is_oauth_migrated_flow: '1',
+      version: '1',
+      to,
+    },
+    cookies,
+    signal,
+    true,
+  );
+  const json = await postLoginAct(
+    'connect_internal',
+    { app_id: VK_KATE_CLIENT_ID, oauth_version: '1', version: '1' },
+    cookies,
+    signal,
+  );
+  const parsed = parseConnectAuthorize(json);
+  if (parsed.silentToken) {
+    return materializeKateToken({
+      silent_token: parsed.silentToken,
+      silent_token_uuid: parsed.silentUuid,
+      uuid: parsed.silentUuid,
+    });
+  }
+  if (parsed.accessToken) {
+    try {
+      return await kateTokenFromAndroidToken(parsed.accessToken, signal);
+    } catch {
+      return materializeKateToken({ access_token: parsed.accessToken, user_id: parsed.userId });
+    }
+  }
+  throw new VkAuthError('VK не вернул токен после подтверждения QR');
+}
+
+export async function checkQr(
+  session: QrSession,
+  signal?: AbortSignal,
+  extra: Record<string, string> = {},
+  mintKate = true,
+): Promise<QrCheck> {
   const json = await apiMethod(
     'auth.checkAuthCode',
     {
@@ -483,6 +616,7 @@ export async function checkQr(session: QrSession, signal?: AbortSignal): Promise
       auth_hash: session.authHash,
       web_auth: '1',
       v: AUTH_API_VERSION,
+      ...extra,
     },
     undefined,
     signal,
@@ -492,9 +626,17 @@ export async function checkQr(session: QrSession, signal?: AbortSignal): Promise
   if (r.status === 3) return { status: 3, declined: true };
   if (r.status === 4) return { status: 4, expired: true };
   if (r.status === 2) {
-    if (r.is_partial === true) throw new VkAuthError('VK выдал неполный токен. Попробуйте SMS или пароль');
     const access = typeof r.access_token === 'string' ? r.access_token : undefined;
     const silent = typeof r.silent_token === 'string' ? r.silent_token : undefined;
+    const superApp = typeof r.super_app_token === 'string' ? r.super_app_token : undefined;
+    if (r.is_partial === true) {
+      if (mintKate && access) return { status: 2, token: await kateTokenFromAndroidToken(access, signal) };
+      throw new VkAuthError('VK выдал неполный токен. Попробуйте SMS или пароль');
+    }
+    if (superApp && !access && !silent) {
+      if (mintKate) return { status: 2, token: await exchangeSuperAppToken(superApp, signal) };
+      throw new VkAuthError('VK выдал неполный токен. Попробуйте SMS или пароль');
+    }
     const token = await materializeKateToken({
       access_token: access,
       user_id: typeof r.user_id === 'number' ? r.user_id : undefined,

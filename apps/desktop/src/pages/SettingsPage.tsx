@@ -20,7 +20,7 @@ import {
   type ConnectorStatus,
 } from '@/lib/connectors';
 import { logoutSpotifySession, useSpotifySessionLoggedIn } from '@/lib/spotify-session';
-import { SPOTIFY_HOME } from '@/lib/service-routes';
+import { SPOTIFY_HOME, SPOTIFY_WEB } from '@/lib/service-routes';
 import { clearSession, loadSession } from '@/lib/api';
 import { leaveCurrentLobby } from '@/lib/lobby-session';
 import { getApiBaseUrl, setApiBaseUrl } from '@/lib/api-base';
@@ -539,8 +539,8 @@ function SpotifySessionRow() {
           : 'Обычный аккаунт встроенного веб-плеера. Developer Dashboard не нужен.'
       }
     >
-      <Button size="sm" onClick={() => navigate(SPOTIFY_HOME)}>
-        Открыть
+      <Button size="sm" onClick={() => navigate(loggedIn ? SPOTIFY_HOME : SPOTIFY_WEB)}>
+        {loggedIn ? 'Открыть' : 'Войти'}
       </Button>
       {loggedIn && (
         <Button
@@ -616,9 +616,11 @@ export function SettingsPage() {
         footer="Яндекс: вход по коду на ya.ru/device. VK: логин и пароль в окне приложения, пароль не сохраняется. Токены только на этом устройстве. Spotify: встроенный веб-плеер."
       >
         <SpotifySessionRow />
-        {connectors.map((c) => (
-          <ConnectorRow key={c.id} connector={c} />
-        ))}
+        {connectors
+          .filter((c) => c.id !== 'spotify')
+          .map((c) => (
+            <ConnectorRow key={c.id} connector={c} />
+          ))}
         {!connectors.length && (
           <Row title="Нет доступных сервисов" subtitle="Укажите ключи в разделе «Ключи API» ниже или в .env" />
         )}

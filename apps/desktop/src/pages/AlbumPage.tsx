@@ -8,6 +8,7 @@ import { TrackFilterInput, TrackList } from '@/components/tracks/TrackList';
 import { EmptyState, ErrorState } from '@/components/ui/states';
 import { useTrackSort } from '@/hooks/useTrackSort';
 import { formatTotalDuration, formatTrackCount } from '@/lib/format';
+import { loadAlbum } from '@/lib/card-menus';
 import { trackArtistLinks } from '@/lib/links';
 import { playCollection } from '@/lib/player-actions';
 
@@ -21,15 +22,16 @@ const TYPE_LABEL: Record<string, string> = {
 
 export function AlbumPage() {
   const { source = '', id = '' } = useParams();
+  const supported = source === 'yandex' || source === 'spotify';
   const { data: album, isLoading, error, refetch } = useQuery({
     queryKey: ['album', source, id],
-    queryFn: () => window.electronAPI.yandex.album(id),
-    enabled: source === 'yandex' && !!id,
+    queryFn: () => loadAlbum(source as 'yandex' | 'spotify', id),
+    enabled: supported && !!id,
     staleTime: 30 * 60_000,
   });
   const { view, sort, cycle, filter, setFilter, isNatural } = useTrackSort(album?.tracks ?? NO_TRACKS);
 
-  if (source !== 'yandex') return <EmptyState title="Страницы альбомов пока доступны для Яндекс Музыки" />;
+  if (!supported) return <EmptyState title="Страницы альбомов доступны для Яндекс Музыки и Spotify" />;
   if (error) return <ErrorState title="Не удалось загрузить альбом" error={error} onRetry={() => void refetch()} />;
   if (isLoading || !album) {
     return (

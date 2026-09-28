@@ -54,6 +54,13 @@ function StreamBadge({ lobbyGuest }: { lobbyGuest?: boolean }) {
     );
   }
   if (!codec) return null;
+  if (codec === 'spotify') {
+    return (
+      <span className="rounded bg-emerald-500/15 px-1.5 py-px text-[9px] font-semibold uppercase tracking-wide text-emerald-500">
+        Spotify
+      </span>
+    );
+  }
   const label = codec.toLowerCase().includes('flac') ? 'Lossless' : bitrate ? `${bitrate}` : codec;
   return (
     <span className="rounded bg-foreground/10 px-1.5 py-px text-[9px] font-semibold uppercase tracking-wide text-muted">

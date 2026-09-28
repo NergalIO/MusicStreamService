@@ -64,7 +64,7 @@ export function SpotifySessionPane({ active }: { active: boolean }) {
   return (
     <div className="flex min-h-0 flex-1 flex-col">
       <div className="drag-region flex h-10 shrink-0 items-center justify-between border-b border-border bg-background pl-4 pr-1">
-        <span className="text-sm font-medium">Spotify</span>
+        <span className="text-sm font-medium">Spotify · веб-плеер</span>
         <WindowControls />
       </div>
       <div ref={hostRef} className="min-h-0 flex-1 bg-background" />

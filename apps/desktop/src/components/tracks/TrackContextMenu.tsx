@@ -23,7 +23,7 @@ import { ContextMenuHost, openContextMenu, type MenuItem } from '@/components/ui
 import { formatTrackCount } from '@/lib/format';
 import { mssTrackUrl, similarPath, trackAlbumPath, trackArtistLinks } from '@/lib/links';
 import { downloadOffline } from '@/lib/offline';
-import { startWave, toggleLike } from '@/lib/player-actions';
+import { startSpotifyRadio, startWave, toggleLike } from '@/lib/player-actions';
 import { queryClient } from '@/lib/query-client';
 import { canDownload, downloadKey, useDownloadsStore } from '@/store/downloads-store';
 import { useLikesStore } from '@/store/likes-store';
@@ -93,6 +93,9 @@ export function trackMenuGroups(track: MenuTrack, extras: MenuExtras = {}): Menu
             } as MenuItem,
             { icon: Sparkles, label: 'Похожие треки', action: (nav) => nav(similarPath(track)) } as MenuItem,
           ]
+        : []),
+      ...(track.source === 'spotify'
+        ? [{ icon: Radio, label: 'Радио по треку', action: () => void startSpotifyRadio(track) } as MenuItem]
         : []),
     ],
     [

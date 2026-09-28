@@ -1,7 +1,9 @@
 import { describe, expect, it } from 'vitest';
 import {
-  androidAuthorizeUrl,
   kateAuthorizeUrl,
+  vkSmsLoginUrl,
+  vkQrDisplayCode,
+  normalizeQrConfirmCode,
   normalizeVkPhone,
   oauthRedirectError,
   parseConnectAuthorize,
@@ -115,15 +117,34 @@ describe('parseKateOAuthRedirect', () => {
     expect(kateAuthorizeUrl()).toContain('display=mobile');
   });
 
-  it('builds official android authorize url for SMS', () => {
-    expect(androidAuthorizeUrl()).toContain('client_id=2274003');
-    expect(androidAuthorizeUrl()).not.toContain('client_id=2685278');
+  it('builds sms login url on m.vk.com, not oauth authorize', () => {
+    const url = vkSmsLoginUrl({ authUrl: 'https://oauth.vk.com/authorize?client_id=2685278', authCode: 'abc' });
+    expect(url).toContain('m.vk.com/login');
+    expect(url).not.toContain('oauth.vk.com/authorize');
+    expect(url).toContain(encodeURIComponent('https://qr.vk.ru/ca?q=abc'));
+  });
+
+  it('shows short qr codes only', () => {
+    expect(vkQrDisplayCode('ab12cd')).toBe('AB12CD');
+    expect(vkQrDisplayCode('this-is-a-very-long-auth-hash-value')).toBeUndefined();
+  });
+
+  it('strips spaces from vk id confirm codes', () => {
+    expect(normalizeQrConfirmCode('449 542')).toBe('449542');
   });
 
   it('reads oauth error from blank.html', () => {
     expect(oauthRedirectError('https://oauth.vk.com/blank.html#error=access_denied&error_description=Access%20denied')).toMatch(
       /QR-код|пароль/i,
     );
+  });
+
+  it('maps direct-auth apps', () => {
+    expect(
+      oauthRedirectError(
+        'https://oauth.vk.com/blank.html#error=invalid_request&error_description=incorrect%20app.%20Unavailable%20for%20apps%20with%20direct%20auth.',
+      ),
+    ).toMatch(/не разрешает/i);
   });
 
   it('reads token from oauth.vk.ru', () => {

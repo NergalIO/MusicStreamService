@@ -39,7 +39,7 @@ function ServicesStep() {
     >
       <div className="divide-y divide-border overflow-hidden rounded-xl border border-border bg-card">
         {isLoading && <div className="px-4 py-3 text-sm text-muted">Проверяем подключения…</div>}
-        {connectors.map((c) => {
+        {connectors.filter((c) => c.id !== 'spotify').map((c) => {
           const connected = c.status === 'connected';
           return (
             <div key={c.id} className="flex items-center justify-between gap-4 px-4 py-3">

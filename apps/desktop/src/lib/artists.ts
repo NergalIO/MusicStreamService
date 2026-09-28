@@ -77,7 +77,6 @@ export async function searchArtistsEverywhere(
   const tasks: Promise<UnifiedArtist[]>[] = [];
   if (matchesFilter(filter, 'local')) tasks.push(searchLocalArtists(query, limit));
   for (const source of EXTERNAL_SOURCES) {
-    if (source === 'spotify') continue;
     if (window.electronAPI && matchesFilter(filter, source)) {
       tasks.push(window.electronAPI.connectors.searchArtists(source, query, limit));
     }

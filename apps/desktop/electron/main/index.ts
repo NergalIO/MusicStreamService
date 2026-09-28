@@ -48,6 +48,7 @@ import {
   saveOffline,
 } from './offline-store.js';
 import { initLocalTracks, registerLocalTracksIpc } from './local-tracks-ipc.js';
+import { registerSpotifyConnectIpc } from './spotify-connect.js';
 import { initSpotifyWebSession } from './spotify-web-session.js';
 import { registerLobbyIpc } from './lobby-ipc.js';
 import { registerRelayBridge } from './relay-bridge.js';
@@ -236,6 +237,7 @@ app.whenReady().then(async () => {
 
   mainWindow = createMainWindow(launchedHidden());
   initSpotifyWebSession(() => mainWindow);
+  registerSpotifyConnectIpc();
   registerRelayBridge({ getWindows: () => (mainWindow && !mainWindow.isDestroyed() ? [mainWindow] : []) });
   attachDeepLinkWindow(mainWindow);
   initMedia({

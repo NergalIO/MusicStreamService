@@ -3,11 +3,13 @@ import {
   ChevronRight,
   CircleArrowDown,
   Clock,
+  Globe,
   Heart,
   Home,
   Library,
   ListMusic,
   LogOut,
+  MicVocal,
   PanelLeftClose,
   PanelLeftOpen,
   Radio,
@@ -26,8 +28,8 @@ import { leaveCurrentLobby } from '@/lib/lobby-session';
 import { useLobbyStore } from '@/store/lobby-store';
 import { useYandexConnected } from '@/lib/connectors';
 import { playlistPath } from '@/lib/links';
-import { libraryPath, MSS_HOME, searchPath, SPOTIFY_HOME, VK_HOME, YANDEX_HOME } from '@/lib/service-routes';
-import { useMssPlaylists, useVkPlaylists, useYandexPlaylists } from '@/lib/queries';
+import { libraryPath, MSS_HOME, searchPath, SPOTIFY_HOME, SPOTIFY_WEB, VK_HOME, YANDEX_HOME } from '@/lib/service-routes';
+import { useMssPlaylists, useSpotifyPlaylists, useVkPlaylists, useYandexPlaylists } from '@/lib/queries';
 import { cn } from '@/lib/utils';
 import { usePlayerStore } from '@/store/player-store';
 import { useSettingsStore } from '@/store/settings-store';
@@ -135,8 +137,8 @@ function PlaylistSubsection({
   id,
   scope,
 }: {
-  id: Extract<SidebarSectionId, 'mssPlaylists' | 'yandexPlaylists' | 'vkPlaylists'>;
-  scope: 'mss' | 'yandex' | 'vk';
+  id: Extract<SidebarSectionId, 'mssPlaylists' | 'yandexPlaylists' | 'vkPlaylists' | 'spotifyPlaylists'>;
+  scope: 'mss' | 'yandex' | 'vk' | 'spotify';
 }) {
   const panelCollapsed = useContext(CollapsedContext);
   const parentSection = scope === 'mss' ? 'mss' : scope;
@@ -147,6 +149,7 @@ function PlaylistSubsection({
   const { data: mssPlaylists = [] } = useMssPlaylists();
   const { data: yandexPlaylists = [] } = useYandexPlaylists();
   const { data: vkPlaylists = [] } = useVkPlaylists();
+  const { data: spotifyPlaylists = [] } = useSpotifyPlaylists();
 
   const pinSource = scope === 'mss' ? 'local' : scope;
   const pins = pinned.filter((p) => p.source === pinSource);
@@ -159,13 +162,13 @@ function PlaylistSubsection({
           if (!p) return null;
           return { key: `l-${p.id}`, to: `/playlists/${p.id}`, label: p.name, image: p.coverUrl };
         }
-        const list = pin.source === 'vk' ? vkPlaylists : yandexPlaylists;
+        const list = pin.source === 'vk' ? vkPlaylists : pin.source === 'spotify' ? spotifyPlaylists : yandexPlaylists;
         const p = list.find((x) => x.id === pin.id);
         if (!p) return null;
         return { key: `${pin.source}-${p.id}`, to: playlistPath(p), label: p.title, image: p.coverUrl };
       })
       .filter(Boolean) as { key: string; to: string; label: string; image?: string | null }[];
-  }, [pins, mssPlaylists, yandexPlaylists, vkPlaylists]);
+  }, [pins, mssPlaylists, yandexPlaylists, vkPlaylists, spotifyPlaylists]);
 
   if (!parentOpen && !panelCollapsed) return null;
   if (!pins.length && panelCollapsed) return null;
@@ -279,18 +282,19 @@ export function Sidebar() {
         <nav className={cn('min-h-0 flex-1 overflow-y-auto overflow-x-hidden pb-4', collapsed ? 'no-scrollbar px-2' : 'px-3')}>
           <CollapsibleSection id="media" title="Медиатека">
             <Item to={libraryPath('media', 'likes')} icon={Library} label="Мне нравится" />
+            <Item to={libraryPath('media', 'artists')} icon={MicVocal} label="Любимые исполнители" />
             <Item to={libraryPath('media', 'history')} icon={Clock} label="Недавно играли" />
             <Item to={libraryPath('media', 'playlists')} icon={ListMusic} label="Все плейлисты" />
+            <Item to={libraryPath('media', 'uploads')} icon={Upload} label="Мои треки" />
+            <Item to={libraryPath('media', 'downloads')} icon={CircleArrowDown} label="Скачанные" />
+            <Item to={lobbyPath(activeLobbyId)} icon={Radio} label="Listening party" />
           </CollapsibleSection>
 
           <CollapsibleSection id="mss" title="MSS">
             <Item to={MSS_HOME} end icon={Home} label="Слушать сейчас" />
             <Item to={libraryPath('mss', 'likes')} icon={Heart} label="Мне нравится" />
-            <Item to={libraryPath('mss', 'history')} icon={Clock} label="Недавно играли" />
+            <Item to={libraryPath('mss', 'artists')} icon={MicVocal} label="Любимые исполнители" />
             <Item to={libraryPath('mss', 'playlists')} icon={ListMusic} label="Все плейлисты" />
-            <Item to={libraryPath('mss', 'uploads')} icon={Upload} label="Мои треки" />
-            <Item to={libraryPath('mss', 'downloads')} icon={CircleArrowDown} label="Скачанные" />
-            <Item to={lobbyPath(activeLobbyId)} icon={Radio} label="Listening party" />
             <PlaylistSubsection id="mssPlaylists" scope="mss" />
           </CollapsibleSection>
 
@@ -298,17 +302,24 @@ export function Sidebar() {
             <Item to={YANDEX_HOME} end icon={Home} label="Слушать сейчас" />
             {yandex && <Item to="/wave" icon={Radio} label={radio ? 'Моя волна · играет' : 'Моя волна'} />}
             <Item to={libraryPath('yandex', 'likes')} icon={Heart} label="Мне нравится" />
+            <Item to={libraryPath('yandex', 'artists')} icon={MicVocal} label="Любимые исполнители" />
             <Item to={libraryPath('yandex', 'playlists')} icon={ListMusic} label="Все плейлисты" />
             <PlaylistSubsection id="yandexPlaylists" scope="yandex" />
           </CollapsibleSection>
 
           <CollapsibleSection id="spotify" title="Spotify">
-            <Item to={SPOTIFY_HOME} end icon={Home} label="Открыть Spotify" />
+            <Item to={SPOTIFY_HOME} end icon={Home} label="Слушать сейчас" />
+            <Item to={libraryPath('spotify', 'likes')} icon={Heart} label="Любимые треки" />
+            <Item to={libraryPath('spotify', 'artists')} icon={MicVocal} label="Любимые исполнители" />
+            <Item to={libraryPath('spotify', 'playlists')} icon={ListMusic} label="Все плейлисты" />
+            <Item to={SPOTIFY_WEB} icon={Globe} label="Веб-плеер" />
+            <PlaylistSubsection id="spotifyPlaylists" scope="spotify" />
           </CollapsibleSection>
 
           <CollapsibleSection id="vk" title="VK Музыка">
             <Item to={VK_HOME} end icon={Home} label="Слушать сейчас" />
             <Item to={libraryPath('vk', 'likes')} icon={Heart} label="Моя музыка" />
+            <Item to={libraryPath('vk', 'artists')} icon={MicVocal} label="Любимые исполнители" />
             <Item to={libraryPath('vk', 'playlists')} icon={ListMusic} label="Все плейлисты" />
             <PlaylistSubsection id="vkPlaylists" scope="vk" />
           </CollapsibleSection>

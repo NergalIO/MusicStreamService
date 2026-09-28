@@ -148,6 +148,13 @@ export function createYandexConnector(opts: YandexConnectorOptions): YandexConne
       );
       return (data.artists?.results ?? []).slice(0, limit).map(mapArtist);
     },
+    async getFavoriteArtists(): Promise<UnifiedArtist[]> {
+      if (client.status !== 'connected') return [];
+      const uid = await client.uid();
+      const data = await client.get<YArtist[] | { artists?: YArtist[] }>(`/users/${uid}/likes/artists?with-timestamps=false`);
+      const list = Array.isArray(data) ? data : (data.artists ?? []);
+      return list.filter((a) => a?.id && a?.name).map(mapArtist);
+    },
     async getArtistTracks(artistId: string, limit: number, _artistName?: string): Promise<UnifiedTrack[]> {
       if (client.status !== 'connected') return [];
       type Page = { tracks?: YTrack[]; pager?: { total: number } };

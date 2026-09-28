@@ -47,7 +47,6 @@ async function searchTracks(q: string, filter: SourceFilterId, limit: number): P
     );
   }
   for (const source of EXTERNAL_SOURCES) {
-    if (source === 'spotify') continue;
     if (window.electronAPI && matchesFilter(filter, source)) {
       tasks.push(window.electronAPI.connectors.search(source, q, limit));
     }
@@ -245,9 +244,6 @@ function PlaylistResults({
     : [];
   const items: UnifiedPlaylist[] = scope === 'mss' ? own : [...own, ...(wantYandex ? (external.data ?? []) : [])];
 
-  if (scope === 'spotify') {
-    return <p className="text-sm text-muted">Поиск плейлистов Spotify пока недоступен — откройте раздел «Все плейлисты».</p>;
-  }
   if (scope === 'yandex' && !yandex) {
     return <p className="text-sm text-muted">Подключите Яндекс Музыку в настройках, чтобы искать плейлисты</p>;
   }
@@ -360,7 +356,7 @@ export function SearchPage({ scope }: { scope: ServiceScope }) {
           ? 'Поиск в Spotify'
           : 'Поиск';
 
-  if (scope === 'spotify') return <Navigate to="/spotify" replace />;
+  if (scope === 'spotify') return <Navigate to="/media/search" replace />;
 
   return (
     <div>

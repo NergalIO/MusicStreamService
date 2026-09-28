@@ -204,6 +204,18 @@ export interface PlaylistWithTracks extends UnifiedPlaylist {
   tracks: UnifiedTrack[];
 }
 
+export type HomeFeedItem =
+  | { kind: 'album'; album: UnifiedAlbum }
+  | { kind: 'playlist'; playlist: UnifiedPlaylist }
+  | { kind: 'artist'; artist: UnifiedArtist };
+
+/** Секция главной страницы источника (рекомендации, новинки, подборки). */
+export interface HomeFeedSection {
+  id: string;
+  title: string;
+  items: HomeFeedItem[];
+}
+
 export interface ArtistProfile {
   artist: UnifiedArtist;
   popularTracks: UnifiedTrack[];
@@ -249,6 +261,7 @@ export interface LoginPrompt {
   phoneMask?: string;
   error?: string;
   qrUrl?: string;
+  qrAuthCode?: string;
   qrStatus?: 'pending' | 'scanned' | 'expired';
 }
 

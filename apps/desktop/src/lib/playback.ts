@@ -41,12 +41,12 @@ async function resolveLocal(track: PlayableTrack): Promise<ResolvedStream> {
 }
 
 async function resolveExternal(track: PlayableTrack, quality: Quality): Promise<ResolvedStream> {
-  if (track.source === 'spotify') {
-    throw new Error('Spotify слушается в разделе Spotify — откройте его в сайдбаре');
-  }
   if (!window.electronAPI) throw new Error('Внешние источники доступны только в приложении');
   const downloaded = downloadedFileUrl(track);
   if (downloaded) return { url: downloaded, preview: false };
+  if (track.source === 'spotify') {
+    throw new Error('Spotify играет через встроенный веб-плеер и не отдаёт поток файлом');
+  }
   let handle;
   try {
     handle = await window.electronAPI.connectors.resolvePlayback(track.source, track, quality);
@@ -59,7 +59,7 @@ async function resolveExternal(track: PlayableTrack, quality: Quality): Promise<
       return { url, preview: !!handle.preview, codec: handle.codec, bitrate: handle.bitrate };
     }
     case 'spotifySdk':
-      throw new Error('Spotify слушается в разделе Spotify — откройте его в сайдбаре');
+      throw new Error('Spotify играет через встроенный веб-плеер и не отдаёт поток файлом');
     case 'blobStream':
       return { url: handle.blobUrl, preview: false };
   }

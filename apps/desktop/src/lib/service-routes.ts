@@ -3,6 +3,7 @@ export type ServiceScope = 'mss' | 'yandex' | 'spotify' | 'vk' | 'media';
 export const MSS_HOME = '/mss';
 export const YANDEX_HOME = '/yandex';
 export const SPOTIFY_HOME = '/spotify';
+export const SPOTIFY_WEB = '/spotify/web';
 export const VK_HOME = '/vk';
 export const MEDIA_HOME = '/media/library/likes';
 

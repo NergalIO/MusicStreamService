@@ -1,0 +1,244 @@
+import { BrowserWindow, ipcMain } from 'electron';
+import { log } from './logger.js';
+import { setSpotifyControlled, setSpotifyWebMuted, spotifyWebExec } from './spotify-web-session.js';
+
+/**
+ * MSS ведёт встроенный веб-плеер Spotify через его же интерфейс: страница трека + кнопки,
+ * слайдеры прогресса и громкости. Web API / Connect здесь не нужны — они отвечают 429 токену веб-плеера.
+ */
+
+const POLL_PLAYING_MS = 1000;
+const POLL_NEAR_END_MS = 250;
+const POLL_PAUSED_MS = 3000;
+/** Заканчиваем трек сами, пока Spotify не включил автоплей-рекомендацию. */
+const END_EARLY_MS = 900;
+
+export interface SpotifyConnectState {
+  trackId: string | null;
+  playing: boolean;
+  positionMs: number;
+  durationMs: number;
+}
+
+interface DomState {
+  ready: boolean;
+  title: string;
+  playing: boolean;
+  positionMs: number;
+  durationMs: number;
+}
+
+const DOM_HELPERS = `
+  const q = (s) => document.querySelector(s);
+  const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
+  const isPauseLabel = (el) => /pause|пауз/i.test(el?.getAttribute('aria-label') || '');
+  const parseClock = (t) => (t || '').trim().split(':').reduce((acc, part) => acc * 60 + (Number(part) || 0), 0) * 1000;
+  const setRange = (input, value) => {
+    const setter = Object.getOwnPropertyDescriptor(HTMLInputElement.prototype, 'value').set;
+    setter.call(input, String(value));
+    input.dispatchEvent(new Event('input', { bubbles: true }));
+    input.dispatchEvent(new Event('change', { bubbles: true }));
+  };
+  const readState = () => {
+    const button = q('[data-testid="control-button-playpause"]');
+    const progress = q('[data-testid="playback-progressbar"] input[type="range"]');
+    return {
+      ready: !!button,
+      title: (q('[data-testid="context-item-info-title"]')?.textContent || '').trim(),
+      playing: isPauseLabel(button),
+      positionMs: parseClock(q('[data-testid="playback-position"]')?.textContent),
+      durationMs: Number(progress?.max) || parseClock(q('[data-testid="playback-duration"]')?.textContent),
+    };
+  };
+`;
+
+function playScript(trackId: string, positionMs: number): string {
+  return `(async () => {
+    ${DOM_HELPERS}
+    for (let i = 0; i < 80 && !q('[data-testid="control-button-playpause"]'); i++) await sleep(250);
+    if (!q('[data-testid="control-button-playpause"]')) throw new Error('Веб-плеер Spotify не загрузился');
+    const path = '/track/${trackId}';
+    if (location.pathname !== path) {
+      const before = q('main h1')?.textContent || '';
+      history.pushState({}, '', path);
+      dispatchEvent(new PopStateEvent('popstate', { state: {} }));
+      for (let i = 0; i < 20 && (q('main h1')?.textContent || '') === before; i++) await sleep(250);
+    }
+    let button = null;
+    let heading = '';
+    for (let i = 0; i < 80; i++) {
+      await sleep(250);
+      heading = (q('main h1')?.textContent || '').trim();
+      button = q('main [data-testid="action-bar-row"] [data-testid="play-button"]');
+      if (button && heading && location.pathname === path) break;
+      button = null;
+    }
+    if (!button) throw new Error('Не удалось открыть трек в веб-плеере Spotify');
+    if (!isPauseLabel(button)) button.click();
+    for (let i = 0; i < 40; i++) {
+      await sleep(250);
+      const s = readState();
+      if (s.playing && s.title === heading) break;
+    }
+    const state = readState();
+    if (state.title !== heading) throw new Error('Spotify не запустил трек — проверьте веб-плеер (Spotify → Веб-плеер)');
+    const target = ${Math.round(positionMs)};
+    if (Math.abs(state.positionMs - target) > 2000) {
+      const progress = q('[data-testid="playback-progressbar"] input[type="range"]');
+      if (progress) setRange(progress, target);
+      state.positionMs = target;
+    }
+    return state;
+  })()`;
+}
+
+const STATE_SCRIPT = `(() => { ${DOM_HELPERS} return readState(); })()`;
+
+function clickPlayPauseScript(wantPlaying: boolean): string {
+  return `(() => {
+    ${DOM_HELPERS}
+    const button = q('[data-testid="control-button-playpause"]');
+    if (!button) throw new Error('Веб-плеер Spotify не загрузился');
+    if (isPauseLabel(button) !== ${wantPlaying}) button.click();
+    return true;
+  })()`;
+}
+
+function seekScript(positionMs: number): string {
+  return `(() => {
+    ${DOM_HELPERS}
+    const progress = q('[data-testid="playback-progressbar"] input[type="range"]');
+    if (!progress) return false;
+    setRange(progress, Math.min(${Math.round(positionMs)}, Number(progress.max) || ${Math.round(positionMs)}));
+    return true;
+  })()`;
+}
+
+function volumeScript(fraction: number): string {
+  return `(() => {
+    ${DOM_HELPERS}
+    const volume = q('[data-testid="volume-bar"] input[type="range"]');
+    if (!volume) return false;
+    setRange(volume, ${fraction.toFixed(2)});
+    return true;
+  })()`;
+}
+
+let expectedTrackId: string | null = null;
+let expectedTitle: string | null = null;
+let lastState: DomState | null = null;
+let endedFor: string | null = null;
+let pollTimer: ReturnType<typeof setTimeout> | null = null;
+let volumeTimer: ReturnType<typeof setTimeout> | null = null;
+let active = false;
+let playSeq = 0;
+
+function send(channel: string, payload: unknown): void {
+  for (const win of BrowserWindow.getAllWindows()) {
+    if (!win.isDestroyed()) win.webContents.send(channel, payload);
+  }
+}
+
+function schedulePoll(ms: number): void {
+  if (pollTimer) clearTimeout(pollTimer);
+  pollTimer = active ? setTimeout(() => void poll(), ms) : null;
+}
+
+function emitEnded(): void {
+  if (!expectedTrackId || endedFor === expectedTrackId) return;
+  endedFor = expectedTrackId;
+  send('spotify-connect:ended', { trackId: expectedTrackId });
+}
+
+async function poll(): Promise<void> {
+  pollTimer = null;
+  if (!active) return;
+  let next = POLL_PAUSED_MS;
+  try {
+    const s = await spotifyWebExec<DomState>(STATE_SCRIPT);
+    const prev = lastState;
+    lastState = s;
+    const ours = !!expectedTitle && s.title === expectedTitle;
+    const left = s.durationMs - s.positionMs;
+    if (ours && s.playing && s.durationMs > 0 && left <= END_EARLY_MS) {
+      emitEnded();
+    } else if (!ours && prev?.title === expectedTitle && prev.durationMs - prev.positionMs < 5000) {
+      emitEnded();
+    }
+    send('spotify-connect:state', {
+      trackId: ours ? expectedTrackId : null,
+      playing: s.playing,
+      positionMs: s.positionMs,
+      durationMs: s.durationMs,
+    } satisfies SpotifyConnectState);
+    if (s.playing) next = left > 0 && left < 4000 ? POLL_NEAR_END_MS : POLL_PLAYING_MS;
+  } catch (e) {
+    log.warn('spotify web player poll failed', e instanceof Error ? e.message : e);
+  }
+  schedulePoll(next);
+}
+
+async function play(trackId: string, positionMs = 0): Promise<void> {
+  if (!/^[A-Za-z0-9]{10,40}$/.test(trackId)) throw new Error('Некорректный id трека Spotify');
+  const seq = ++playSeq;
+  active = true;
+  setSpotifyControlled(true);
+  expectedTrackId = trackId;
+  expectedTitle = null;
+  endedFor = null;
+  lastState = null;
+  const state = await spotifyWebExec<DomState>(playScript(trackId, positionMs));
+  if (seq !== playSeq) return;
+  expectedTitle = state.title;
+  lastState = state;
+  schedulePoll(600);
+}
+
+async function setPlaying(playing: boolean): Promise<void> {
+  if (playing) {
+    active = true;
+    setSpotifyControlled(true);
+  }
+  await spotifyWebExec(clickPlayPauseScript(playing));
+  schedulePoll(400);
+}
+
+async function seek(positionMs: number): Promise<void> {
+  await spotifyWebExec(seekScript(positionMs));
+  schedulePoll(400);
+}
+
+function setVolume(percent: number, muted: boolean): void {
+  setSpotifyWebMuted(muted);
+  if (volumeTimer) clearTimeout(volumeTimer);
+  volumeTimer = setTimeout(() => {
+    volumeTimer = null;
+    const fraction = Math.min(1, Math.max(0, percent / 100));
+    void spotifyWebExec(volumeScript(fraction)).catch((e) =>
+      log.warn('spotify volume failed', e instanceof Error ? e.message : e),
+    );
+  }, 250);
+}
+
+/** MSS переключился на другой источник или очистил очередь. */
+async function stop(): Promise<void> {
+  const wasActive = active;
+  playSeq++;
+  active = false;
+  expectedTrackId = null;
+  expectedTitle = null;
+  lastState = null;
+  if (pollTimer) clearTimeout(pollTimer);
+  pollTimer = null;
+  setSpotifyControlled(false);
+  if (wasActive) await spotifyWebExec(clickPlayPauseScript(false)).catch(() => undefined);
+}
+
+export function registerSpotifyConnectIpc(): void {
+  ipcMain.handle('spotify-connect:play', (_e, trackId: string, positionMs?: number) => play(trackId, positionMs));
+  ipcMain.handle('spotify-connect:pause', () => setPlaying(false));
+  ipcMain.handle('spotify-connect:resume', () => setPlaying(true));
+  ipcMain.handle('spotify-connect:seek', (_e, positionMs: number) => seek(positionMs));
+  ipcMain.handle('spotify-connect:setVolume', (_e, percent: number, muted: boolean) => setVolume(percent, muted));
+  ipcMain.handle('spotify-connect:stop', () => stop());
+}

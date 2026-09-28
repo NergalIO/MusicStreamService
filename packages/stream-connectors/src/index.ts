@@ -1,6 +1,7 @@
 export * from './types.js';
 export * from './registry.js';
 export * from './spotify.js';
+export * from './spotify-web.js';
 export * from './yandex.js';
 export * from './yandex-api.js';
 export * from './yandex-client.js';

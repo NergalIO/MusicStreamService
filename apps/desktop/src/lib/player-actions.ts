@@ -2,6 +2,7 @@ import type { UnifiedTrack, WaveSettings } from '@mss/shared';
 import { toast } from 'sonner';
 import { getAudioEngine } from '@/hooks/useAudioEngine';
 import { syncLobbyPause } from '@/lib/lobby-host-sync';
+import { isSpotifyControlled, seekSpotify, spotifyPositionSeconds, toggleSpotify } from '@/lib/spotify-player';
 import { isLobbyGuest, isLobbyHost } from '@/store/lobby-store';
 import { undoableToast } from '@/lib/undo';
 import { useLikesStore } from '@/store/likes-store';
@@ -13,6 +14,23 @@ let waveLoading: Promise<boolean> | null = null;
 function ipcMessage(e: unknown): string {
   const m = e instanceof Error ? e.message : String(e);
   return m.replace(/^Error invoking remote method '[^']+': (Error: )?/, '');
+}
+
+/** Станция Spotify по треку: плейлист похожих, играет через обычную очередь MSS. */
+export async function startSpotifyRadio(track: UnifiedTrack): Promise<void> {
+  const id = toast.loading(`Собираем радио по «${track.title}»…`);
+  try {
+    const radio = await window.electronAPI.connectors.trackRadio('spotify', track);
+    const rest = radio.tracks.filter((t) => t.id !== track.id);
+    toast.dismiss(id);
+    playCollection([track, ...rest], {
+      type: 'playlist',
+      title: `Радио: ${track.title}`,
+      path: `/playlist/spotify/${encodeURIComponent(radio.id)}`,
+    });
+  } catch (e) {
+    toast.error(`Не удалось включить радио: ${ipcMessage(e)}`, { id });
+  }
 }
 
 export async function startWave(settings: WaveSettings = {}): Promise<void> {
@@ -68,8 +86,7 @@ export function skipNext(): void {
 
 export function skipPrev(): void {
   if (isLobbyGuest()) return;
-  const engine = getAudioEngine();
-  const t = engine.getCurrentTime();
+  const t = isSpotifyControlled() ? spotifyPositionSeconds() : getAudioEngine().getCurrentTime();
   if (t > 3) {
     seekTo(0);
     return;
@@ -82,6 +99,10 @@ export function togglePlay(): void {
   const engine = getAudioEngine();
   const { current, replay, resumeAt } = usePlayerStore.getState();
   if (!current) return;
+  if (isSpotifyControlled()) {
+    toggleSpotify();
+    return;
+  }
   if (!engine.currentUrl) {
     replay(resumeAt);
     return;
@@ -95,11 +116,16 @@ export function togglePlay(): void {
 
 export function seekTo(seconds: number): void {
   if (isLobbyGuest()) return;
-  getAudioEngine().seek(seconds);
+  if (isSpotifyControlled()) seekSpotify(seconds);
+  else getAudioEngine().seek(seconds);
 }
 
 export function seekBy(seconds: number): void {
   if (isLobbyGuest()) return;
+  if (isSpotifyControlled()) {
+    seekSpotify(spotifyPositionSeconds() + seconds);
+    return;
+  }
   const engine = getAudioEngine();
   if (!engine.currentUrl) return;
   engine.seek(Math.max(0, engine.getCurrentTime() + seconds));
@@ -144,14 +170,9 @@ export function playCollection(
   context: PlayContext | null,
   shuffle = false,
 ): void {
-  const skippedSpotify = tracks.some((t) => t.source === 'spotify');
-  const playable = tracks.filter((t) => t.playable && t.source !== 'spotify');
+  const playable = tracks.filter((t) => t.playable);
   if (!playable.length) {
-    toast.error(
-      skippedSpotify
-        ? 'Spotify слушается в разделе Spotify — откройте его в сайдбаре'
-        : 'Нет доступных для воспроизведения треков',
-    );
+    toast.error('Нет доступных для воспроизведения треков');
     return;
   }
   usePlayerStore.setState({ shuffle });

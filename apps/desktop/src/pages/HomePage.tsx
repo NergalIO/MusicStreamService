@@ -1,7 +1,7 @@
-import type { FeedBlock, FeedItem, StatsTopArtist, StatsTopTrack, UnifiedTrack } from '@mss/shared';
+import type { FeedBlock, FeedItem, HomeFeedItem, StatsTopArtist, StatsTopTrack, UnifiedTrack } from '@mss/shared';
 import { useQuery, useQueryClient } from '@tanstack/react-query';
 import { Pause, Play, Radio } from 'lucide-react';
-import { Link } from 'react-router-dom';
+import { Link, useNavigate } from 'react-router-dom';
 import { CardRowSkeleton, TrackListSkeleton } from '@/components/media/CollectionHeader';
 import { Carousel, Shelf } from '@/components/media/Carousel';
 import { MediaCard } from '@/components/media/MediaCard';
@@ -10,16 +10,17 @@ import { TrackList } from '@/components/tracks/TrackList';
 import { Button } from '@/components/ui/button';
 import { ErrorState } from '@/components/ui/states';
 import { artistPath } from '@/lib/artists';
-import { connectSource, useVkConnected, useYandexConnected } from '@/lib/connectors';
+import { connectSource, useSpotifyConnected, useVkConnected, useYandexConnected } from '@/lib/connectors';
 import { greeting } from '@/lib/format';
-import { albumMenu, artistMenu, playlistMenu } from '@/lib/card-menus';
+import { albumMenu, artistMenu, loadAlbumTracks, loadPlaylistTracks, playlistMenu } from '@/lib/card-menus';
 import { statsArtistGroup, statsTrackToUnified, useShelves } from '@/lib/stats';
 import { albumLink, playlistPath } from '@/lib/links';
 import { playCollection, startWave, togglePlay } from '@/lib/player-actions';
-import { libraryPath, MSS_HOME, YANDEX_HOME } from '@/lib/service-routes';
+import { libraryPath, MSS_HOME, SPOTIFY_HOME, SPOTIFY_WEB, YANDEX_HOME } from '@/lib/service-routes';
 import {
   useLocalTracks,
   useMssListenNow,
+  useSpotifyPlaylists,
   useVkPlaylists,
   useYandexChart,
   useYandexFeed,
@@ -132,10 +133,10 @@ function FeedShelf({ block }: { block: FeedBlock }) {
 function RecentShelf() {
   const history = usePlayerStore((s) => s.history);
   if (!history.length) return null;
-  const context: PlayContext = { type: 'history', title: 'Недавно играли', path: libraryPath('mss', 'history') };
+  const context: PlayContext = { type: 'history', title: 'Недавно играли', path: libraryPath('media', 'history') };
   const recent = history.slice(0, 20);
   return (
-    <Shelf title="Недавно играли" subtitle="Полная история — в библиотеке MSS" moreTo={libraryPath('mss', 'history')}>
+    <Shelf title="Недавно играли" subtitle="Полная история — в медиатеке" moreTo={libraryPath('media', 'history')}>
       <Carousel itemClassName="w-[148px]">
         {recent.map((t, i) => (
           <MediaCard
@@ -222,7 +223,7 @@ function ChartGrid({ tracks, context }: { tracks: UnifiedTrack[]; context: PlayC
 export function MssHomePage() {
   const listenNow = useMssListenNow(30);
   const local = useLocalTracks(20);
-  const localContext: PlayContext = { type: 'library', title: 'Новое в MSS', path: libraryPath('mss', 'uploads') };
+  const localContext: PlayContext = { type: 'library', title: 'Новое в MSS', path: libraryPath('media', 'uploads') };
   const listenContext: PlayContext = { type: 'other', title: 'Слушать сейчас', path: MSS_HOME };
 
   return (
@@ -436,6 +437,165 @@ export function VkHomePage() {
                       menu={() => playlistMenu(p)}
                       onPlay={async () => {
                         const full = await window.electronAPI.connectors.getPlaylist('vk', p.id);
+                        playCollection(full.tracks, { type: 'playlist', title: full.title, path: playlistPath(p) });
+                      }}
+                    />
+                  ))}
+                </Carousel>
+              )}
+            </Shelf>
+          )}
+        </>
+      )}
+    </div>
+  );
+}
+
+function spotifyFeedCard(item: HomeFeedItem) {
+  switch (item.kind) {
+    case 'album':
+      return (
+        <MediaCard
+          key={`a:${item.album.id}`}
+          title={item.album.title}
+          subtitle={item.album.artist}
+          coverUrl={item.album.coverUrl}
+          to={albumLink(item.album)}
+          menu={() => albumMenu(item.album)}
+          onPlay={async () => {
+            const tracks = await loadAlbumTracks(item.album.id, 'spotify');
+            playCollection(tracks, { type: 'album', title: item.album.title, path: albumLink(item.album) });
+          }}
+        />
+      );
+    case 'playlist':
+      return (
+        <MediaCard
+          key={`p:${item.playlist.id}`}
+          title={item.playlist.title}
+          subtitle={item.playlist.description || item.playlist.owner}
+          coverUrl={item.playlist.coverUrl}
+          to={playlistPath(item.playlist)}
+          menu={() => playlistMenu(item.playlist)}
+          onPlay={async () => {
+            const tracks = await loadPlaylistTracks(item.playlist);
+            playCollection(tracks, { type: 'playlist', title: item.playlist.title, path: playlistPath(item.playlist) });
+          }}
+        />
+      );
+    case 'artist':
+      return (
+        <MediaCard
+          key={`r:${item.artist.id}`}
+          shape="circle"
+          title={item.artist.name}
+          subtitle="Исполнитель"
+          coverUrl={item.artist.imageUrl}
+          to={artistPath(item.artist.name, { spotify: item.artist })}
+        />
+      );
+  }
+}
+
+export function SpotifyHomePage() {
+  const spotify = useSpotifyConnected();
+  const navigate = useNavigate();
+  const playlists = useSpotifyPlaylists();
+  const home = useQuery({
+    queryKey: ['spotify', 'home'],
+    queryFn: () => window.electronAPI.connectors.homeTracks('spotify', 40),
+    enabled: spotify,
+    staleTime: 2 * 60_000,
+  });
+  const feed = useQuery({
+    queryKey: ['spotify', 'home-feed'],
+    queryFn: () => window.electronAPI.connectors.homeFeed('spotify'),
+    enabled: spotify,
+    staleTime: 10 * 60_000,
+  });
+  const pick = feed.data?.flatMap((s) => s.items).find((i) => i.kind === 'playlist');
+  const pickPlaylist = pick?.kind === 'playlist' ? pick.playlist : null;
+  const picks = useQuery({
+    queryKey: ['spotify', 'playlist', pickPlaylist?.id],
+    queryFn: () => window.electronAPI.connectors.getPlaylist('spotify', pickPlaylist!.id),
+    enabled: !!pickPlaylist,
+    staleTime: 10 * 60_000,
+  });
+  const context: PlayContext = { type: 'library', title: 'Spotify', path: SPOTIFY_HOME };
+
+  return (
+    <div className="space-y-10">
+      <div className="flex flex-wrap items-center justify-between gap-3">
+        <h1 className="text-3xl font-bold tracking-tight">Spotify</h1>
+        <Link to={SPOTIFY_WEB} className="text-sm font-medium text-muted hover:text-foreground">
+          Веб-плеер
+        </Link>
+      </div>
+      {spotify ? null : (
+        <div className="flex flex-wrap items-center justify-between gap-4 rounded-2xl border border-border bg-card p-6">
+          <div>
+            <div className="text-lg font-semibold">Войдите в Spotify</div>
+            <p className="mt-1 text-sm text-muted">
+              Вход во встроенном веб-плеере. После этого треки, плейлисты и управление — прямо в MSS, звук идёт через веб-плеер.
+            </p>
+          </div>
+          <Button onClick={() => navigate(SPOTIFY_WEB)}>Открыть веб-плеер</Button>
+        </div>
+      )}
+      {spotify && (
+        <>
+          {pickPlaylist && (
+            <Shelf title={`Треки для вас · ${pickPlaylist.title}`} moreTo={playlistPath(pickPlaylist)}>
+              {picks.isError ? (
+                <ErrorState className="py-8" error={picks.error} onRetry={() => void picks.refetch()} />
+              ) : picks.isLoading ? (
+                <TrackListSkeleton rows={8} />
+              ) : (
+                <TrackList
+                  tracks={(picks.data?.tracks ?? []).slice(0, 10)}
+                  context={{ type: 'playlist', title: pickPlaylist.title, path: playlistPath(pickPlaylist) }}
+                />
+              )}
+            </Shelf>
+          )}
+          {feed.isError ? (
+            <ErrorState className="py-8" title="Не удалось загрузить главную Spotify" error={feed.error} onRetry={() => void feed.refetch()} />
+          ) : feed.isLoading ? (
+            <CardRowSkeleton />
+          ) : (
+            (feed.data ?? []).map((section) => (
+              <Shelf key={section.id} title={section.title}>
+                <Carousel itemClassName={section.items.every((i) => i.kind === 'artist') ? 'w-[148px]' : undefined}>
+                  {section.items.map((item) => spotifyFeedCard(item))}
+                </Carousel>
+              </Shelf>
+            ))
+          )}
+          <Shelf title="Любимые треки" moreTo={libraryPath('spotify', 'likes')}>
+            {home.isError ? (
+              <ErrorState className="py-8" error={home.error} onRetry={() => void home.refetch()} />
+            ) : home.isLoading ? (
+              <TrackListSkeleton rows={8} />
+            ) : (
+              <TrackList tracks={home.data ?? []} context={context} emptyText="Отметьте треки сердечком — они появятся здесь" />
+            )}
+          </Shelf>
+          {(playlists.isLoading || (playlists.data?.length ?? 0) > 0) && (
+            <Shelf title="Ваши плейлисты" moreTo={libraryPath('spotify', 'playlists')}>
+              {playlists.isLoading ? (
+                <CardRowSkeleton />
+              ) : (
+                <Carousel>
+                  {(playlists.data ?? []).map((p) => (
+                    <MediaCard
+                      key={p.id}
+                      title={p.title}
+                      subtitle={p.trackCount !== undefined ? `${p.trackCount} треков` : p.owner}
+                      coverUrl={p.coverUrl}
+                      to={playlistPath(p)}
+                      menu={() => playlistMenu(p)}
+                      onPlay={async () => {
+                        const full = await window.electronAPI.connectors.getPlaylist('spotify', p.id);
                         playCollection(full.tracks, { type: 'playlist', title: full.title, path: playlistPath(p) });
                       }}
                     />

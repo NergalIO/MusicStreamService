@@ -191,7 +191,7 @@ export function QueueView() {
               key={track.uid}
               track={track}
               dim
-              onClick={() => state.playTrack(track, { type: 'history', title: 'Недавно играли', path: '/mss/library/history' })}
+              onClick={() => state.playTrack(track, { type: 'history', title: 'Недавно играли', path: '/media/library/history' })}
             />
           ))}
         </section>

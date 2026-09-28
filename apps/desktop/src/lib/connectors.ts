@@ -28,6 +28,9 @@ export function useVkConnected(): boolean {
   return data?.some((c) => c.id === 'vk' && c.status === 'connected') ?? false;
 }
 
+/** Spotify «подключён», когда выполнен вход во встроенный веб-плеер. */
+export { useSpotifySessionLoggedIn as useSpotifyConnected } from '@/lib/spotify-session';
+
 export function useYandexAccount() {
   const connected = useYandexConnected();
   return useQuery({

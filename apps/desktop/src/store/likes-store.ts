@@ -21,11 +21,13 @@ interface LikesState {
   yandex: string[];
   local: string[];
   vk: string[];
-  /** Spotify has no write scope here, so its likes live on this device. */
+  /** Копия на устройстве: запись в библиотеку Spotify может не пройти, лайк при этом не теряется. */
   spotifyTracks: UnifiedTrack[];
+  /** Id из «Любимых треков» аккаунта Spotify. */
+  spotify: string[];
   loaded: boolean;
   isLiked: (track: Pick<UnifiedTrack, 'source' | 'id'>) => boolean;
-  sync: (opts: { yandex: boolean; vk?: boolean }) => Promise<void>;
+  sync: (opts: { yandex: boolean; vk?: boolean; spotify?: boolean }) => Promise<void>;
   toggle: (track: LikeTarget) => Promise<boolean>;
 }
 
@@ -36,6 +38,7 @@ export const useLikesStore = create<LikesState>()(
       local: [],
       vk: [],
       spotifyTracks: [],
+      spotify: [],
       loaded: false,
 
       isLiked: (track) => {
@@ -43,29 +46,39 @@ export const useLikesStore = create<LikesState>()(
         if (track.source === 'yandex') return s.yandex.includes(yandexNumericId(track.id));
         if (track.source === 'local') return s.local.includes(track.id);
         if (track.source === 'vk') return s.vk.includes(vkAudioKey(track.id));
-        if (track.source === 'spotify') return s.spotifyTracks.some((t) => t.id === track.id);
+        if (track.source === 'spotify') return s.spotify.includes(track.id) || s.spotifyTracks.some((t) => t.id === track.id);
         return false;
       },
 
-      sync: async ({ yandex, vk }) => {
-        const [y, l, v] = await Promise.allSettled([
+      sync: async ({ yandex, vk, spotify }) => {
+        const [y, l, v, sp] = await Promise.allSettled([
           yandex ? window.electronAPI.yandex.likedTrackIds() : Promise.resolve([] as string[]),
           apiFetch<{ items: LocalTrackDto[] }>('/me/likes').then((r) => r.items.map((t) => t.id)),
           vk
             ? window.electronAPI.connectors.savedTracks('vk', 5000).then((tracks) => tracks.map((t) => vkAudioKey(t.id)))
             : Promise.resolve([] as string[]),
+          spotify
+            ? window.electronAPI.connectors.savedTracks('spotify', 2000).then((tracks) => tracks.map((t) => t.id))
+            : Promise.resolve(null),
         ]);
         set((s) => ({
           yandex: y.status === 'fulfilled' ? y.value.map(yandexNumericId) : s.yandex,
           local: l.status === 'fulfilled' ? l.value : s.local,
           vk: v.status === 'fulfilled' ? v.value : s.vk,
+          spotify: sp.status === 'fulfilled' && sp.value ? sp.value : s.spotify,
           loaded: true,
         }));
       },
 
       toggle: async (track) => {
         const liked = !get().isLiked(track);
-        const snapshot = { yandex: get().yandex, local: get().local, vk: get().vk, spotifyTracks: get().spotifyTracks };
+        const snapshot = {
+          yandex: get().yandex,
+          local: get().local,
+          vk: get().vk,
+          spotifyTracks: get().spotifyTracks,
+          spotify: get().spotify,
+        };
         const id =
           track.source === 'yandex' ? yandexNumericId(track.id) : track.source === 'vk' ? vkAudioKey(track.id) : track.id;
         const apply = (list: string[]) => (liked ? [id, ...list.filter((x) => x !== id)] : list.filter((x) => x !== id));
@@ -78,7 +91,12 @@ export const useLikesStore = create<LikesState>()(
             spotifyTracks: liked
               ? [track as UnifiedTrack, ...s.spotifyTracks.filter((t) => t.id !== track.id)]
               : s.spotifyTracks.filter((t) => t.id !== track.id),
+            spotify: apply(s.spotify),
           }));
+          void window.electronAPI?.connectors
+            .setSaved('spotify', track as UnifiedTrack, liked)
+            .then(() => queryClient.invalidateQueries({ queryKey: ['spotify', 'saved'] }))
+            .catch((e) => console.warn('spotify library sync failed', e));
           return liked;
         } else {
           return liked;
@@ -103,7 +121,7 @@ export const useLikesStore = create<LikesState>()(
     }),
     {
       name: 'mss-likes',
-      partialize: (s) => ({ yandex: s.yandex, local: s.local, vk: s.vk, spotifyTracks: s.spotifyTracks }),
+      partialize: (s) => ({ yandex: s.yandex, local: s.local, vk: s.vk, spotifyTracks: s.spotifyTracks, spotify: s.spotify }),
     },
   ),
 );

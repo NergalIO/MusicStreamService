@@ -39,7 +39,7 @@ export function VkLoginDialog() {
   const method = prompt?.method ?? 'qr';
   const step = prompt?.step ?? (method === 'password' ? 'credentials' : method);
 
-  const submit = async (extra?: { forceSms?: boolean }) => {
+  const submit = async (extra?: { forceSms?: boolean; codeOverride?: string }) => {
     setBusy(true);
     try {
       await replyVkLogin({
@@ -47,7 +47,7 @@ export function VkLoginDialog() {
         method,
         username,
         password,
-        code: code.trim() || undefined,
+        code: (extra?.codeOverride ?? code).trim() || undefined,
         captchaKey: captchaKey.trim() || undefined,
         forceSms: extra?.forceSms,
       });
@@ -79,9 +79,16 @@ export function VkLoginDialog() {
           {prompt.error && <p className="text-sm text-danger">{prompt.error}</p>}
 
           {method === 'qr' && (
-            <div className="space-y-3">
+            <form
+              className="space-y-3"
+              onSubmit={(e) => {
+                e.preventDefault();
+                void submit();
+              }}
+            >
               <p className="text-sm leading-relaxed text-muted">
-                Откройте приложение VK на телефоне → камера или сканер QR и подтвердите вход.
+                Сканируйте QR камерой внутри приложения VK. Если на телефоне появится шестизначный код (кнопки «Войти»
+                там нет) — введите его сюда. Если есть «Разрешить» — нажмите её в приложении.
               </p>
               <div className="relative mx-auto w-52">
                 {prompt.qrUrl ? (
@@ -91,27 +98,38 @@ export function VkLoginDialog() {
                     <Loader2 className="animate-spin text-muted" size={22} />
                   </div>
                 )}
-                {prompt.qrStatus === 'scanned' && (
-                  <div className="absolute inset-0 flex items-center justify-center rounded-xl bg-white/80 text-center text-sm font-medium text-zinc-900">
-                    Подтвердите вход
-                    <br />
-                    на телефоне
-                  </div>
-                )}
               </div>
+              <Input
+                autoFocus
+                inputMode="numeric"
+                autoComplete="one-time-code"
+                maxLength={8}
+                placeholder="Код из приложения, например 449 542"
+                value={code}
+                onChange={(e) => {
+                  const next = e.target.value;
+                  setCode(next);
+                  const digits = next.replace(/\D/g, '');
+                  if (digits.length === 6 && !busy) void submit({ codeOverride: digits });
+                }}
+              />
               <p className="flex items-center justify-center gap-2 text-xs text-muted">
                 <Loader2 className="animate-spin" size={12} />
-                {prompt.qrStatus === 'scanned' ? 'Ждём подтверждение…' : 'Ждём сканирование…'}
+                {prompt.qrStatus === 'scanned' ? 'Код уже на телефоне — введите его выше' : 'Ждём сканирование…'}
               </p>
               <div className="flex justify-end gap-2">
                 <Button type="button" variant="ghost" onClick={close}>
                   Отмена
                 </Button>
                 <Button type="button" variant="secondary" onClick={() => void replyVkLogin({ source: 'vk', method: 'qr' })}>
-                  Обновить код
+                  Обновить QR
+                </Button>
+                <Button type="submit" disabled={busy || !code.replace(/\D/g, '')}>
+                  {busy && <Loader2 size={14} className="animate-spin" />}
+                  Подтвердить
                 </Button>
               </div>
-            </div>
+            </form>
           )}
 
           {method !== 'qr' && (
@@ -146,7 +164,7 @@ export function VkLoginDialog() {
 
               {method === 'sms' && step === 'sms' && (
                 <p className="text-sm leading-relaxed text-muted">
-                  Откроется окно VK. Введите номер телефона и код из SMS — как в приложении VK, не Kate.
+                  Откроется страница VK. Войдите по номеру и коду из SMS, затем подтвердите вход.
                 </p>
               )}
 

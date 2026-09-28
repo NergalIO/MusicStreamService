@@ -18,7 +18,7 @@ import { usePlayerStore } from '@/store/player-store';
 import { AlbumPage } from '@/pages/AlbumPage';
 import { ArtistPage } from '@/pages/ArtistPage';
 import { ExternalPlaylistPage } from '@/pages/ExternalPlaylistPage';
-import { MssHomePage, VkHomePage, YandexHomePage } from '@/pages/HomePage';
+import { MssHomePage, SpotifyHomePage, VkHomePage, YandexHomePage } from '@/pages/HomePage';
 import { LibraryPage } from '@/pages/LibraryPage';
 import { LoginPage } from '@/pages/LoginPage';
 import { PlaylistDetailPage } from '@/pages/PlaylistDetailPage';
@@ -33,6 +33,9 @@ import { WrappedPage } from '@/pages/WrappedPage';
 
 function LegacyLibraryRedirect() {
   const { tab } = useParams();
+  if (tab === 'history' || tab === 'uploads' || tab === 'downloads') {
+    return <Navigate to={libraryPath('media', tab)} replace />;
+  }
   return <Navigate to={libraryPath('mss', tab ?? 'likes')} replace />;
 }
 
@@ -116,8 +119,12 @@ function AppRoutes() {
           <Route path="/mss" element={<MssHomePage />} />
           <Route path="/yandex" element={<YandexHomePage />} />
           <Route path="/vk" element={<VkHomePage />} />
-          <Route path="/spotify" element={null} />
-          <Route path="/spotify/*" element={null} />
+          <Route path="/spotify" element={<SpotifyHomePage />} />
+          <Route path="/spotify/web" element={null} />
+          <Route path="/spotify/web/*" element={null} />
+          <Route path="/spotify/search" element={<Navigate to="/media/search" replace />} />
+          <Route path="/spotify/library" element={<Navigate to="/spotify/library/likes" replace />} />
+          <Route path="/spotify/library/:tab" element={<LibraryPage scope="spotify" />} />
           <Route path="/media/search" element={<SearchPage scope="media" />} />
           <Route path="/mss/search" element={<Navigate to="/media/search" replace />} />
           <Route path="/yandex/search" element={<Navigate to="/media/search" replace />} />

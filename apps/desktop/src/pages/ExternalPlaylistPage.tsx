@@ -2,7 +2,7 @@ import type { SourceId, UnifiedTrack } from '@mss/shared';
 import { useQuery } from '@tanstack/react-query';
 import { FileDown, ListPlus, Loader2 } from 'lucide-react';
 import { useState } from 'react';
-import { Navigate, useNavigate, useParams } from 'react-router-dom';
+import { useNavigate, useParams } from 'react-router-dom';
 import { CollectionHeader, TrackListSkeleton } from '@/components/media/CollectionHeader';
 import { DownloadAllButton } from '@/components/tracks/DownloadAllButton';
 import { TrackFilterInput, TrackList } from '@/components/tracks/TrackList';
@@ -20,12 +20,12 @@ export function ExternalPlaylistPage() {
   const { source = '', id = '' } = useParams();
   const navigate = useNavigate();
   const [importing, setImporting] = useState(false);
-  const supported = source === 'yandex' || source === 'vk';
+  const supported = source === 'yandex' || source === 'vk' || source === 'spotify';
   const { data: playlist, isLoading, error, refetch } = useQuery({
     queryKey: [source, 'playlist', id],
     queryFn: () => {
       if (source === 'yandex') return window.electronAPI.yandex.playlist(id);
-      if (source === 'vk') return window.electronAPI.connectors.getPlaylist('vk', id);
+      if (source === 'vk' || source === 'spotify') return window.electronAPI.connectors.getPlaylist(source, id);
       throw new Error('Unsupported source');
     },
     enabled: supported && !!id,
@@ -33,7 +33,6 @@ export function ExternalPlaylistPage() {
   });
   const { view, sort, cycle, filter, setFilter } = useTrackSort(playlist?.tracks ?? NO_TRACKS);
 
-  if (source === 'spotify') return <Navigate to="/spotify" replace />;
   if (!supported) {
     return <EmptyState title="Этот источник пока не поддерживает плейлисты" />;
   }

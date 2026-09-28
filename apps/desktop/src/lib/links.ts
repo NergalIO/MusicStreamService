@@ -17,7 +17,7 @@ export function trackArtistLinks(track: Pick<UnifiedTrack, 'source' | 'artist' |
 }
 
 export function supportsAlbumPage(source: SourceId): boolean {
-  return source === 'yandex';
+  return source === 'yandex' || source === 'spotify';
 }
 
 export function albumPath(source: SourceId, id: string): string {

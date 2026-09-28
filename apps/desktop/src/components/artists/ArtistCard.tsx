@@ -40,7 +40,7 @@ function subtitle(group: ArtistGroup): string {
   return group.genres[0] ?? 'Исполнитель';
 }
 
-export function ArtistCard({ group }: { group: ArtistGroup }) {
+export function ArtistCard({ group, description }: { group: ArtistGroup; description?: string }) {
   const sources = Object.keys(group.refs) as SourceId[];
   return (
     <Link
@@ -58,7 +58,7 @@ export function ArtistCard({ group }: { group: ArtistGroup }) {
       />
       <div className="w-full min-w-0">
         <div className="truncate text-sm font-medium">{group.name}</div>
-        <div className="truncate text-xs text-muted">{subtitle(group)}</div>
+        <div className="truncate text-xs text-muted">{description ?? subtitle(group)}</div>
       </div>
       <div className="flex flex-wrap justify-center gap-1">
         {sources.map((s) => (
@@ -77,13 +77,21 @@ export function ArtistCard({ group }: { group: ArtistGroup }) {
   );
 }
 
-export function ArtistGrid({ groups }: { groups: ArtistGroup[] }) {
-  if (!groups.length) return <EmptyState icon={MicVocal} title="Исполнители не найдены" className="py-10" />;
+export function ArtistGrid<G extends ArtistGroup>({
+  groups,
+  describe,
+  emptyTitle = 'Исполнители не найдены',
+}: {
+  groups: G[];
+  describe?: (group: G) => string;
+  emptyTitle?: string;
+}) {
+  if (!groups.length) return <EmptyState icon={MicVocal} title={emptyTitle} className="py-10" />;
   return (
     <div className="grid grid-cols-2 gap-2 sm:grid-cols-3 lg:grid-cols-4 xl:grid-cols-6 2xl:grid-cols-8">
       {groups.map((g, i) => (
         <div key={g.key} className="animate-slide-up [animation-fill-mode:both]" style={{ animationDelay: `${Math.min(i, 12) * 30}ms` }}>
-          <ArtistCard group={g} />
+          <ArtistCard group={g} description={describe?.(g)} />
         </div>
       ))}
     </div>

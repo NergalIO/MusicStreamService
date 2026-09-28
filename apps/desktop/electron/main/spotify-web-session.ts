@@ -31,6 +31,45 @@ let lastBounds: SpotifyViewBounds = { x: 0, y: 0, width: 0, height: 0 };
 let loginDebounce: ReturnType<typeof setTimeout> | null = null;
 const wiredContents = new WeakSet<WebContents>();
 
+/** Заголовки, с которыми веб-плеер ходит в pathfinder: переиспользуем их для каталога в MSS. */
+export interface SpotifyWebHeaders {
+  authorization: string;
+  clientToken: string;
+  appVersion: string;
+}
+
+let webHeaders: (SpotifyWebHeaders & { at: number }) | null = null;
+let loggedInCached = false;
+let controlled = false;
+const headerWaiters = new Set<(headers: SpotifyWebHeaders) => void>();
+const TOKEN_FRESH_MS = 50 * 60_000;
+
+function header(headers: Record<string, string>, name: string): string | undefined {
+  const key = Object.keys(headers).find((k) => k.toLowerCase() === name);
+  return key ? headers[key] : undefined;
+}
+
+function watchPlayerRequests(target: Session): void {
+  target.webRequest.onBeforeSendHeaders({ urls: ['https://*.spotify.com/*'] }, (details, callback) => {
+    const headers = details.requestHeaders;
+    const authorization = header(headers, 'authorization');
+    const clientToken = header(headers, 'client-token');
+    if (authorization?.startsWith('Bearer ') && clientToken) {
+      const next = {
+        authorization,
+        clientToken,
+        appVersion: header(headers, 'spotify-app-version') ?? webHeaders?.appVersion ?? '',
+      };
+      if (next.authorization !== webHeaders?.authorization || next.clientToken !== webHeaders?.clientToken) {
+        webHeaders = { ...next, at: Date.now() };
+        for (const resolve of headerWaiters) resolve(next);
+        headerWaiters.clear();
+      }
+    }
+    callback({ requestHeaders: headers });
+  });
+}
+
 function chromeUserAgent(): string {
   const ua = electronSession.defaultSession.getUserAgent();
   const chrome = ua.match(/Chrome\/[\d.]+/)?.[0] ?? 'Chrome/144.0.0.0';
@@ -90,7 +129,11 @@ function emitLoggedIn(): void {
   if (loginDebounce) clearTimeout(loginDebounce);
   loginDebounce = setTimeout(() => {
     loginDebounce = null;
-    void hasLoginCookie().then((loggedIn) => sendToRenderer('spotify-session:loggedIn', loggedIn));
+    void hasLoginCookie().then((loggedIn) => {
+      if (loggedIn !== loggedInCached && !loggedIn) webHeaders = null;
+      loggedInCached = loggedIn;
+      sendToRenderer('spotify-session:loggedIn', loggedIn);
+    });
   }, 400);
 }
 
@@ -133,7 +176,11 @@ function ensureSession(): Session {
   ses = electronSession.fromPartition(PARTITION);
   ses.setUserAgent(chromeUserAgent());
   allowPlaybackPermissions(ses);
+  watchPlayerRequests(ses);
   ses.cookies.on('changed', emitLoggedIn);
+  void hasLoginCookie().then((loggedIn) => {
+    loggedInCached = loggedIn;
+  });
   return ses;
 }
 
@@ -200,22 +247,99 @@ function ensureView(): WebContentsView {
   return view;
 }
 
+function ensureLoaded(): WebContentsView {
+  const v = ensureView();
+  if (!loaded) {
+    loaded = true;
+    void v.webContents.loadURL(HOME);
+  }
+  return v;
+}
+
 function show(): void {
-  ensureView();
+  ensureLoaded();
   visible = true;
   attach();
   view?.webContents.setAudioMuted(false);
-  if (!loaded) {
-    loaded = true;
-    void view?.webContents.loadURL(HOME);
-  }
   emitLoggedIn();
 }
 
 function hide(): void {
   visible = false;
-  void pausePlayback();
+  if (!controlled) void pausePlayback();
   detach();
+}
+
+export function isSpotifyLoggedIn(): boolean {
+  return loggedInCached;
+}
+
+async function requireLogin(): Promise<void> {
+  ensureSession();
+  loggedInCached = await hasLoginCookie();
+  if (!loggedInCached) throw new Error('Войдите в Spotify: боковая панель → Spotify → Веб-плеер');
+}
+
+/** Ждёт заголовки веб-плеера; при необходимости грузит open.spotify.com в фоне (view не прикрепляется к окну). */
+export async function spotifyWebHeaders(timeoutMs = 25_000): Promise<SpotifyWebHeaders> {
+  await requireLogin();
+  if (webHeaders && Date.now() - webHeaders.at < TOKEN_FRESH_MS) return webHeaders;
+  ensureLoaded();
+  const stale = webHeaders;
+  return new Promise<SpotifyWebHeaders>((resolve, reject) => {
+    const timer = setTimeout(() => {
+      headerWaiters.delete(onHeaders);
+      if (stale) resolve(stale);
+      else reject(new Error('Веб-плеер Spotify не ответил — откройте Spotify → Веб-плеер и проверьте вход'));
+    }, timeoutMs);
+    const onHeaders = (h: SpotifyWebHeaders) => {
+      clearTimeout(timer);
+      resolve(h);
+    };
+    headerWaiters.add(onHeaders);
+  });
+}
+
+/** Токен отклонён: перезагружаем плеер (если он не играет), чтобы он выдал свежий. */
+export function invalidateSpotifyWebHeaders(): void {
+  webHeaders = null;
+  const wc = view?.webContents;
+  if (!wc || wc.isDestroyed() || wc.isCurrentlyAudible()) return;
+  wc.reload();
+}
+
+/** Выполняет JS в странице веб-плеера с user gesture — иначе Chromium не даст запустить звук. */
+export async function spotifyWebExec<T>(script: string): Promise<T> {
+  await requireLogin();
+  const wc = ensureLoaded().webContents;
+  if (wc.isLoading()) {
+    await new Promise<void>((resolve) => {
+      const timer = setTimeout(resolve, 20_000);
+      wc.once('did-stop-loading', () => {
+        clearTimeout(timer);
+        resolve();
+      });
+    });
+  }
+  return (await wc.executeJavaScript(script, true)) as T;
+}
+
+/** Пока MSS ведёт воспроизведение через Connect, уход со страницы Spotify не ставит плеер на паузу. */
+export function setSpotifyControlled(active: boolean): void {
+  controlled = active;
+  if (active) {
+    ensureLoaded();
+    view?.webContents.setAudioMuted(false);
+  }
+}
+
+export function setSpotifyWebMuted(muted: boolean): void {
+  const wc = view?.webContents;
+  if (wc && !wc.isDestroyed()) wc.setAudioMuted(muted);
+}
+
+export async function spotifyWebLogout(): Promise<void> {
+  await logout();
 }
 
 async function pausePlayback(): Promise<void> {
@@ -266,6 +390,8 @@ function sendMediaCommand(command: Extract<PlayerCommand, 'toggle' | 'next' | 'p
 
 async function logout(): Promise<void> {
   loaded = false;
+  webHeaders = null;
+  loggedInCached = false;
   const target = ensureSession();
   await target.clearStorageData();
   if (view && !view.webContents.isDestroyed()) {

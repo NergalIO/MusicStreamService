@@ -1,7 +1,7 @@
 import { useEffect } from 'react';
 import { toast } from 'sonner';
 import { applyEqualizer, getAnalyser, getAudioEngine } from '@/hooks/useAudioEngine';
-import { useVkConnected, useYandexConnected } from '@/lib/connectors';
+import { useSpotifyConnected, useVkConnected, useYandexConnected } from '@/lib/connectors';
 import {
   changeVolumeBy,
   loadMoreWave,
@@ -17,6 +17,16 @@ import { initListeningSync, recordPlay } from '@/lib/listening';
 import { externalUrl } from '@/lib/playlist-io';
 import { useSleepStore } from '@/store/sleep-store';
 import { invalidateStream, resolveStream } from '@/lib/playback';
+import {
+  applySpotifyState,
+  isActiveSpotifyTrack,
+  isSpotifyControlled,
+  spotifyPositionSeconds,
+  startSpotifyTrack,
+  stopSpotifyTrack,
+  syncSpotifyVolume,
+} from '@/lib/spotify-player';
+import { downloadedFileUrl } from '@/store/downloads-store';
 import { useLikesStore } from '@/store/likes-store';
 import { usePlaybackStore } from '@/store/playback-store';
 import { upcomingTracks, usePlayerStore, type QueueItem } from '@/store/player-store';
@@ -121,7 +131,7 @@ function publishProgress(): void {
     return;
   }
   const { currentTime, duration, playing } = usePlaybackStore.getState();
-  const position = engine.currentUrl ? engine.getCurrentTime() : currentTime;
+  const position = isSpotifyControlled() ? currentTime : engine.currentUrl ? engine.getCurrentTime() : currentTime;
   const dur = engine.getDuration() || duration;
   window.electronAPI?.player.publishProgress({
     position,
@@ -189,6 +199,17 @@ async function startCurrent(playId: number): Promise<void> {
 
   try {
     if (!current.playable) throw new Error(current.unplayableReason ?? 'Трек недоступен');
+    if (current.source === 'spotify' && !downloadedFileUrl(current)) {
+      engine.stop();
+      await startSpotifyTrack(current, startAt);
+      if (usePlayerStore.getState().playId !== playId) return;
+      consecutiveErrors = 0;
+      usePlayerStore.getState().pushHistory(current);
+      notifyTrack(current);
+      publishSnapshot();
+      return;
+    }
+    stopSpotifyTrack();
     const stream = await resolveStream(current, quality);
     if (usePlayerStore.getState().playId !== playId) return;
     usePlaybackStore.setState({ preview: stream.preview, codec: stream.codec, bitrate: stream.bitrate });
@@ -221,7 +242,8 @@ async function startCurrent(playId: number): Promise<void> {
     if (needsMoreWave()) void loadMoreWave();
   } catch (e) {
     if (usePlayerStore.getState().playId !== playId) return;
-    handlePlaybackFailure(errorMessage(e), transition === 'crossfade');
+    if (current.source === 'spotify') stopSpotifyTrack();
+    handlePlaybackFailure(errorMessage(e).replace(/^Error invoking remote method '[^']+': (Error: )?/, ''), transition === 'crossfade');
   } finally {
     if (usePlayerStore.getState().playId === playId) usePlaybackStore.setState({ loading: false });
   }
@@ -243,7 +265,7 @@ async function preloadNext(): Promise<void> {
   if (isLobbyGuest()) return;
   const state = usePlayerStore.getState();
   const next = state.repeat === 'one' ? state.current : upcomingTracks(state)[0];
-  if (!next || !next.playable) return;
+  if (!next || !next.playable || next.source === 'spotify') return;
   try {
     const stream = await resolveStream(next, useSettingsStore.getState().quality);
     if (stream.url) getAudioEngine().preload(stream.url);
@@ -255,6 +277,7 @@ async function preloadNext(): Promise<void> {
 export function usePlayerController(): void {
   const yandexConnected = useYandexConnected();
   const vkConnected = useVkConnected();
+  const spotifyConnected = useSpotifyConnected();
 
   useEffect(() => {
     const engine = getAudioEngine();
@@ -266,6 +289,7 @@ export function usePlayerController(): void {
       }
       engine.setVolume(s.volume);
       engine.setMuted(s.muted);
+      syncSpotifyVolume(s.volume, s.muted);
     };
     sync();
     engine.setCrossfade(useSettingsStore.getState().crossfade);
@@ -286,6 +310,7 @@ export function usePlayerController(): void {
         if (s.playId !== prev.playId) void startCurrent(s.playId);
         if (s.current?.uid !== prev.current?.uid && !s.current) {
           engine.stop();
+          stopSpotifyTrack();
           updateMediaSession(null);
           publishSnapshot();
         }
@@ -305,20 +330,27 @@ export function usePlayerController(): void {
       useSleepStore.subscribe(() => publishSnapshot()),
 
       engine.on('play', () => {
+        if (isSpotifyControlled()) return;
         usePlaybackStore.setState({ playing: true });
         publishSnapshot();
       }),
       engine.on('pause', () => {
+        if (isSpotifyControlled()) return;
         usePlaybackStore.setState({ playing: false });
         publishSnapshot();
       }),
-      engine.on('waiting', () => usePlaybackStore.setState({ loading: true })),
-      engine.on('playing', () => usePlaybackStore.setState({ loading: false, playing: true })),
+      engine.on('waiting', () => {
+        if (!isSpotifyControlled()) usePlaybackStore.setState({ loading: true });
+      }),
+      engine.on('playing', () => {
+        if (!isSpotifyControlled()) usePlaybackStore.setState({ loading: false, playing: true });
+      }),
       engine.on('durationchange', () => {
         const d = engine.getDuration();
-        if (d) usePlaybackStore.setState({ duration: d });
+        if (d && !isSpotifyControlled()) usePlaybackStore.setState({ duration: d });
       }),
       engine.on('timeupdate', () => {
+        if (isSpotifyControlled()) return;
         const t = engine.getCurrentTime();
         const d = engine.getDuration();
         usePlaybackStore.setState({ currentTime: t, buffered: engine.getBufferedEnd(), ...(d ? { duration: d } : {}) });
@@ -350,11 +382,12 @@ export function usePlayerController(): void {
         }
       }),
       engine.on('nearend', () => {
-        if (usePlayerStore.getState().repeat === 'one') return;
+        if (isSpotifyControlled() || usePlayerStore.getState().repeat === 'one') return;
         if (session) session.finished = true;
         void playNextTrack(true);
       }),
       engine.on('ended', () => {
+        if (isSpotifyControlled()) return;
         if (session) session.finished = true;
         void playNextTrack(true).then((advanced) => {
           if (!advanced) {
@@ -369,7 +402,7 @@ export function usePlayerController(): void {
       }),
       engine.on('error', (e) => {
         const s = session;
-        if (!s) return;
+        if (!s || isSpotifyControlled()) return;
         if (!s.retried && s.track.source !== 'local') {
           s.retried = true;
           invalidateStream(s.track, useSettingsStore.getState().quality);
@@ -412,6 +445,40 @@ export function usePlayerController(): void {
       if (!engine.paused) engine.pause();
     });
 
+    const offSpotifyState = window.electronAPI?.spotifyConnect?.onState((state) => {
+      const wasPlaying = usePlaybackStore.getState().playing;
+      if (!applySpotifyState(state)) return;
+      const t = state.positionMs / 1000;
+      if (session && session.track.source === 'spotify') {
+        const delta = t - session.lastTime;
+        if (delta > 0 && delta < 3) session.played += delta;
+        session.lastTime = t;
+      }
+      if (Math.abs(t - lastSavedResume) >= RESUME_SAVE_EVERY) saveResumePosition(t);
+      if (wasPlaying !== state.playing) publishSnapshot();
+      else publishProgress();
+    });
+
+    const offSpotifyEnded = window.electronAPI?.spotifyConnect?.onEnded(({ trackId }) => {
+      if (!isActiveSpotifyTrack(trackId)) return;
+      if (usePlayerStore.getState().repeat === 'one') {
+        usePlayerStore.getState().replay(0);
+        return;
+      }
+      if (session) session.finished = true;
+      void playNextTrack(true).then((advanced) => {
+        if (advanced) return;
+        finalizeSession();
+        stopSpotifyTrack();
+        usePlaybackStore.setState({ playing: false, currentTime: 0 });
+        publishSnapshot();
+        if (useSleepStore.getState().afterTrack) {
+          useSleepStore.getState().cancel();
+          toast('Таймер сна: воспроизведение остановлено');
+        }
+      });
+    });
+
     const sleepTimer = setInterval(() => {
       const { endsAt } = useSleepStore.getState();
       if (!endsAt || Date.now() < endsAt) return;
@@ -452,7 +519,8 @@ export function usePlayerController(): void {
     });
 
     const onUnload = () => {
-      if (engine.currentUrl) saveResumePosition(engine.getCurrentTime());
+      if (isSpotifyControlled()) saveResumePosition(spotifyPositionSeconds());
+      else if (engine.currentUrl) saveResumePosition(engine.getCurrentTime());
       finalizeSession();
     };
     window.addEventListener('beforeunload', onUnload);
@@ -477,6 +545,8 @@ export function usePlayerController(): void {
       unsubs.forEach((u) => u());
       offCommand?.();
       offSpotifyMedia?.();
+      offSpotifyState?.();
+      offSpotifyEnded?.();
       offVolume?.();
       offMini?.();
       offMiniVis();
@@ -487,8 +557,8 @@ export function usePlayerController(): void {
   }, []);
 
   useEffect(() => {
-    void useLikesStore.getState().sync({ yandex: yandexConnected, vk: vkConnected });
-  }, [yandexConnected, vkConnected]);
+    void useLikesStore.getState().sync({ yandex: yandexConnected, vk: vkConnected, spotify: spotifyConnected });
+  }, [yandexConnected, vkConnected, spotifyConnected]);
 
   useEffect(() => {
     if ('mediaSession' in navigator) {

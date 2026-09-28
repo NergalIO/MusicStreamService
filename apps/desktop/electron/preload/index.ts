@@ -7,6 +7,7 @@ import type {
   DownloadRecord,
   ExternalAccount,
   FeedBlock,
+  HomeFeedSection,
   LoginPrompt,
   LoginReply,
   PlaybackHandle,
@@ -150,6 +151,20 @@ const api = {
     onLoggedIn: (cb: (loggedIn: boolean) => void) => subscribe('spotify-session:loggedIn', cb),
     onMedia: (cb: (state: { playing: boolean }) => void) => subscribe('spotify-session:media', cb),
   },
+  spotifyConnect: {
+    play: (trackId: string, positionMs?: number) =>
+      ipcRenderer.invoke('spotify-connect:play', trackId, positionMs) as Promise<void>,
+    pause: () => ipcRenderer.invoke('spotify-connect:pause') as Promise<void>,
+    resume: () => ipcRenderer.invoke('spotify-connect:resume') as Promise<void>,
+    seek: (positionMs: number) => ipcRenderer.invoke('spotify-connect:seek', positionMs) as Promise<void>,
+    setVolume: (percent: number, muted: boolean) =>
+      ipcRenderer.invoke('spotify-connect:setVolume', percent, muted) as Promise<void>,
+    stop: () => ipcRenderer.invoke('spotify-connect:stop') as Promise<void>,
+    onState: (
+      cb: (state: { trackId: string | null; playing: boolean; positionMs: number; durationMs: number }) => void,
+    ) => subscribe('spotify-connect:state', cb),
+    onEnded: (cb: (payload: { trackId: string }) => void) => subscribe('spotify-connect:ended', cb),
+  },
   localTracks: {
     pickFiles: () => ipcRenderer.invoke('localTracks:pickFiles') as Promise<string[]>,
     prepare: (filePath: string) =>
@@ -237,6 +252,13 @@ const api = {
       ipcRenderer.invoke('connectors:getPlaylist', id, playlistId) as Promise<PlaylistWithTracks>,
     savedTracks: (id: string, limit: number) =>
       ipcRenderer.invoke('connectors:savedTracks', id, limit) as Promise<UnifiedTrack[]>,
+    homeFeed: (id: string) => ipcRenderer.invoke('connectors:homeFeed', id) as Promise<HomeFeedSection[]>,
+    favoriteArtists: (id: string) =>
+      ipcRenderer.invoke('connectors:favoriteArtists', id) as Promise<UnifiedArtist[]>,
+    album: (id: string, albumId: string) =>
+      ipcRenderer.invoke('connectors:album', id, albumId) as Promise<AlbumWithTracks>,
+    trackRadio: (id: string, track: UnifiedTrack) =>
+      ipcRenderer.invoke('connectors:trackRadio', id, track) as Promise<PlaylistWithTracks>,
     setSaved: (id: string, track: UnifiedTrack, saved: boolean) =>
       ipcRenderer.invoke('connectors:setSaved', id, track, saved) as Promise<void>,
   },

@@ -21,7 +21,6 @@ import { albumMenu, artistMenu } from '@/lib/card-menus';
 import { formatTrackCount } from '@/lib/format';
 import { albumLink } from '@/lib/links';
 import { playCollection } from '@/lib/player-actions';
-import { SPOTIFY_HOME } from '@/lib/service-routes';
 import { EXTERNAL_SOURCES, SOURCE_LABEL, matchesFilter, type SourceFilterId } from '@/lib/sources';
 import type { PlayContext } from '@/store/player-store';
 
@@ -121,10 +120,6 @@ export function ArtistPage() {
       vk: vkId,
     };
     for (const source of EXTERNAL_SOURCES) {
-      if (source === 'spotify') {
-        put(source, []);
-        continue;
-      }
       if (shouldSkipExternalArtistLookup(source, ids)) {
         put(source, []);
         continue;
@@ -209,15 +204,6 @@ export function ArtistPage() {
         onPlay={() => playCollection(popular.length ? popular : allTracks, context)}
         onShuffle={() => playCollection(allTracks.length ? allTracks : popular, context, true)}
       />
-
-      {spotifyPinned && (
-        <p className="mb-8 text-sm text-muted">
-          Каталог Spotify в MSS больше не загружается.{' '}
-          <Link to={SPOTIFY_HOME} className="text-foreground underline-offset-2 hover:underline">
-            Слушать в разделе Spotify
-          </Link>
-        </p>
-      )}
 
       <div className="space-y-10">
         {popular.length > 0 && (

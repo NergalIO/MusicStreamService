@@ -36,6 +36,19 @@ function evsSign(appOutDir) {
   }
 }
 
+/** Только что собранный exe на Windows часто держит антивирус — EBUSY проходит за секунды. */
+function copyWithRetry(from, to) {
+  for (let attempt = 1; ; attempt++) {
+    try {
+      fs.copyFileSync(from, to);
+      return;
+    } catch (err) {
+      if (attempt >= 8 || (err.code !== 'EBUSY' && err.code !== 'EPERM')) throw err;
+      Atomics.wait(new Int32Array(new SharedArrayBuffer(4)), 0, 0, 500 * attempt);
+    }
+  }
+}
+
 function restoreDevSignature(appOutDir, exeName) {
   const electronDist = path.join(__dirname, '..', 'node_modules', 'electron', 'dist');
   const pristine = path.join(electronDist, 'electron.exe');
@@ -45,8 +58,8 @@ function restoreDevSignature(appOutDir, exeName) {
     return;
   }
   const exePath = path.join(appOutDir, exeName);
-  fs.copyFileSync(pristine, exePath);
-  fs.copyFileSync(pristineSig, path.join(appOutDir, `${exeName}.sig`));
+  copyWithRetry(pristine, exePath);
+  copyWithRetry(pristineSig, path.join(appOutDir, `${exeName}.sig`));
   const stale = path.join(appOutDir, 'electron.exe.sig');
   if (fs.existsSync(stale) && path.basename(exeName) !== 'electron.exe') fs.rmSync(stale);
   console.log('VMP: development-подпись восстановлена как', `${exeName}.sig`);

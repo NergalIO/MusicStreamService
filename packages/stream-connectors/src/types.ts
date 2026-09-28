@@ -1,5 +1,7 @@
 import type {
+  AlbumWithTracks,
   ExternalAccount,
+  HomeFeedSection,
   PlaybackHandle,
   PlaylistWithTracks,
   Quality,
@@ -28,11 +30,18 @@ export interface StreamConnector {
   search(query: string, limit: number): Promise<UnifiedTrack[]>;
   searchArtists?(query: string, limit: number): Promise<UnifiedArtist[]>;
   getArtistTracks?(artistId: string, limit: number, artistName?: string): Promise<UnifiedTrack[]>;
+  /** Исполнители, которых пользователь лайкнул или на которых подписан в самом сервисе. */
+  getFavoriteArtists?(): Promise<UnifiedArtist[]>;
   listPlaylists?(): Promise<UnifiedPlaylist[]>;
   getPlaylist?(id: string): Promise<PlaylistWithTracks>;
   getSavedTracks?(limit: number): Promise<UnifiedTrack[]>;
   /** Подборка для «Слушать сейчас» на главной источника. */
   getHomeTracks?(limit: number): Promise<UnifiedTrack[]>;
+  /** Секции главной страницы источника: альбомы, подборки, исполнители. */
+  getHomeFeed?(): Promise<HomeFeedSection[]>;
+  getAlbum?(id: string): Promise<AlbumWithTracks>;
+  /** Станция «радио» по треку — плейлист похожих треков. */
+  getTrackRadio?(track: UnifiedTrack): Promise<PlaylistWithTracks>;
   resolvePlayback(track: UnifiedTrack, options?: { quality?: Quality }): Promise<PlaybackHandle>;
   /** Добавить или убрать трек из «Моей музыки» источника. */
   setSavedTrack?(track: UnifiedTrack, saved: boolean): Promise<void>;

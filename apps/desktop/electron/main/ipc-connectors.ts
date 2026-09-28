@@ -115,6 +115,30 @@ export function registerConnectorIpc(): void {
     return c.getPlaylist(playlistId);
   });
 
+  ipcMain.handle('connectors:favoriteArtists', async (_e, id: string) => {
+    const c = connectorRegistry.get(id);
+    if (!c?.getFavoriteArtists || c.getAuthStatus() === 'disconnected') return [];
+    return c.getFavoriteArtists();
+  });
+
+  ipcMain.handle('connectors:homeFeed', async (_e, id: string) => {
+    const c = connectorRegistry.get(id);
+    if (!c?.getHomeFeed || c.getAuthStatus() === 'disconnected') return [];
+    return c.getHomeFeed();
+  });
+
+  ipcMain.handle('connectors:album', async (_e, id: string, albumId: string) => {
+    const c = connector(id);
+    if (!c.getAlbum) throw new Error('Альбомы не поддерживаются');
+    return c.getAlbum(albumId);
+  });
+
+  ipcMain.handle('connectors:trackRadio', async (_e, id: string, track: UnifiedTrack) => {
+    const c = connector(id);
+    if (!c.getTrackRadio) throw new Error('Радио не поддерживается');
+    return c.getTrackRadio(track);
+  });
+
   ipcMain.handle('connectors:savedTracks', async (_e, id: string, limit: number) => {
     const c = connectorRegistry.get(id);
     if (!c?.getSavedTracks || c.getAuthStatus() === 'disconnected') return [];

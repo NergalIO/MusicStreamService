@@ -33,8 +33,13 @@ export function parseMssLink(url: string): { path: string; play?: { source: stri
       return { path: '/wave' };
     case 'search':
       return { path: `/media/search${parsed.search}` };
-    case 'library':
-      return { path: `/mss/library/${parts[0] || 'likes'}` };
+    case 'library': {
+      const tab = parts[0] || 'likes';
+      if (tab === 'history' || tab === 'uploads' || tab === 'downloads') {
+        return { path: `/media/library/${tab}` };
+      }
+      return { path: `/mss/library/${tab}` };
+    }
     case 'stats':
       return { path: parts[0] === 'wrapped' ? '/stats/wrapped' : '/stats' };
     case 'settings':
