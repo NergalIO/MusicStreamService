@@ -4,11 +4,13 @@ import {
   VK_HEADERS,
   VK_KATE_CLIENT_ID,
   VK_KATE_CLIENT_SECRET,
+  androidAuthorizeUrl,
   checkQr,
   confirmSms,
   deviceIdFromVault,
-  kateAuthorizeUrl,
+  kateTokenFromAndroidToken,
   materializeKateToken,
+  oauthRedirectError,
   normalizeVkPhone,
   parseKateOAuthRedirect,
   sendPhoneOtp,
@@ -27,6 +29,7 @@ export {
   VK_KATE_CLIENT_ID,
   VK_KATE_CLIENT_SECRET,
   VK_KATE_USER_AGENT,
+  androidAuthorizeUrl,
   kateAuthorizeUrl,
   parseKateOAuthRedirect,
   type VkTokenResponse,
@@ -198,10 +201,14 @@ export class VkClient {
 
   private async loginSmsViaOAuth(signal: AbortSignal): Promise<LoginFlowResult | null> {
     if (!this.opts.openKateOAuth) return null;
-    const redirected = await this.opts.openKateOAuth(kateAuthorizeUrl(), signal);
+    const redirected = await this.opts.openKateOAuth(androidAuthorizeUrl(), signal);
+    const oauthErr = oauthRedirectError(redirected);
+    if (oauthErr) throw new VkAuthError(oauthErr);
     const parsed = parseKateOAuthRedirect(redirected);
     if (!parsed) throw new VkAuthError('Не удалось получить токен из окна VK');
-    const token = await materializeKateToken(parsed);
+    const token = parsed.access_token
+      ? await kateTokenFromAndroidToken(parsed.access_token, signal)
+      : await materializeKateToken(parsed);
     this.saveTokens(token);
     return { kind: 'done' };
   }

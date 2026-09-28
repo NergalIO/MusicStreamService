@@ -1,7 +1,9 @@
 import { describe, expect, it } from 'vitest';
 import {
+  androidAuthorizeUrl,
   kateAuthorizeUrl,
   normalizeVkPhone,
+  oauthRedirectError,
   parseConnectAuthorize,
   parseKateOAuthRedirect,
   parseValidateAccount,
@@ -111,6 +113,17 @@ describe('parseKateOAuthRedirect', () => {
   it('builds kate authorize url', () => {
     expect(kateAuthorizeUrl()).toContain('client_id=2685278');
     expect(kateAuthorizeUrl()).toContain('display=mobile');
+  });
+
+  it('builds official android authorize url for SMS', () => {
+    expect(androidAuthorizeUrl()).toContain('client_id=2274003');
+    expect(androidAuthorizeUrl()).not.toContain('client_id=2685278');
+  });
+
+  it('reads oauth error from blank.html', () => {
+    expect(oauthRedirectError('https://oauth.vk.com/blank.html#error=access_denied&error_description=Access%20denied')).toMatch(
+      /QR-код|пароль/i,
+    );
   });
 
   it('reads token from oauth.vk.ru', () => {

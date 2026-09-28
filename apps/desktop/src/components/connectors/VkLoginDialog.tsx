@@ -146,8 +146,7 @@ export function VkLoginDialog() {
 
               {method === 'sms' && step === 'sms' && (
                 <p className="text-sm leading-relaxed text-muted">
-                  VK блокирует прямую отправку SMS из приложений. Откроется окно VK — введите там номер телефона
-                  и код из SMS.
+                  Откроется окно VK. Введите номер телефона и код из SMS — как в приложении VK, не Kate.
                 </p>
               )}
 

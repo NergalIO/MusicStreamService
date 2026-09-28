@@ -2,25 +2,33 @@ import { BrowserWindow, session as electronSession } from 'electron';
 import { parseKateOAuthRedirect } from '@mss/stream-connectors';
 import { log } from './logger.js';
 
-const PARTITION = 'persist:vk-kate-oauth';
-const CHROME_UA =
-  'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/128.0.0.0 Safari/537.36';
+const PARTITION = 'vk-android-sms';
+const ANDROID_CHROME_UA =
+  'Mozilla/5.0 (Linux; Android 13; Pixel 7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/128.0.0.0 Mobile Safari/537.36';
 
 function parentWindow(): BrowserWindow | undefined {
   return BrowserWindow.getAllWindows().find((win) => !win.isDestroyed() && win.isVisible()) ?? BrowserWindow.getAllWindows()[0];
 }
 
 function looksLikeVkOAuthResult(url: string): boolean {
-  return parseKateOAuthRedirect(url) !== null;
+  if (parseKateOAuthRedirect(url)) return true;
+  try {
+    const parsed = new URL(url);
+    if (!/oauth\.vk\.(com|ru)$/i.test(parsed.hostname) || !parsed.pathname.includes('blank.html')) return false;
+    const hash = new URLSearchParams(parsed.hash.replace(/^#/, ''));
+    return !!(hash.get('error') || parsed.searchParams.get('error'));
+  } catch {
+    return false;
+  }
 }
 
 /**
- * Мобильный Kate OAuth / VK ID: пользователь входит по номеру и SMS
- * на странице VK. Токен читаем из редиректа на blank.html.
+ * VK ID официального Android-клиента: SMS разрешён.
+ * Токен Kate из этого окна не берём — его обменивают через processAuthCode.
  */
 export function openKateOAuthWindow(url: string, signal?: AbortSignal): Promise<string> {
   const ses = electronSession.fromPartition(PARTITION);
-  ses.setUserAgent(CHROME_UA);
+  ses.setUserAgent(ANDROID_CHROME_UA);
 
   const parent = parentWindow();
   const win = new BrowserWindow({
@@ -101,10 +109,16 @@ export function openKateOAuthWindow(url: string, signal?: AbortSignal): Promise<
       finish(() => reject(new Error('Отменено')));
     });
 
-    void win.loadURL(url).catch((err: unknown) => {
-      log.error('[vk-oauth] load failed', err);
-      finish(() => reject(err instanceof Error ? err : new Error('Не удалось открыть страницу VK')));
-    });
+    void ses
+      .clearStorageData({ storages: ['cookies', 'localstorage', 'cachestorage'] })
+      .catch(() => undefined)
+      .finally(() => {
+        if (settled || win.isDestroyed()) return;
+        void win.loadURL(url).catch((err: unknown) => {
+          log.error('[vk-oauth] load failed', err);
+          finish(() => reject(err instanceof Error ? err : new Error('Не удалось открыть страницу VK')));
+        });
+      });
     win.once('ready-to-show', () => {
       if (!win.isDestroyed()) win.show();
     });

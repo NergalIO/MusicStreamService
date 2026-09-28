@@ -126,6 +126,40 @@ export function kateAuthorizeUrl(): string {
   return `https://oauth.vk.com/authorize?${params.toString()}`;
 }
 
+/** Официальный Android-клиент: VK ID разрешает SMS. Kate (2685278) в вебе даёт Access denied 15. */
+export function androidAuthorizeUrl(): string {
+  const params = new URLSearchParams({
+    client_id: ANDROID_CLIENT_ID,
+    scope: 'all',
+    redirect_uri: 'https://oauth.vk.com/blank.html',
+    display: 'mobile',
+    response_type: 'token',
+    revoke: '1',
+    v: AUTH_API_VERSION,
+  });
+  return `https://oauth.vk.com/authorize?${params.toString()}`;
+}
+
+export function oauthRedirectError(url: string): string | null {
+  let parsed: URL;
+  try {
+    parsed = new URL(url);
+  } catch {
+    return null;
+  }
+  const hash = new URLSearchParams(parsed.hash.replace(/^#/, ''));
+  const err = hash.get('error') || parsed.searchParams.get('error');
+  if (!err) return null;
+  const desc = hash.get('error_description') || parsed.searchParams.get('error_description') || err;
+  if (/access.?denied/i.test(err) || /access.?denied/i.test(desc)) {
+    return 'VK отклонил веб-вход. Попробуйте QR-код или пароль';
+  }
+  if (/flood|too many|слишком много/i.test(desc) || err === '9') {
+    return 'Слишком много попыток на стороне VK. Подождите или войдите по QR-коду';
+  }
+  return desc;
+}
+
 export function parseKateOAuthRedirect(url: string): {
   access_token?: string;
   user_id?: number;
@@ -388,9 +422,57 @@ export async function startQrSession(deviceName: string, signal?: AbortSignal): 
     anonymToken,
     authUrl: r.auth_url,
     authHash: r.auth_hash,
-    authCode: typeof r.auth_code === 'string' ? r.auth_code : '',
+    authCode: authCodeFromQr(r, r.auth_url),
     expiresAt: unixOrDurationToMs(typeof r.expires_in === 'number' ? r.expires_in : undefined, 5 * 60_000),
   };
+}
+
+function authCodeFromQr(r: Json, authUrl: string): string {
+  if (typeof r.auth_code === 'string' && r.auth_code) return r.auth_code;
+  try {
+    return new URL(authUrl).searchParams.get('q') ?? '';
+  } catch {
+    return '';
+  }
+}
+
+function sleep(ms: number): Promise<void> {
+  return new Promise((r) => setTimeout(r, ms));
+}
+
+/** Подтверждает QR Kate уже полученным токеном официального Android — так SMS в VK ID даёт audio.*. */
+export async function kateTokenFromAndroidToken(androidToken: string, signal?: AbortSignal): Promise<VkTokenResponse> {
+  if (!androidToken) throw new VkAuthError('VK не вернул токен сессии');
+  const session = await startQrSession('MusicStreamService', signal);
+  if (!session.authCode) throw new VkAuthError('VK не выдал код для обмена токена');
+  await formPost(
+    `${API_URL}/auth.processAuthCode`,
+    {
+      access_token: androidToken,
+      auth_code: session.authCode,
+      action: '0',
+      v: AUTH_API_VERSION,
+    },
+    { signal, skipAppHeaders: true },
+  );
+  await formPost(
+    `${API_URL}/auth.processAuthCode`,
+    {
+      access_token: androidToken,
+      auth_code: session.authCode,
+      action: '1',
+      v: AUTH_API_VERSION,
+    },
+    { signal, skipAppHeaders: true },
+  );
+  for (let i = 0; i < 12; i++) {
+    const check = await checkQr(session, signal);
+    if (check.status === 2) return check.token;
+    if (check.status === 3) throw new VkAuthError('VK отклонил подтверждение входа');
+    if (check.status === 4) throw new VkAuthError('Сессия входа истекла. Попробуйте ещё раз');
+    await sleep(400);
+  }
+  throw new VkAuthError('Не удалось получить токен Kate после входа по SMS');
 }
 
 export async function checkQr(session: QrSession, signal?: AbortSignal): Promise<QrCheck> {
