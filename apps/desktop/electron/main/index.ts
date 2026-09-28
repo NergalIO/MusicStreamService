@@ -31,7 +31,6 @@ dotenv.config({ path: path.resolve(__dirname, '../../../.env') });
 
 import { initLogging, log } from './logger.js';
 import { getAppSettings, launchedHidden, registerAppSettingsIpc } from './app-settings.js';
-import { registerYoomoneyDonateIpc } from './yoomoney-donate.js';
 import { initConnectors } from './connectors.js';
 import { initCrashReporter, registerCrashIpc } from './crash-reporter.js';
 import { attachDeepLinkWindow, extractDeepLink, handleDeepLink, initDeepLinks } from './deep-links.js';
@@ -252,7 +251,6 @@ app.whenReady().then(async () => {
   registerDownloadsIpc();
   registerWindowControls();
   registerAppSettingsIpc();
-  registerYoomoneyDonateIpc();
   registerCrashIpc();
 
   mainWindow = createMainWindow(launchedHidden());

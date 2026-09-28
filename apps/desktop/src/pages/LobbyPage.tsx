@@ -1,11 +1,13 @@
-import type { UnifiedTrack } from '@mss/shared';
-import { useMutation } from '@tanstack/react-query';
+import type { LobbyDto, LobbySummaryDto, UnifiedTrack } from '@mss/shared';
+import { useMutation, useQueryClient } from '@tanstack/react-query';
 import { Copy, DoorOpen, Radio, Users } from 'lucide-react';
 import { useEffect, useMemo, useState } from 'react';
+import { LobbyRoomList } from '@/components/lobby/LobbyRoomList';
 import { TrackList } from '@/components/tracks/TrackList';
 import { useNavigate, useParams, useSearchParams } from 'react-router-dom';
 import { toast } from 'sonner';
 import { Button } from '@/components/ui/button';
+import { Switch } from '@/components/ui/controls';
 import { Input } from '@/components/ui/input';
 import {
   acceptSuggestion,
@@ -16,10 +18,8 @@ import {
   rejectSuggestion,
   suggestTrack,
 } from '@/lib/lobby-api';
-import { lobbyPath, readActiveLobbyId } from '@/lib/lobby-route';
 import { isLobbyListenPaused, resumeLobbyListen } from '@/lib/lobby-listen';
-import { connectLobbySession, disconnectLobbySession, leaveCurrentLobby } from '@/lib/lobby-session';
-import { loadSession } from '@/lib/api';
+import { disconnectLobbySession, enterLobbySession, leaveCurrentLobby } from '@/lib/lobby-session';
 import { useLobbyStore } from '@/store/lobby-store';
 import { usePlayerStore } from '@/store/player-store';
 
@@ -37,19 +37,21 @@ export function LobbyPage() {
   const live = useLobbyStore((s) => s.live);
   const wsStatus = useLobbyStore((s) => s.wsStatus);
   const [joinCode, setJoinCode] = useState(search.get('code') ?? '');
+  const [publicRoom, setPublicRoom] = useState(true);
   const current = usePlayerStore((s) => s.current);
-  const rememberedId = readActiveLobbyId();
-  const routeLobbyId = id ?? lobby?.id ?? rememberedId ?? null;
+  const queryClient = useQueryClient();
 
-  useEffect(() => {
-    if (!routeLobbyId || id === routeLobbyId) return;
-    navigate(lobbyPath(routeLobbyId), { replace: true });
-  }, [id, routeLobbyId, navigate]);
+  const enterLobby = (dto: LobbyDto) => {
+    enterLobbySession(dto);
+    void queryClient.invalidateQueries({ queryKey: ['lobbies', 'active'] });
+    navigate(`/lobby/${dto.id}`, { replace: true });
+  };
 
   const createMut = useMutation({
-    mutationFn: () => createLobby({ title: 'Listening party' }),
+    mutationFn: () => createLobby({ title: 'Listening party', isPublic: publicRoom }),
     onSuccess: (dto) => {
-      connectLobbySession(dto, 'host');
+      enterLobbySession(dto);
+      void queryClient.invalidateQueries({ queryKey: ['lobbies', 'active'] });
       navigate(`/lobby/${dto.id}`, { replace: true });
     },
     onError: (e) => toast.error(e instanceof Error ? e.message : 'Ошибка'),
@@ -57,12 +59,14 @@ export function LobbyPage() {
 
   const joinMut = useMutation({
     mutationFn: (code: string) => joinLobby(code),
-    onSuccess: (dto) => {
-      const session = loadSession();
-      const r = session?.user.id === dto.hostUserId ? 'host' : 'guest';
-      connectLobbySession(dto, r);
-      navigate(`/lobby/${dto.id}`, { replace: true });
-    },
+    onSuccess: enterLobby,
+    onError: (e) => toast.error(e instanceof Error ? e.message : 'Не удалось войти'),
+  });
+
+  // Вход из списка: сервер по коду вернёт комнату и участнику, повторно его не добавляя.
+  const joinRoomMut = useMutation({
+    mutationFn: (room: LobbySummaryDto) => joinLobby(room.inviteCode),
+    onSuccess: enterLobby,
     onError: (e) => toast.error(e instanceof Error ? e.message : 'Не удалось войти'),
   });
 
@@ -83,16 +87,11 @@ export function LobbyPage() {
   }, [search, id, lobby]);
 
   useEffect(() => {
-    const lobbyId = id ?? routeLobbyId;
-    if (!lobbyId || lobby?.id === lobbyId) return;
-    void fetchLobby(lobbyId)
-      .then((dto) => {
-        const session = loadSession();
-        const r = session?.user.id === dto.hostUserId ? 'host' : 'guest';
-        connectLobbySession(dto, r);
-      })
+    if (!id || lobby?.id === id) return;
+    void fetchLobby(id)
+      .then((dto) => enterLobbySession(dto))
       .catch((e) => toast.error(e instanceof Error ? e.message : 'Лобби недоступно'));
-  }, [id, routeLobbyId, lobby?.id]);
+  }, [id, lobby?.id]);
 
   const queue = lobby?.queue.filter((q) => q.status !== 'rejected') ?? [];
   const suggestions = queue.filter((q) => q.status === 'suggested');
@@ -125,7 +124,7 @@ export function LobbyPage() {
     return () => window.clearInterval(id);
   }, [role, live]);
 
-  if (!lobby && !routeLobbyId) {
+  if (!id) {
     return (
       <div className="mx-auto max-w-lg space-y-6 pt-8">
         <h1 className="text-2xl font-semibold">Listening party</h1>
@@ -136,12 +135,30 @@ export function LobbyPage() {
         <Button className="w-full" onClick={() => createMut.mutate()} disabled={createMut.isPending}>
           <Radio size={16} className="mr-2" /> Создать лобби
         </Button>
+        <div className="flex items-center justify-between rounded-lg border border-border px-3 py-2">
+          <span className="text-sm">
+            Показывать в списке комнат
+            <span className="block text-xs text-muted">Иначе войти можно будет только по коду</span>
+          </span>
+          <Switch checked={publicRoom} onChange={setPublicRoom} label="Публичная комната" />
+        </div>
         <div className="flex gap-2">
           <Input placeholder="Код приглашения" value={joinCode} onChange={(e) => setJoinCode(e.target.value.toUpperCase())} />
           <Button variant="secondary" onClick={() => joinMut.mutate(joinCode)} disabled={!joinCode.trim() || joinMut.isPending}>
             Войти
           </Button>
         </div>
+
+        <LobbyRoomList
+          onJoin={(room) => {
+            if (lobby?.id === room.id) {
+              navigate(`/lobby/${room.id}`);
+              return;
+            }
+            joinRoomMut.mutate(room);
+          }}
+          joiningId={joinRoomMut.isPending ? (joinRoomMut.variables?.id ?? null) : null}
+        />
       </div>
     );
   }

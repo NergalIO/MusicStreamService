@@ -73,6 +73,10 @@ function inferRole(lobby: LobbyDto): LobbyMemberRole {
   return 'guest';
 }
 
+export function enterLobbySession(lobby: LobbyDto): void {
+  connectLobbySession(lobby, inferRole(lobby));
+}
+
 export function connectLobbySession(lobby: LobbyDto, role: LobbyMemberRole): void {
   disconnectLobbySession();
   useLobbyStore.getState().setLobby(lobby, role);

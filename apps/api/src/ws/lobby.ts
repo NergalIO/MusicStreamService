@@ -5,9 +5,10 @@ import {
   broadcastLobbyAudio,
   broadcastLobbyJson,
   isLobbyAudioMessage,
+  noteLobbyPong,
+  readAudioFrame,
   registerLobbySocket,
   sendLobbyError,
-  stripAudioPrefix,
   unregisterLobbySocket,
 } from '../lib/lobby-hub.js';
 import { isLobbyMember, loadLobbyDto } from '../lib/lobby-load.js';
@@ -58,12 +59,13 @@ export async function wsLobbyRoutes(app: FastifyInstance) {
         const buf = Buffer.isBuffer(raw) ? raw : Buffer.from(raw as ArrayBuffer);
         if (isLobbyAudioMessage(buf)) {
           if (role !== 'host') return;
-          broadcastLobbyAudio(lobbyId, userId, stripAudioPrefix(buf));
+          broadcastLobbyAudio(lobbyId, userId, readAudioFrame(buf));
           return;
         }
         try {
-          const msg = JSON.parse(buf.toString()) as { type?: string };
-          if (msg.type === 'ping') socket.send(JSON.stringify({ type: 'pong' }));
+          const msg = JSON.parse(buf.toString()) as { type?: string; t?: number };
+          if (msg.type === 'ping') socket.send(JSON.stringify({ type: 'pong', t: msg.t }));
+          else if (msg.type === 'pong') noteLobbyPong(lobbyId, userId, msg.t);
         } catch {
           /* ignore */
         }

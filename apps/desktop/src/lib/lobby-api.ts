@@ -1,4 +1,12 @@
-import type { LobbyDto, LobbyPlaybackState, LobbyQueueItemDto, LobbyWsEvent, UnifiedTrack } from '@mss/shared';
+import type {
+  LobbyDto,
+  LobbyListDto,
+  LobbyPlaybackState,
+  LobbyQueueItemDto,
+  LobbySummaryDto,
+  LobbyWsEvent,
+  UnifiedTrack,
+} from '@mss/shared';
 import { apiFetch, currentAccessToken } from '@/lib/api';
 import { getApiBaseUrl } from '@/lib/api-base';
 
@@ -18,7 +26,12 @@ export function lobbyWsUrl(lobbyId: string): string {
   return `${wsBase}/ws/lobby/${encodeURIComponent(lobbyId)}?token=${encodeURIComponent(token ?? '')}`;
 }
 
-export function createLobby(opts?: { title?: string; maxMembers?: number }): Promise<LobbyDto> {
+export function createLobby(opts?: {
+  title?: string;
+  maxMembers?: number;
+  /** Публичная комната попадает в список активных; приватная — только по коду. */
+  isPublic?: boolean;
+}): Promise<LobbyDto> {
   return apiFetch('/lobbies', {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
@@ -36,6 +49,28 @@ export function joinLobby(inviteCode: string): Promise<LobbyDto> {
 
 export function fetchLobby(id: string): Promise<LobbyDto> {
   return apiFetch(`/lobbies/${id}`);
+}
+
+export interface ActiveLobbies {
+  items: LobbySummaryDto[];
+  /** RTT клиент ↔ сервер за вычетом времени обработки запроса, мс. */
+  clientRttMs: number;
+}
+
+/**
+ * Список комнат плюс замер своего RTT: пинг до DJ — это путь через сервер,
+ * то есть свой RTT и RTT DJ в сумме.
+ */
+export async function fetchActiveLobbies(): Promise<ActiveLobbies> {
+  const startedAt = performance.now();
+  const dto = await apiFetch<LobbyListDto>('/lobbies');
+  const elapsed = performance.now() - startedAt;
+  return { items: dto.items, clientRttMs: Math.max(0, Math.round(elapsed - dto.tookMs)) };
+}
+
+export function lobbyPingToHostMs(lobby: LobbySummaryDto, clientRttMs: number): number | null {
+  if (lobby.hostRttMs === null) return null;
+  return clientRttMs + lobby.hostRttMs;
 }
 
 export function leaveLobby(id: string): Promise<{ ok: boolean }> {
@@ -89,6 +124,7 @@ export class LobbyWsClient {
   private lobbyId: string | null = null;
   private intentional = false;
   private attempts = 0;
+  private audioSeq = 0;
 
   constructor(onEvent: LobbyWsHandler, hooks?: { onOpen?: () => void }) {
     this.onEvent = onEvent;
@@ -121,6 +157,8 @@ export class LobbyWsClient {
     const ws = new WebSocket(lobbyWsUrl(lobbyId));
     ws.binaryType = 'arraybuffer';
     this.ws = ws;
+    // Нумерация с нуля: сервер по убыванию номера понимает, что поток начался заново.
+    this.audioSeq = 0;
 
     ws.onmessage = (ev) => {
       if (ev.data instanceof ArrayBuffer) {
@@ -132,6 +170,13 @@ export class LobbyWsClient {
       }
       try {
         const msg = JSON.parse(String(ev.data)) as LobbyWsEvent;
+        if (msg.type === 'ping') {
+          // Сервер мерит RTT участника: отвечаем сразу, метку возвращаем как есть.
+          if (this.ws?.readyState === WebSocket.OPEN) {
+            this.ws.send(JSON.stringify({ type: 'pong', t: msg.t }));
+          }
+          return;
+        }
         this.onEvent(msg);
       } catch {
         /* ignore */
@@ -160,11 +205,14 @@ export class LobbyWsClient {
     };
   }
 
+  /** Кадр эфира: [0x02][seq uint32 BE][WebM] — по номерам сервер считает потери до DJ. */
   sendAudioChunk(chunk: ArrayBuffer): void {
     if (this.ws?.readyState !== WebSocket.OPEN) return;
-    const prefixed = new Uint8Array(chunk.byteLength + 1);
-    prefixed[0] = 0x01;
-    prefixed.set(new Uint8Array(chunk), 1);
+    const prefixed = new Uint8Array(chunk.byteLength + 5);
+    prefixed[0] = 0x02;
+    new DataView(prefixed.buffer).setUint32(1, this.audioSeq, false);
+    this.audioSeq = (this.audioSeq + 1) >>> 0;
+    prefixed.set(new Uint8Array(chunk), 5);
     this.ws.send(prefixed.buffer);
   }
 

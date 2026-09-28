@@ -379,6 +379,33 @@ export interface LobbyDto {
   playback: LobbyPlaybackState;
 }
 
+/** Карточка комнаты в списке: без очереди и участников, зато с качеством связи до DJ. */
+export interface LobbySummaryDto {
+  id: string;
+  inviteCode: string;
+  title: string;
+  /** Сколько человек в комнате, включая DJ. */
+  listeners: number;
+  maxMembers: number;
+  isPublic: boolean;
+  isMember: boolean;
+  hostUserId: string;
+  hostDisplayName: string | null;
+  /** DJ держит сокет комнаты. */
+  hostOnline: boolean;
+  /** RTT DJ ↔ сервер, мс. null — DJ не в сети или ещё не ответил на ping. */
+  hostRttMs: number | null;
+  /** Потери кадров эфира на участке DJ → сервер, проценты. null — данных ещё мало. */
+  hostLossPct: number | null;
+  createdAt: string;
+}
+
+export interface LobbyListDto {
+  items: LobbySummaryDto[];
+  /** Время обработки запроса на сервере, мс: клиент вычитает его из своего RTT. */
+  tookMs: number;
+}
+
 export type LobbyWsEvent =
   | { type: 'lobby_state'; lobby: LobbyDto }
   | { type: 'member_join'; member: LobbyMemberDto }
@@ -388,5 +415,7 @@ export type LobbyWsEvent =
   | { type: 'playback'; playback: LobbyPlaybackState }
   | { type: 'suggestion_new'; item: LobbyQueueItemDto }
   | { type: 'lobby_closed' }
-  | { type: 'pong' }
+  /** Сервер измеряет RTT участника: `t` возвращается в `pong` без изменений. */
+  | { type: 'ping'; t?: number }
+  | { type: 'pong'; t?: number }
   | { type: 'error'; message: string };

@@ -1,7 +1,7 @@
 import { randomBytes } from 'node:crypto';
 import { and, asc, eq } from 'drizzle-orm';
 import type { FastifyInstance } from 'fastify';
-import type { LobbyPlaybackState, UnifiedTrack } from '@mss/shared';
+import type { LobbyListDto, LobbyPlaybackState, UnifiedTrack } from '@mss/shared';
 import {
   createLobbySchema,
   joinLobbySchema,
@@ -23,6 +23,7 @@ import {
   endLobby,
   findActiveLobbyByCode,
   isLobbyMember,
+  listActiveLobbySummaries,
   loadLobbyDto,
 } from '../lib/lobby-load.js';
 
@@ -51,6 +52,14 @@ async function requireHost(lobbyId: string, userId: string): Promise<void> {
 }
 
 export async function lobbyRoutes(app: FastifyInstance) {
+  app.get('/lobbies', async (req) => {
+    await app.authenticate(req);
+    const startedAt = process.hrtime.bigint();
+    const items = await listActiveLobbySummaries(req.userId!);
+    const tookMs = Number(process.hrtime.bigint() - startedAt) / 1e6;
+    return { items, tookMs: Math.round(tookMs * 10) / 10 } satisfies LobbyListDto;
+  });
+
   app.post('/lobbies', async (req, reply) => {
     await app.authenticate(req);
     const body = createLobbySchema.parse(req.body ?? {});

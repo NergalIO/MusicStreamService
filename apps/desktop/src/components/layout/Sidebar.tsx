@@ -22,10 +22,10 @@ import {
 import { createContext, useContext, useEffect, useMemo, useState } from 'react';
 import { NavLink, useLocation, useNavigate, useSearchParams } from 'react-router-dom';
 import { AppLogo } from '@/components/layout/AppLogo';
+import { SidebarLobbyRooms } from '@/components/lobby/SidebarLobbyRooms';
 import { clearSession, loadSession } from '@/lib/api';
-import { lobbyPath, readActiveLobbyId } from '@/lib/lobby-route';
+import { lobbyPath } from '@/lib/lobby-route';
 import { leaveCurrentLobby } from '@/lib/lobby-session';
-import { useLobbyStore } from '@/store/lobby-store';
 import { useYandexConnected } from '@/lib/connectors';
 import { playlistPath } from '@/lib/links';
 import { libraryPath, MSS_HOME, searchPath, SPOTIFY_HOME, SPOTIFY_WEB, VK_HOME, YANDEX_HOME } from '@/lib/service-routes';
@@ -241,7 +241,6 @@ function SidebarSearch() {
 }
 
 export function Sidebar() {
-  const activeLobbyId = useLobbyStore((s) => s.lobby?.id) ?? readActiveLobbyId();
   const navigate = useNavigate();
   const yandex = useYandexConnected();
   const radio = usePlayerStore((s) => s.radio);
@@ -287,7 +286,8 @@ export function Sidebar() {
             <Item to={libraryPath('media', 'playlists')} icon={ListMusic} label="Все плейлисты" />
             <Item to={libraryPath('media', 'uploads')} icon={Upload} label="Мои треки" />
             <Item to={libraryPath('media', 'downloads')} icon={CircleArrowDown} label="Скачанные" />
-            <Item to={lobbyPath(activeLobbyId)} icon={Radio} label="Listening party" />
+            <Item to={lobbyPath()} icon={Radio} label="Listening party" />
+            <SidebarLobbyRooms collapsed={collapsed} />
           </CollapsibleSection>
 
           <CollapsibleSection id="mss" title="MSS">

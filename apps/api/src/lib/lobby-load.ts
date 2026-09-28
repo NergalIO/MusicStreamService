@@ -1,5 +1,5 @@
-import { and, asc, eq, isNull } from 'drizzle-orm';
-import type { LobbyDto, LobbyMemberDto, LobbyQueueItemDto, UnifiedTrack } from '@mss/shared';
+import { and, asc, desc, eq, inArray, isNull, sql } from 'drizzle-orm';
+import type { LobbyDto, LobbyMemberDto, LobbyQueueItemDto, LobbySummaryDto, UnifiedTrack } from '@mss/shared';
 import { db } from '../db/client.js';
 import {
   listeningLobbies,
@@ -7,7 +7,7 @@ import {
   listeningLobbyQueue,
   type LobbyTrackSnapshot,
 } from '../db/schema.js';
-import { getLobbyPlayback } from './lobby-hub.js';
+import { getLobbyNetStats, getLobbyPlayback } from './lobby-hub.js';
 
 function toUnifiedTrack(t: LobbyTrackSnapshot): UnifiedTrack {
   return {
@@ -69,6 +69,76 @@ export async function loadLobbyDto(lobbyId: string): Promise<LobbyDto | null> {
     queue,
     playback,
   };
+}
+
+/**
+ * Активные комнаты для списка: публичные плюс те, где пользователь уже участник.
+ * Три запроса на весь список, без обращения к БД на каждую комнату.
+ */
+export async function listActiveLobbySummaries(userId: string, limit = 50): Promise<LobbySummaryDto[]> {
+  const rows = await db
+    .select({
+      id: listeningLobbies.id,
+      inviteCode: listeningLobbies.inviteCode,
+      title: listeningLobbies.title,
+      maxMembers: listeningLobbies.maxMembers,
+      isPublic: listeningLobbies.isPublic,
+      hostUserId: listeningLobbies.hostUserId,
+      createdAt: listeningLobbies.createdAt,
+      listeners: sql<number>`count(${listeningLobbyMembers.userId})::int`,
+    })
+    .from(listeningLobbies)
+    .leftJoin(listeningLobbyMembers, eq(listeningLobbyMembers.lobbyId, listeningLobbies.id))
+    .where(isNull(listeningLobbies.endedAt))
+    .groupBy(listeningLobbies.id)
+    .orderBy(desc(listeningLobbies.createdAt))
+    .limit(limit);
+  if (!rows.length) return [];
+
+  const myLobbyIds = new Set(
+    (
+      await db
+        .select({ lobbyId: listeningLobbyMembers.lobbyId })
+        .from(listeningLobbyMembers)
+        .where(eq(listeningLobbyMembers.userId, userId))
+    ).map((r) => r.lobbyId),
+  );
+
+  const visible = rows.filter((r) => r.isPublic || myLobbyIds.has(r.id));
+  if (!visible.length) return [];
+
+  const hosts = await db
+    .select({ lobbyId: listeningLobbyMembers.lobbyId, displayName: listeningLobbyMembers.displayName })
+    .from(listeningLobbyMembers)
+    .where(
+      and(
+        inArray(
+          listeningLobbyMembers.lobbyId,
+          visible.map((r) => r.id),
+        ),
+        eq(listeningLobbyMembers.role, 'host'),
+      ),
+    );
+  const hostNames = new Map(hosts.map((h) => [h.lobbyId, h.displayName]));
+
+  return visible.map((r) => {
+    const net = getLobbyNetStats(r.id);
+    return {
+      id: r.id,
+      inviteCode: r.inviteCode,
+      title: r.title,
+      listeners: r.listeners,
+      maxMembers: r.maxMembers,
+      isPublic: r.isPublic,
+      isMember: myLobbyIds.has(r.id),
+      hostUserId: r.hostUserId,
+      hostDisplayName: hostNames.get(r.id) ?? null,
+      hostOnline: net.hostOnline,
+      hostRttMs: net.hostRttMs,
+      hostLossPct: net.hostLossPct,
+      createdAt: r.createdAt.toISOString(),
+    } satisfies LobbySummaryDto;
+  });
 }
 
 export async function findActiveLobbyByCode(code: string) {
