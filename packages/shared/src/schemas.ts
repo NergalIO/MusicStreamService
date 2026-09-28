@@ -1,0 +1,115 @@
+import { z } from 'zod';
+
+export const registerSchema = z.object({
+  email: z.string().email(),
+  password: z.string().min(8),
+});
+
+export const loginSchema = z.object({
+  email: z.string().email(),
+  password: z.string().min(1),
+});
+
+export const createPlaylistSchema = z.object({
+  name: z.string().min(1).max(200),
+});
+
+const optionalText = (max: number) =>
+  z
+    .string()
+    .max(max)
+    .nullish()
+    .transform((v) => (v == null ? v : v.trim() || null));
+
+export const updatePlaylistSchema = z.object({
+  name: z.string().trim().min(1).max(200).optional(),
+  description: optionalText(2000),
+  author: optionalText(200),
+});
+
+export const addPlaylistTrackSchema = z.object({
+  trackId: z.string().uuid(),
+  position: z.number().int().min(0).optional(),
+});
+
+const artistRefSchema = z.object({ id: z.string().max(100), name: z.string().max(500) });
+
+/** Только метаданные: сервер MSS не получает ни токенов, ни ссылок на поток. */
+export const externalTrackSnapshotSchema = z.object({
+  title: z.string().min(1).max(500),
+  artist: z.string().max(500),
+  artists: z.array(artistRefSchema).max(20).optional(),
+  album: z.string().max(500).optional(),
+  albumId: z.string().max(100).optional(),
+  durationMs: z.number().int().min(0).optional(),
+  coverUrl: z.string().url().max(1000).optional(),
+  explicit: z.boolean().optional(),
+});
+
+export const playlistEntryInputSchema = z.union([
+  z.object({ trackId: z.string().uuid() }),
+  z.object({
+    source: z.enum(['yandex', 'spotify']),
+    externalId: z.string().min(1).max(100),
+    snapshot: externalTrackSnapshotSchema,
+  }),
+]);
+
+export const addPlaylistEntriesSchema = z.object({
+  items: z.array(playlistEntryInputSchema).min(1).max(5000),
+});
+
+export const reorderPlaylistSchema = z.object({
+  entryIds: z.array(z.string().uuid()).max(10000),
+});
+
+export const updateTrackSchema = z.object({
+  title: z.string().trim().min(1).max(500).optional(),
+  artist: z.string().trim().min(1).max(500).optional(),
+  album: optionalText(500),
+});
+
+export const registerTrackSchema = z.object({
+  contentHash: z.string().regex(/^[a-f0-9]{64}$/i, 'contentHash must be SHA-256 hex'),
+  title: z.string().trim().min(1).max(500),
+  artist: z.string().trim().min(1).max(500),
+  album: optionalText(500),
+  durationMs: z.number().int().min(0).optional(),
+  sizeBytes: z.number().int().min(1).max(500 * 1024 * 1024),
+  originalFilename: z.string().min(1).max(500),
+  loudnessLufs: z.number().min(-70).max(0).optional(),
+});
+
+export const listeningEventSchema = z.object({
+  clientEventId: z.string().uuid(),
+  source: z.enum(['local', 'yandex', 'spotify']),
+  trackId: z.string().min(1).max(100),
+  title: z.string().min(1).max(500),
+  artist: z.string().max(500),
+  artists: z.array(artistRefSchema).max(20).optional(),
+  album: z.string().max(500).optional(),
+  albumId: z.string().max(100).optional(),
+  coverUrl: z.string().max(1000).optional(),
+  durationMs: z.number().int().min(0).optional(),
+  playedMs: z.number().int().min(0),
+  completed: z.boolean(),
+  playedAt: z.string().datetime(),
+});
+
+export const listeningEventsSchema = z.object({
+  events: z.array(listeningEventSchema).min(1).max(500),
+});
+
+export const activatePromoSchema = z.object({
+  code: z.string().min(1),
+});
+
+export const deviceRegisterSchema = z.object({
+  deviceId: z.string().uuid(),
+  name: z.string().min(1).max(100),
+});
+
+export const adminSubscriptionSchema = z.object({
+  planCode: z.enum(['free', 'premium']),
+  days: z.number().int().min(1).max(3650),
+});

@@ -1,0 +1,15 @@
+[Unit]
+Description=MusicStreamService worker
+After=network-online.target docker.service mss-api.service
+Wants=network-online.target
+
+[Service]
+Type=simple
+WorkingDirectory=/opt/MusicStreamService
+EnvironmentFile=/opt/MusicStreamService/.env
+ExecStart=/usr/bin/env pnpm --filter @mss/worker start
+Restart=on-failure
+RestartSec=5
+
+[Install]
+WantedBy=multi-user.target

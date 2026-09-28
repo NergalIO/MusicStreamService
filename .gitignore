@@ -1,0 +1,59 @@
+# Dependencies
+node_modules/
+
+# Build output
+dist/
+out/
+*.tsbuildinfo
+
+# Secrets & environment (only .env.example belongs in git)
+.env
+.env.*
+!.env.example
+
+# TLS / signing keys
+*.pem
+*.key
+*.p12
+*.pfx
+*.jks
+*.keystore
+
+# Logs & caches
+*.log
+.turbo/
+coverage/
+
+# OS
+.DS_Store
+Thumbs.db
+
+# VPS auto-update (scripts/update-server.sh)
+.update.lock
+.update-stamp
+.update-stamp-*
+
+# User data & uploads (DB/volumes stay on server)
+data/*
+!data/releases/
+data/releases/*
+!data/releases/README.md
+!data/releases/.gitkeep
+tmp/
+
+# Desktop installers
+apps/desktop/release/
+
+# Android (local SDK path, build cache)
+apps/android/local.properties
+apps/android/.gradle/
+apps/android/**/build/
+apps/android/.cxx/
+apps/android/captures/
+
+# IDE (local only)
+.idea/
+*.iml
+
+# Editor / agent (local)
+.cursor/

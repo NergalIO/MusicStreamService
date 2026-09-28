@@ -1,0 +1,21 @@
+{
+  "name": "music-stream-service",
+  "private": true,
+  "scripts": {
+    "dev": "pnpm --parallel --filter @mss/api --filter @mss/worker --filter @mss/desktop dev",
+    "dev:api": "pnpm --filter @mss/api dev",
+    "dev:worker": "pnpm --filter @mss/worker dev",
+    "dev:desktop": "pnpm --filter @mss/desktop dev",
+    "dev:android": "cd apps/android && gradlew.bat :app:installDebug",
+    "build:android": "cd apps/android && gradlew.bat :app:assembleDebug",
+    "build": "pnpm -r build",
+    "db:migrate": "pnpm --filter @mss/api db:migrate",
+    "db:seed": "pnpm --filter @mss/api db:seed"
+  },
+  "engines": {
+    "node": ">=20"
+  },
+  "pnpm": {
+    "onlyBuiltDependencies": ["electron", "esbuild", "msgpackr-extract"]
+  }
+}

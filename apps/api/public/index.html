@@ -1,0 +1,54 @@
+<!DOCTYPE html>
+<html lang="ru">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <base href="{{BASE_HREF}}" />
+    <title>MusicStreamService</title>
+    <link rel="stylesheet" href="styles.css" />
+  </head>
+  <body>
+    <main class="page">
+      <header class="hero">
+        <p class="eyebrow">Desktop + Android</p>
+        <h1>MusicStreamService</h1>
+        <p class="lead">
+          Единая библиотека: локальные треки, Яндекс Музыка и Spotify, офлайн и синхронизация между устройствами.
+        </p>
+      </header>
+
+      <section class="features">
+        <article>
+          <h2>Один каталог</h2>
+          <p>Плейлисты, лайки и поиск в одном интерфейсе — без переключения между сервисами.</p>
+        </article>
+        <article>
+          <h2>Стриминг и офлайн</h2>
+          <p>Слушайте онлайн или скачивайте треки для прослушивания без сети.</p>
+        </article>
+        <article>
+          <h2>Presence</h2>
+          <p>Статус «слушает» и relay-треки между вашими клиентами на одном аккаунте.</p>
+        </article>
+      </section>
+
+      <section class="downloads" aria-labelledby="dl-title">
+        <h2 id="dl-title">Скачать</h2>
+        <div class="buttons">
+          <a id="btn-windows" class="btn btn-primary" href="downloads/MusicStreamService-setup.exe" hidden>
+            Скачать для Windows
+          </a>
+          <a id="btn-android" class="btn btn-primary" href="downloads/mss-android.apk" hidden>
+            Скачать для Android
+          </a>
+        </div>
+        <p id="dl-hint" class="hint">Проверяем доступность сборок…</p>
+      </section>
+
+      <footer class="foot">
+        <p>API: <code>{{BASE_PATH}}</code> или корень сервиса на вашем домене.</p>
+      </footer>
+    </main>
+    <script src="landing.js"></script>
+  </body>
+</html>

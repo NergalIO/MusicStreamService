@@ -1,0 +1,89 @@
+{
+  "name": "@mss/desktop",
+  "version": "0.1.0",
+  "type": "module",
+  "main": "./out/main/index.js",
+  "scripts": {
+    "dev": "electron-vite dev",
+    "build": "electron-vite build",
+    "preview": "electron-vite preview",
+    "dist": "electron-vite build && electron-builder",
+    "icons": "node scripts/build-icons.mjs"
+  },
+  "dependencies": {
+    "@fontsource-variable/inter": "^5.3.0",
+    "@mss/audio-engine": "workspace:*",
+    "@mss/mss-format": "workspace:*",
+    "@mss/shared": "workspace:*",
+    "@mss/stream-connectors": "workspace:*",
+    "@tanstack/react-query": "^5.62.8",
+    "@tanstack/react-virtual": "^3.14.13",
+    "@xhayper/discord-rpc": "^1.2.0",
+    "clsx": "^2.1.1",
+    "dotenv": "^16.4.7",
+    "electron-log": "^5.4.4",
+    "electron-updater": "^6.8.9",
+    "framer-motion": "^11.15.0",
+    "lucide-react": "^0.469.0",
+    "react": "^18.3.1",
+    "react-dom": "^18.3.1",
+    "react-router-dom": "^7.1.1",
+    "sonner": "^1.7.1",
+    "ws": "^8.18.0",
+    "tailwind-merge": "^2.6.0",
+    "zustand": "^5.0.2"
+  },
+  "devDependencies": {
+    "@types/react": "^18.3.18",
+    "@types/react-dom": "^18.3.5",
+    "@types/ws": "^8.5.13",
+    "@vitejs/plugin-react": "^4.3.4",
+    "autoprefixer": "^10.4.20",
+    "electron": "^33.2.1",
+    "electron-builder": "^25.1.8",
+    "electron-vite": "^2.3.0",
+    "png-to-ico": "^3.0.2",
+    "postcss": "^8.4.49",
+    "sharp": "^0.35.5",
+    "tailwindcss": "^3.4.17",
+    "typescript": "^5.7.2",
+    "vite": "^5.4.11"
+  },
+  "build": {
+    "appId": "com.mss.desktop",
+    "productName": "MusicStreamService",
+    "directories": {
+      "output": "release",
+      "buildResources": "resources"
+    },
+    "files": [
+      "out/**/*",
+      "resources/**/*"
+    ],
+    "icon": "resources/icon.png",
+    "win": {
+      "target": "nsis",
+      "icon": "resources/icon.ico"
+    },
+    "nsis": {
+      "oneClick": false,
+      "allowToChangeInstallationDirectory": true,
+      "installerIcon": "resources/icon.ico",
+      "uninstallerIcon": "resources/icon.ico",
+      "installerHeaderIcon": "resources/icon.ico"
+    },
+    "protocols": [
+      {
+        "name": "MusicStreamService",
+        "schemes": [
+          "mss"
+        ]
+      }
+    ],
+    "publish": {
+      "provider": "github",
+      "owner": "mss",
+      "repo": "MusicStreamService"
+    }
+  }
+}

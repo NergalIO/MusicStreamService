@@ -1,0 +1,224 @@
+@tailwind base;
+@tailwind components;
+@tailwind utilities;
+
+:root,
+.theme-dark {
+  --background: 240 6% 7%;
+  --sidebar: 240 5% 9%;
+  --card: 240 5% 11%;
+  --elevated: 240 5% 15%;
+  --foreground: 0 0% 97%;
+  --muted: 240 4% 60%;
+  --border: 240 5% 17%;
+  --primary-foreground: 0 0% 100%;
+  --danger: 354 85% 60%;
+  color-scheme: dark;
+}
+
+:root {
+  --primary: 262 83% 66%;
+  --radius: 0.625rem;
+}
+
+:root.light {
+  --background: 240 10% 97%;
+  --sidebar: 240 8% 94%;
+  --card: 0 0% 100%;
+  --elevated: 0 0% 100%;
+  --foreground: 240 10% 9%;
+  --muted: 240 4% 40%;
+  --border: 240 6% 87%;
+  --primary-foreground: 0 0% 100%;
+  --danger: 354 72% 48%;
+  color-scheme: light;
+}
+@layer base {
+  html,
+  body,
+  #root {
+    height: 100%;
+  }
+
+  body {
+    @apply bg-background font-sans text-foreground antialiased;
+    font-feature-settings: 'cv11', 'ss01';
+    -webkit-font-smoothing: antialiased;
+  }
+
+  ::selection {
+    @apply bg-primary/40;
+  }
+
+  :focus-visible {
+    @apply outline-none ring-2 ring-primary/70 ring-offset-0;
+  }
+
+  ::-webkit-scrollbar {
+    width: 10px;
+    height: 10px;
+  }
+  ::-webkit-scrollbar-track {
+    background: transparent;
+  }
+  ::-webkit-scrollbar-thumb {
+    background: hsl(var(--foreground) / 0.14);
+    border: 3px solid transparent;
+    border-radius: 999px;
+    background-clip: padding-box;
+  }
+  ::-webkit-scrollbar-thumb:hover {
+    background: hsl(var(--foreground) / 0.24);
+    background-clip: padding-box;
+  }
+}
+
+@layer components {
+  /** Тёмная поверхность поверх основного UI (Now Playing, очередь в оверлее). */
+  .overlay-surface {
+    --foreground: 0 0% 97%;
+    --muted: 0 0% 62%;
+    --background: 0 0% 4%;
+    --border: 0 0% 100% / 0.12;
+    color: hsl(var(--foreground));
+  }
+
+  .glass {
+    @apply border-foreground/[0.06] bg-elevated/70 backdrop-blur-2xl backdrop-saturate-150;
+  }
+
+  .range {
+    --value: 0%;
+    @apply h-1 w-full cursor-pointer appearance-none rounded-full bg-transparent;
+  }
+  .range::-webkit-slider-runnable-track {
+    height: 4px;
+    border-radius: 999px;
+    background: linear-gradient(
+      to right,
+      hsl(var(--foreground) / 0.85) var(--value),
+      hsl(var(--foreground) / 0.18) var(--value)
+    );
+  }
+  .range::-webkit-slider-thumb {
+    -webkit-appearance: none;
+    margin-top: -4px;
+    height: 12px;
+    width: 12px;
+    border-radius: 999px;
+    background: hsl(var(--foreground));
+    opacity: 0;
+    transition: opacity 120ms;
+  }
+  .range:hover::-webkit-slider-thumb,
+  .range:active::-webkit-slider-thumb {
+    opacity: 1;
+  }
+  .range:hover::-webkit-slider-runnable-track {
+    background: linear-gradient(
+      to right,
+      hsl(var(--primary)) var(--value),
+      hsl(var(--foreground) / 0.22) var(--value)
+    );
+  }
+}
+
+@layer components {
+  .wave-audio-root {
+    --wave-bass: 0;
+    --wave-mid: 0;
+    --wave-treble: 0;
+    --wave-pulse: 0;
+    --wave-energy: 0;
+  }
+
+  .wave-blob {
+    transition:
+      transform 65ms ease-out,
+      opacity 100ms ease-out,
+      filter 100ms ease-out;
+    transform: scale(calc(1 + var(--wave-pulse) * 0.5 + var(--wave-bass) * 0.28));
+    opacity: calc(0.62 + var(--wave-energy) * 0.38 + var(--wave-pulse) * 0.22);
+    filter: saturate(calc(1.25 + var(--wave-energy) * 0.95)) brightness(calc(0.92 + var(--wave-pulse) * 0.45));
+  }
+
+  .wave-blob-mid {
+    transform: scale(calc(1 + var(--wave-pulse) * 0.38 + var(--wave-mid) * 0.32));
+  }
+
+  .wave-blob-high {
+    transform: scale(calc(1 + var(--wave-pulse) * 0.28 + var(--wave-treble) * 0.35));
+  }
+
+  .wave-orb-core {
+    transform: scale(calc(1 + var(--wave-pulse) * 0.12));
+    transition: transform 65ms ease-out;
+  }
+
+  .wave-drift-a {
+    animation: wave-drift-a 20s ease-in-out infinite;
+  }
+  .wave-drift-b {
+    animation: wave-drift-b 15s ease-in-out infinite;
+  }
+  .wave-drift-c {
+    animation: wave-drift-c 17s ease-in-out infinite;
+  }
+
+  @keyframes wave-drift-a {
+    0%,
+    100% {
+      translate: 0 0;
+    }
+    50% {
+      translate: 6% 5%;
+    }
+  }
+  @keyframes wave-drift-b {
+    0%,
+    100% {
+      translate: 0 0;
+    }
+    50% {
+      translate: -5% 4%;
+    }
+  }
+  @keyframes wave-drift-c {
+    0%,
+    100% {
+      translate: 0 0;
+    }
+    50% {
+      translate: 4% -6%;
+    }
+  }
+
+  @media (prefers-reduced-motion: reduce) {
+    .wave-drift-a,
+    .wave-drift-b,
+    .wave-drift-c {
+      animation: none;
+    }
+    .wave-blob,
+    .wave-blob-mid,
+    .wave-blob-high,
+    .wave-orb-core {
+      transform: none;
+      transition: none;
+    }
+  }
+}
+
+@layer utilities {
+  .no-scrollbar::-webkit-scrollbar {
+    display: none;
+  }
+  .drag-region {
+    -webkit-app-region: drag;
+    user-select: none;
+  }
+  .no-drag,
+  .drag-region :is(button, a, input, select, textarea, [role='slider'], [role='button']) {
+    -webkit-app-region: no-drag;
+  }
+}

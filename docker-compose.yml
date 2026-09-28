@@ -1,0 +1,40 @@
+# По умолчанию только Postgres + Redis (лёгкие образы).
+# Файлы треков: STORAGE_BACKEND=local (см. .env) — MinIO не нужен.
+#
+# MinIO (опционально): docker compose --profile s3 up -d
+# Образы minio/minio на Docker Hub часто недоступны или качаются очень долго.
+
+services:
+  postgres:
+    image: postgres:16-alpine
+    environment:
+      POSTGRES_USER: mss
+      POSTGRES_PASSWORD: mss
+      POSTGRES_DB: mss
+    ports:
+      - '5432:5432'
+    volumes:
+      - pgdata:/var/lib/postgresql/data
+
+  redis:
+    image: redis:7-alpine
+    ports:
+      - '6379:6379'
+
+  minio:
+    profiles: ['s3']
+    # У вас уже успешно тянется elestio/minio (официальный minio/minio на Hub часто недоступен)
+    image: elestio/minio:latest
+    command: server /data --console-address ":9001"
+    environment:
+      MINIO_ROOT_USER: minio
+      MINIO_ROOT_PASSWORD: minio12345
+    ports:
+      - '9000:9000'
+      - '9001:9001'
+    volumes:
+      - miniodata:/data
+
+volumes:
+  pgdata:
+  miniodata:
