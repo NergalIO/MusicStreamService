@@ -1,5 +1,5 @@
 import dotenv from 'dotenv';
-import { app, BrowserWindow, ipcMain, shell } from 'electron';
+import { app, BrowserWindow, ipcMain, session, shell } from 'electron';
 import { repairChromiumDiskCache } from './cache-repair.js';
 import { randomUUID } from 'node:crypto';
 import fs from 'node:fs';
@@ -48,7 +48,7 @@ import {
   saveOffline,
 } from './offline-store.js';
 import { initLocalTracks, registerLocalTracksIpc } from './local-tracks-ipc.js';
-import { handleRendererProtocol, registerRendererScheme, rendererLoadUrl } from './renderer-protocol.js';
+import { ensureRendererServer, rendererPageUrl } from './renderer-server.js';
 import { fileStreamUrl, handleStreamProtocol, registerStreamScheme } from './stream-protocol.js';
 import { loadBounds, persistBounds } from './window-bounds.js';
 import { attachWindowState, registerWindowControls } from './window-controls.js';
@@ -56,7 +56,6 @@ import { attachWindowState, registerWindowControls } from './window-controls.js'
 initLogging();
 initCrashReporter();
 registerStreamScheme();
-registerRendererScheme();
 
 let mainWindow: BrowserWindow | null = null;
 
@@ -111,7 +110,7 @@ function createRendererWindow(
   if (process.env.ELECTRON_RENDERER_URL) {
     win.loadURL(`${process.env.ELECTRON_RENDERER_URL}${search}`);
   } else {
-    win.loadURL(rendererLoadUrl(query));
+    win.loadURL(rendererPageUrl(query));
   }
   return win;
 }
@@ -197,7 +196,11 @@ app.whenReady().then(async () => {
   await initLocalTracks();
   initConnectors();
   handleStreamProtocol();
-  handleRendererProtocol();
+  await ensureRendererServer();
+
+  session.defaultSession.setPermissionRequestHandler((_wc, permission, callback) => {
+    callback(permission === 'media' || permission === 'autoplay');
+  });
 
   registerAppIpc();
   registerLocalTracksIpc();

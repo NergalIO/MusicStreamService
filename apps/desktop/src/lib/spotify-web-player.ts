@@ -40,6 +40,7 @@ interface SpotifyPlayerInstance {
 
 declare global {
   interface Window {
+    onSpotifyWebPlaybackSDKReady?: () => void;
     Spotify?: {
       Player: new (options: {
         name: string;
@@ -66,24 +67,72 @@ async function discoverDeviceId(token: string): Promise<string | null> {
   });
   if (!res.ok) return null;
   const data = (await res.json()) as { devices?: { id: string; name: string }[] };
-  const device = data.devices?.find((d) => d.name === PLAYER_NAME);
+  const device =
+    data.devices?.find((d) => d.name === PLAYER_NAME) ??
+    data.devices?.find((d) => d.name.toLowerCase() === PLAYER_NAME.toLowerCase());
   return device?.id ?? null;
 }
 
+function sdkReady(): boolean {
+  return !!window.Spotify?.Player;
+}
+
 function loadSdk(): Promise<void> {
-  if (window.Spotify) return Promise.resolve();
+  if (sdkReady()) return Promise.resolve();
   return new Promise((resolve, reject) => {
+    const finish = () => (sdkReady() ? resolve() : reject(new Error('Spotify SDK не инициализировался')));
+    const timeout = setTimeout(
+      () => reject(new Error('Таймаут загрузки Spotify Web Playback SDK — проверьте интернет')),
+      30_000,
+    );
+    const prevReady = window.onSpotifyWebPlaybackSDKReady;
+    window.onSpotifyWebPlaybackSDKReady = () => {
+      prevReady?.();
+      clearTimeout(timeout);
+      finish();
+    };
+
     const existing = document.querySelector(`script[src="${SDK_SRC}"]`);
     if (existing) {
-      existing.addEventListener('load', () => resolve(), { once: true });
-      existing.addEventListener('error', () => reject(new Error('Spotify SDK')), { once: true });
+      if (sdkReady()) {
+        clearTimeout(timeout);
+        resolve();
+        return;
+      }
+      existing.addEventListener(
+        'load',
+        () => {
+          if (sdkReady()) {
+            clearTimeout(timeout);
+            resolve();
+          }
+        },
+        { once: true },
+      );
+      existing.addEventListener(
+        'error',
+        () => {
+          clearTimeout(timeout);
+          reject(new Error('Не удалось загрузить Spotify Web Playback SDK'));
+        },
+        { once: true },
+      );
       return;
     }
+
     const script = document.createElement('script');
     script.src = SDK_SRC;
     script.async = true;
-    script.onload = () => resolve();
-    script.onerror = () => reject(new Error('Не удалось загрузить Spotify Web Playback SDK'));
+    script.onload = () => {
+      if (sdkReady()) {
+        clearTimeout(timeout);
+        resolve();
+      }
+    };
+    script.onerror = () => {
+      clearTimeout(timeout);
+      reject(new Error('Не удалось загрузить Spotify Web Playback SDK'));
+    };
     document.head.appendChild(script);
   });
 }
@@ -173,9 +222,10 @@ class SpotifyWebPlayer {
     if (this.player && this.deviceId) return this.player;
     if (!this.initPromise) {
       this.initPromise = (async () => {
+        let sdkError: string | null = null;
         try {
           await loadSdk();
-          if (!window.Spotify) throw new Error('Spotify SDK недоступен');
+          if (!window.Spotify?.Player) throw new Error('Spotify SDK недоступен');
           const player = new window.Spotify.Player({
             name: PLAYER_NAME,
             volume: 0.85,
@@ -192,12 +242,16 @@ class SpotifyWebPlayer {
             this.deviceId = null;
           });
           player.addListener('player_state_changed', (state) => this.handleState(state as SpotifyPlaybackState | null));
-          player.addListener('authentication_error', () => this.emit('error'));
-          player.addListener('account_error', () => this.emit('error'));
-          player.addListener('playback_error', () => this.emit('error'));
-          player.addListener('initialization_error', () => this.emit('error'));
+          const noteError = (msg: unknown) => {
+            sdkError = typeof msg === 'string' ? msg : (msg as { message?: string })?.message ?? 'Spotify SDK error';
+          };
+          player.addListener('authentication_error', noteError);
+          player.addListener('account_error', noteError);
+          player.addListener('playback_error', noteError);
+          player.addListener('initialization_error', noteError);
 
           const connected = await player.connect();
+          if (sdkError) throw new Error(String(sdkError));
           if (!connected) {
             throw new Error(
               'Spotify Web Playback не подключился. Нужен Premium и повторный вход в Spotify в Настройках (scope streaming).',
@@ -277,9 +331,19 @@ class SpotifyWebPlayer {
     if (!res.ok && res.status !== 204) {
       const body = await res.text().catch(() => '');
       if (res.status === 403 && /premium/i.test(body)) {
-        throw new Error('Для полных треков Spotify нужен Premium');
+        throw new Error('Для полных треков Spotify нужен Premium на аккаунте, которым вы слушаете');
       }
-      throw new Error(body.trim() || `Spotify не начал воспроизведение (${res.status})`);
+      if (res.status === 401) {
+        throw new Error('Сессия Spotify истекла — отключите и подключите Spotify в Настройках');
+      }
+      let detail = body.trim();
+      try {
+        const j = JSON.parse(body) as { error?: { message?: string } };
+        detail = j.error?.message ?? detail;
+      } catch {
+        /* raw body */
+      }
+      throw new Error(detail || `Spotify не начал воспроизведение (${res.status})`);
     }
 
     this.activeUri = uri;
