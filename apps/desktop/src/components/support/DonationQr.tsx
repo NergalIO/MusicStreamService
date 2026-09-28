@@ -3,7 +3,7 @@ import { Button } from '@/components/ui/button';
 import { cn } from '@/lib/utils';
 
 const YOOMONEY_DONATE_URL =
-  'https://yoomoney.ru/transfer/quickpay?requestId=353731333231393931355f30316633383565633834343831343433383138316637616330336332313365363531633162323166';
+  'https://yoomoney.ru/quickpay/fundraise/widget?billNumber=1KJ0576C9CG.260928';
 
 export function DonationQr({ className }: { className?: string }) {
   const openDonate = () => {
