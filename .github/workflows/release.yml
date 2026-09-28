@@ -40,51 +40,16 @@ jobs:
           name: windows-installer
           path: apps/desktop/release/MusicStreamService-setup.exe
 
-  android-apk:
-    runs-on: ubuntu-latest
-    defaults:
-      run:
-        working-directory: apps/android
-    steps:
-      - uses: actions/checkout@v4
-      - uses: actions/setup-node@v4
-        with:
-          node-version: '20'
-      - name: Sync version from tag
-        run: node scripts/sync-version-from-tag.cjs "${{ github.ref_name }}"
-        working-directory: ${{ github.workspace }}
-      - uses: actions/setup-java@v5
-        with:
-          distribution: temurin
-          java-version: '21'
-          cache: gradle
-      - name: Setup Android SDK
-        uses: android-actions/setup-android@v4
-        with:
-          packages: 'platform-tools platforms;android-35 build-tools;35.0.0'
-      - name: Assemble debug APK
-        run: chmod +x gradlew && ./gradlew :app:assembleDebug --no-daemon
-      - name: Rename APK
-        run: cp app/build/outputs/apk/debug/app-debug.apk "${{ runner.temp }}/mss-android.apk"
-      - uses: actions/upload-artifact@v4
-        with:
-          name: android-apk
-          path: ${{ runner.temp }}/mss-android.apk
-
   release:
-    needs: [windows-exe, android-apk]
+    needs: [windows-exe]
     runs-on: ubuntu-latest
     steps:
       - uses: actions/download-artifact@v4
         with:
           path: dist
       - name: Flatten artifacts
-        run: |
-          mv dist/windows-installer/MusicStreamService-setup.exe dist/
-          mv dist/android-apk/mss-android.apk dist/
+        run: mv dist/windows-installer/MusicStreamService-setup.exe dist/
       - uses: softprops/action-gh-release@v2
         with:
-          files: |
-            dist/MusicStreamService-setup.exe
-            dist/mss-android.apk
+          files: dist/MusicStreamService-setup.exe
           generate_release_notes: true

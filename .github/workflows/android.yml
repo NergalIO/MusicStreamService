@@ -1,14 +1,9 @@
+# Temporarily disabled — release builds Windows EXE only (see release.yml).
+# Re-enable push/pull_request triggers when Android CI is needed again.
 name: Android
 
 on:
-  push:
-    paths:
-      - 'apps/android/**'
-      - '.github/workflows/android.yml'
-  pull_request:
-    paths:
-      - 'apps/android/**'
-      - '.github/workflows/android.yml'
+  workflow_dispatch:
 
 jobs:
   assemble:
