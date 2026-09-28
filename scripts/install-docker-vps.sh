@@ -16,7 +16,7 @@
 #
 set -euo pipefail
 
-MSS_INSTALL_SCRIPT_VERSION=4
+MSS_INSTALL_SCRIPT_VERSION=5
 
 MSS_REPO="${MSS_REPO:-https://github.com/NergalIO/MusicStreamService.git}"
 MSS_INSTALL_DIR="${MSS_INSTALL_DIR:-/opt/MusicStreamService}"
@@ -27,7 +27,7 @@ COMPOSE_FILES=(-f docker-compose.yml -f docker-compose.app.yml)
 ROOT=""
 CREDENTIALS_FILE=""
 
-log() { echo "[install-docker] $*"; }
+log() { echo "[install-docker] $*" >&2; }
 warn() { echo "[install-docker] WARN: $*" >&2; }
 
 need_root_hint() {
