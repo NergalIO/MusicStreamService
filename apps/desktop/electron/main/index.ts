@@ -7,6 +7,25 @@ import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
+
+function loadDotenvFiles(): void {
+  const candidates = [
+    path.resolve(__dirname, '../../../../.env'),
+    path.resolve(__dirname, '../../../.env'),
+    path.join(path.dirname(process.execPath), '.env'),
+  ];
+  if (!app.isPackaged) {
+    candidates.push(path.resolve(app.getAppPath(), '../../.env'));
+    candidates.push(path.resolve(app.getAppPath(), '../../../.env'));
+  }
+  try {
+    candidates.push(path.join(app.getPath('userData'), '.env'));
+  } catch {
+    /* before ready */
+  }
+  for (const p of candidates) dotenv.config({ path: p });
+}
+
 dotenv.config({ path: path.resolve(__dirname, '../../../../.env') });
 dotenv.config({ path: path.resolve(__dirname, '../../../.env') });
 
@@ -170,6 +189,7 @@ else {
 
 app.whenReady().then(async () => {
   if (!gotLock) return;
+  loadDotenvFiles();
   await repairChromiumDiskCache();
   initOfflineStore();
   await initLocalTracks();

@@ -42,7 +42,11 @@ app.setErrorHandler((err: Error, _req, reply) => {
 });
 
 const registerApi = async (scoped: FastifyInstance) => {
-  scoped.get('/health', async () => ({ ok: true, basePath: config.basePath || '/' }));
+  scoped.get('/health', async () => ({
+    ok: true,
+    version: config.appVersion,
+    basePath: config.basePath || '/',
+  }));
 
   await scoped.register(authRoutes);
   await scoped.register(trackRoutes);

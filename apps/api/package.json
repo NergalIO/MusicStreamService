@@ -27,6 +27,7 @@
     "fastify-plugin": "^5.0.1",
     "ioredis": "^5.4.2",
     "music-metadata": "^10.6.4",
+    "nodemailer": "^6.10.0",
     "pg": "^8.13.1",
     "uuid": "^11.0.3",
     "ws": "^8.18.0",
@@ -34,6 +35,7 @@
   },
   "devDependencies": {
     "@types/bcryptjs": "^2.4.6",
+    "@types/nodemailer": "^6.4.17",
     "@types/node": "^22.10.2",
     "@types/pg": "^8.11.10",
     "@types/ws": "^8.5.13",

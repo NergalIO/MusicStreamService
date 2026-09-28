@@ -10,6 +10,16 @@ export const loginSchema = z.object({
   password: z.string().min(1),
 });
 
+export const verifyEmailSchema = z.object({
+  email: z.string().email(),
+  code: z.string().regex(/^\d{6}$/, 'Код — 6 цифр'),
+});
+
+export const resendVerificationSchema = z.object({
+  email: z.string().email(),
+  password: z.string().min(1),
+});
+
 export const createPlaylistSchema = z.object({
   name: z.string().min(1).max(200),
 });

@@ -2,6 +2,7 @@ package com.mss.core.network
 
 import com.mss.core.datastore.MssPreferences
 import com.mss.core.model.AuthSession
+import com.mss.core.model.RegisterPending
 import com.mss.core.model.ListeningStats
 import com.mss.core.model.PlaylistDto
 import com.mss.core.model.PlaylistsResponse
@@ -50,22 +51,50 @@ class MssApiClient @Inject constructor(
             contentType(ContentType.Application.Json)
             setBody(LoginBody(email, password))
         }
-        if (!res.status.isSuccess()) throw ApiException(res.bodyAsText())
-        val session = res.body<AuthSession>()
+        val text = res.bodyAsText()
+        if (res.status.value == 403) {
+            val err = runCatching { json.decodeFromString<AuthErrorBody>(text) }.getOrNull()
+            if (err?.code == "EMAIL_NOT_VERIFIED") {
+                throw EmailNotVerifiedException(err.email ?: email, err.message ?: "Подтвердите email")
+            }
+        }
+        if (!res.status.isSuccess()) throw ApiException(text)
+        val session = json.decodeFromString<AuthSession>(text)
         preferences.saveSession(session)
         return session
     }
 
-    suspend fun register(email: String, password: String): AuthSession {
+    suspend fun register(email: String, password: String): RegisterPending {
         val base = apiBase()
         val res = http.post("$base/auth/register") {
             contentType(ContentType.Application.Json)
             setBody(LoginBody(email, password))
         }
-        if (!res.status.isSuccess()) throw ApiException(res.bodyAsText())
-        val session = res.body<AuthSession>()
+        val text = res.bodyAsText()
+        if (!res.status.isSuccess()) throw ApiException(text)
+        return json.decodeFromString<RegisterPending>(text)
+    }
+
+    suspend fun verifyEmail(email: String, code: String): AuthSession {
+        val base = apiBase()
+        val res = http.post("$base/auth/verify-email") {
+            contentType(ContentType.Application.Json)
+            setBody(VerifyEmailBody(email, code))
+        }
+        val text = res.bodyAsText()
+        if (!res.status.isSuccess()) throw ApiException(text)
+        val session = json.decodeFromString<AuthSession>(text)
         preferences.saveSession(session)
         return session
+    }
+
+    suspend fun resendVerification(email: String, password: String) {
+        val base = apiBase()
+        val res = http.post("$base/auth/resend-verification") {
+            contentType(ContentType.Application.Json)
+            setBody(LoginBody(email, password))
+        }
+        if (!res.status.isSuccess()) throw ApiException(res.bodyAsText())
     }
 
     suspend fun refreshAccessToken(): Boolean = refreshMutex.withLock {
@@ -183,6 +212,16 @@ class MssApiClient @Inject constructor(
     private data class LoginBody(val email: String, val password: String)
 
     @Serializable
+    private data class VerifyEmailBody(val email: String, val code: String)
+
+    @Serializable
+    private data class AuthErrorBody(
+        val code: String? = null,
+        val email: String? = null,
+        val message: String? = null,
+    )
+
+    @Serializable
     private data class RefreshBody(val refreshToken: String)
 
     @Serializable
@@ -204,3 +243,5 @@ class MssApiClient @Inject constructor(
 }
 
 class ApiException(message: String) : Exception(message)
+
+class EmailNotVerifiedException(val email: String, message: String) : Exception(message)

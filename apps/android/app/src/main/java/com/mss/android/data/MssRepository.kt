@@ -10,6 +10,7 @@ import com.mss.core.model.UnifiedTrack
 import com.mss.core.model.UserSubscriptionDto
 import com.mss.core.model.toUnifiedPlaylist
 import com.mss.core.model.toUnifiedTrack
+import com.mss.core.model.RegisterPending
 import com.mss.core.network.MssApiClient
 import com.mss.core.network.PresenceClient
 import javax.inject.Inject
@@ -31,11 +32,15 @@ class MssRepository @Inject constructor(
         return s
     }
 
-    suspend fun register(email: String, password: String): AuthSession {
-        val s = api.register(email, password)
+    suspend fun register(email: String, password: String): RegisterPending = api.register(email, password)
+
+    suspend fun verifyEmail(email: String, code: String): AuthSession {
+        val s = api.verifyEmail(email, code)
         presence.connect(s.accessToken)
         return s
     }
+
+    suspend fun resendVerification(email: String, password: String) = api.resendVerification(email, password)
 
     suspend fun logout() {
         presence.disconnect()

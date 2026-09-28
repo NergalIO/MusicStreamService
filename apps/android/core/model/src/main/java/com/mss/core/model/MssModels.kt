@@ -21,6 +21,12 @@ data class AuthSession(
 data class AuthUser(val id: String, val email: String)
 
 @Serializable
+data class RegisterPending(
+    val needsVerification: Boolean = true,
+    val email: String,
+)
+
+@Serializable
 data class RefreshResponse(val accessToken: String)
 
 @Serializable

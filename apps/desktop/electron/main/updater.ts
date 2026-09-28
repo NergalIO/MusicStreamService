@@ -1,4 +1,4 @@
-import { app, BrowserWindow, ipcMain, shell } from 'electron';
+import { app, BrowserWindow, ipcMain } from 'electron';
 import fs from 'node:fs';
 import https from 'node:https';
 import path from 'node:path';
@@ -157,9 +157,21 @@ export function initUpdater(getMainWindow: () => BrowserWindow | null): void {
     if (bootstrap) {
       spawn(
         'powershell',
-        ['-NoProfile', '-ExecutionPolicy', 'Bypass', '-File', bootstrap, '-Update', '-RunInstaller'],
-        { detached: true, stdio: 'ignore' },
+        [
+          '-NoProfile',
+          '-ExecutionPolicy',
+          'Bypass',
+          '-WindowStyle',
+          'Hidden',
+          '-File',
+          bootstrap,
+          '-Update',
+          '-RunInstaller',
+          '-Quiet',
+        ],
+        { detached: true, stdio: 'ignore', windowsHide: true },
       ).unref();
+      setTimeout(() => app.quit(), 400);
       return { state: 'downloaded', message: 'Запущена локальная пересборка через bootstrap' };
     }
     const url = pendingDownloadUrl;
@@ -170,7 +182,12 @@ export function initUpdater(getMainWindow: () => BrowserWindow | null): void {
     try {
       await downloadFile(url, dest);
       send({ state: 'downloaded', version: pendingVersion ?? undefined });
-      await shell.openPath(dest);
+      spawn(dest, ['/S', '/CLOSEAPPLICATIONS'], {
+        detached: true,
+        stdio: 'ignore',
+        windowsHide: true,
+      }).unref();
+      setTimeout(() => app.quit(), 400);
       return { state: 'downloaded', version: pendingVersion ?? undefined };
     } catch (e) {
       const message = e instanceof Error ? e.message : String(e);

@@ -164,6 +164,19 @@ CREATE INDEX IF NOT EXISTS track_holdings_track_idx ON track_holdings (track_id)
 INSERT INTO track_holdings (user_id, track_id)
 SELECT uploaded_by, id FROM tracks WHERE uploaded_by IS NOT NULL
 ON CONFLICT DO NOTHING;
+
+ALTER TABLE users ADD COLUMN IF NOT EXISTS email_verified_at TIMESTAMPTZ;
+UPDATE users SET email_verified_at = created_at WHERE email_verified_at IS NULL;
+
+CREATE TABLE IF NOT EXISTS email_verification_codes (
+  id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+  user_id UUID NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+  code_hash TEXT NOT NULL,
+  expires_at TIMESTAMPTZ NOT NULL,
+  attempts INTEGER NOT NULL DEFAULT 0,
+  created_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
+);
+CREATE INDEX IF NOT EXISTS email_verification_codes_user_idx ON email_verification_codes (user_id);
 `;
 
 async function main() {

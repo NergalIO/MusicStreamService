@@ -119,19 +119,38 @@ fun MssApp(
 private fun LoginScreen(vm: MssViewModel) {
     var email by remember { mutableStateOf("") }
     var password by remember { mutableStateOf("") }
+    var code by remember { mutableStateOf("") }
     var register by remember { mutableStateOf(false) }
     val error by vm.error.collectAsState()
+    val verify by vm.authVerify.collectAsState()
+    val info by vm.authInfo.collectAsState()
 
     Column(Modifier.fillMaxSize().padding(24.dp), verticalArrangement = Arrangement.spacedBy(12.dp)) {
         Text("MusicStreamService", style = MaterialTheme.typography.headlineMedium)
-        OutlinedTextField(email, { email = it }, label = { Text("Email") }, modifier = Modifier.fillMaxWidth())
-        OutlinedTextField(password, { password = it }, label = { Text("Пароль") }, modifier = Modifier.fillMaxWidth())
-        error?.let { Text(it, color = MaterialTheme.colorScheme.error) }
-        Button(onClick = { vm.login(email, password, register) }, modifier = Modifier.fillMaxWidth()) {
-            Text(if (register) "Регистрация" else "Войти")
-        }
-        Button(onClick = { register = !register }, modifier = Modifier.fillMaxWidth()) {
-            Text(if (register) "Уже есть аккаунт" else "Создать аккаунт")
+        if (!verify) {
+            OutlinedTextField(email, { email = it }, label = { Text("Email") }, modifier = Modifier.fillMaxWidth())
+            OutlinedTextField(password, { password = it }, label = { Text("Пароль") }, modifier = Modifier.fillMaxWidth())
+            error?.let { Text(it, color = MaterialTheme.colorScheme.error) }
+            Button(onClick = { vm.login(email, password, register) }, modifier = Modifier.fillMaxWidth()) {
+                Text(if (register) "Регистрация" else "Войти")
+            }
+            Button(onClick = { register = !register }, modifier = Modifier.fillMaxWidth()) {
+                Text(if (register) "Уже есть аккаунт" else "Создать аккаунт")
+            }
+        } else {
+            Text("Подтверждение почты")
+            info?.let { Text(it, style = MaterialTheme.typography.bodyMedium) }
+            OutlinedTextField(code, { code = it.filter(Char::isDigit).take(6) }, label = { Text("Код из письма") }, modifier = Modifier.fillMaxWidth())
+            error?.let { Text(it, color = MaterialTheme.colorScheme.error) }
+            Button(onClick = { vm.verifyEmail(email, code) }, enabled = code.length == 6, modifier = Modifier.fillMaxWidth()) {
+                Text("Подтвердить")
+            }
+            Button(onClick = { vm.resendVerification(email, password) }, modifier = Modifier.fillMaxWidth()) {
+                Text("Отправить код снова")
+            }
+            Button(onClick = { vm.cancelVerify(); code = "" }, modifier = Modifier.fillMaxWidth()) {
+                Text("Назад")
+            }
         }
     }
 }

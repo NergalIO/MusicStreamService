@@ -6,6 +6,64 @@ export interface AuthSession {
   user: { id: string; email: string };
 }
 
+export interface RegisterPending {
+  needsVerification: true;
+  email: string;
+}
+
+export class EmailNotVerifiedError extends Error {
+  readonly email: string;
+
+  constructor(email: string, message: string) {
+    super(message);
+    this.name = 'EmailNotVerifiedError';
+    this.email = email;
+  }
+}
+
+function parseErrorMessage(text: string, fallback: string): string {
+  try {
+    const j = JSON.parse(text) as { message?: string };
+    return j.message ?? fallback;
+  } catch {
+    return text || fallback;
+  }
+}
+
+export async function postAuthJson<T>(path: string, body: unknown): Promise<T> {
+  const res = await fetch(apiUrl(path), {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify(body),
+  });
+  const text = await res.text();
+  if (!res.ok) {
+    if (res.status === 403) {
+      try {
+        const j = JSON.parse(text) as { code?: string; email?: string; message?: string };
+        if (j.code === 'EMAIL_NOT_VERIFIED' && j.email) {
+          throw new EmailNotVerifiedError(j.email, j.message ?? 'Подтвердите email');
+        }
+      } catch (e) {
+        if (e instanceof EmailNotVerifiedError) throw e;
+      }
+    }
+    throw new Error(parseErrorMessage(text, res.statusText));
+  }
+  if (!text) return undefined as T;
+  return JSON.parse(text) as T;
+}
+
+export async function completeLogin(session: AuthSession): Promise<void> {
+  saveSession(session);
+  const deviceId = await window.electronAPI.getDeviceId();
+  await apiFetch('/devices/register', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ deviceId, name: 'Desktop' }),
+  });
+}
+
 let accessToken: string | null = null;
 let refreshToken: string | null = null;
 let presenceToken: string | null = null;

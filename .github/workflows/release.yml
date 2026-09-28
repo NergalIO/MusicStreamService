@@ -24,10 +24,12 @@ jobs:
         with:
           node-version: '20'
           cache: 'pnpm'
+      - name: Sync version from tag
+        run: node scripts/sync-version-from-tag.cjs "${{ github.ref_name }}"
       - name: Install dependencies
         run: pnpm install --frozen-lockfile
-      - name: Build monorepo
-        run: pnpm build
+      - name: Build backend and packages
+        run: pnpm -r --filter "!@mss/desktop" build
       - name: Pack Windows NSIS
         working-directory: apps/desktop
         env:
@@ -47,6 +49,12 @@ jobs:
         working-directory: apps/android
     steps:
       - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '20'
+      - name: Sync version from tag
+        run: node scripts/sync-version-from-tag.cjs "${{ github.ref_name }}"
+        working-directory: ${{ github.workspace }}
       - uses: actions/setup-java@v5
         with:
           distribution: temurin

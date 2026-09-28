@@ -32,8 +32,22 @@ const basePath = normalizeBasePath(process.env.PUBLIC_BASE_PATH);
 const tls = loadTls();
 const publicUrlRaw = (process.env.API_PUBLIC_URL ?? 'http://localhost:3001').replace(/\/$/, '');
 
+function readAppVersion(): string {
+  const fromEnv = process.env.MSS_APP_VERSION?.trim();
+  if (fromEnv) return fromEnv;
+  try {
+    const pkg = JSON.parse(
+      fs.readFileSync(path.join(ROOT, 'apps/api/package.json'), 'utf8'),
+    ) as { version?: string };
+    return pkg.version ?? '0.0.0';
+  } catch {
+    return '0.0.0';
+  }
+}
+
 export const config = {
   root: ROOT,
+  appVersion: readAppVersion(),
   port: Number(process.env.API_PORT ?? 3001),
   basePath,
   publicUrl: publicUrlRaw,
@@ -73,4 +87,17 @@ export const config = {
   relayCacheTtlHours: Number(process.env.RELAY_CACHE_TTL_HOURS ?? 48),
   relayWaitMs: Number(process.env.RELAY_WAIT_MS ?? 120_000),
   presenceTtlSec: Number(process.env.PRESENCE_TTL_SEC ?? 90),
+  smtp: {
+    host: process.env.SMTP_HOST?.trim() ?? '',
+    port: Number(process.env.SMTP_PORT ?? 587),
+    secure: process.env.SMTP_SECURE === 'true',
+    user: process.env.SMTP_USER?.trim() ?? '',
+    pass: process.env.SMTP_PASS ?? '',
+    from: process.env.SMTP_FROM?.trim() ?? 'MusicStreamService <noreply@localhost>',
+  },
+  emailVerificationTtlMin: Number(process.env.EMAIL_VERIFICATION_TTL_MIN ?? 15),
 };
+
+export function smtpConfigured(): boolean {
+  return Boolean(config.smtp.host);
+}

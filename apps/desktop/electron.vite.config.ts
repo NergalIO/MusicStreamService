@@ -13,13 +13,15 @@ const publicBasePath = (env.PUBLIC_BASE_PATH ?? '').replace(/\/$/, '');
 const apiTarget = env.API_DEV_TARGET ?? 'http://127.0.0.1:3001';
 const apiPublicUrl = (env.API_PUBLIC_URL ?? '').replace(/\/$/, '');
 
-/** В release CI подставляется из GitHub Secrets; локально — из корневого .env */
+/** CI secrets (process.env) имеют приоритет над .env из loadEnv */
 function clientBuildEnv(): Record<string, string> {
+  const pick = (key: string, alt?: string) =>
+    (process.env[key] ?? (alt ? process.env[alt] : undefined) ?? env[key] ?? env[alt ?? ''] ?? '').trim();
   return {
-    SPOTIFY_CLIENT_ID: env.SPOTIFY_CLIENT_ID ?? '',
-    YANDEX_CLIENT_ID: env.YANDEX_CLIENT_ID ?? env.YANDEX_MUSIC_CLIENT_ID ?? '',
-    YANDEX_CLIENT_SECRET: env.YANDEX_CLIENT_SECRET ?? env.YANDEX_MUSIC_CLIENT_SECRET ?? '',
-    DISCORD_CLIENT_ID: env.DISCORD_CLIENT_ID ?? '',
+    SPOTIFY_CLIENT_ID: pick('SPOTIFY_CLIENT_ID'),
+    YANDEX_CLIENT_ID: pick('YANDEX_CLIENT_ID', 'YANDEX_MUSIC_CLIENT_ID'),
+    YANDEX_CLIENT_SECRET: pick('YANDEX_CLIENT_SECRET', 'YANDEX_MUSIC_CLIENT_SECRET'),
+    DISCORD_CLIENT_ID: pick('DISCORD_CLIENT_ID'),
   };
 }
 

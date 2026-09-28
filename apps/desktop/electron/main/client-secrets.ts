@@ -1,3 +1,5 @@
+import { app } from 'electron';
+
 /** Значения из .env (dev) или из __MSS_CLIENT_BUILD_ENV__ (CI / release). */
 export type ClientBuildEnv = {
   SPOTIFY_CLIENT_ID: string;
@@ -26,6 +28,10 @@ function bakedEnv(): ClientBuildEnv {
 const baked = bakedEnv();
 
 export function clientSecret(key: keyof ClientBuildEnv): string {
+  const bakedVal = baked[key]?.trim() ?? '';
+  /** В установщике с GitHub CI секреты вшиты в сборку — .env не обязателен. */
+  if (app.isPackaged && bakedVal) return bakedVal;
+
   const direct = process.env[key]?.trim();
   if (direct) return direct;
   if (key === 'YANDEX_CLIENT_ID') {
@@ -36,5 +42,5 @@ export function clientSecret(key: keyof ClientBuildEnv): string {
     const alt = process.env.YANDEX_MUSIC_CLIENT_SECRET?.trim();
     if (alt) return alt;
   }
-  return baked[key]?.trim() ?? '';
+  return bakedVal;
 }

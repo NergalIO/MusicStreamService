@@ -3,7 +3,8 @@ param(
     [string]$Tag = "",
     [switch]$Update,
     [string]$ApiUrl = "",
-    [switch]$RunInstaller
+    [switch]$RunInstaller,
+    [switch]$Quiet
 )
 
 $ErrorActionPreference = "Stop"
@@ -78,6 +79,8 @@ Save-InstalledMeta $installRoot @{
 
 Write-Host ""
 Write-Host "Готово: $exe" -ForegroundColor Green
-if ($RunInstaller -or ((Read-Host "Запустить установщик сейчас? [Y/n]") -ne "n")) {
+if ($Quiet -and $RunInstaller) {
+    Start-Process -FilePath $exe -ArgumentList '/S', '/CLOSEAPPLICATIONS' -WindowStyle Hidden
+} elseif ($RunInstaller -or ((Read-Host "Запустить установщик сейчас? [Y/n]") -ne "n")) {
     Start-Process -FilePath $exe -Wait
 }

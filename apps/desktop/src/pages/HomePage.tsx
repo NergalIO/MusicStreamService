@@ -310,7 +310,9 @@ function ConnectSpotifyCard() {
         <p className="mt-1 text-sm text-muted">
           {available
             ? 'Сохранённые треки и плейлисты из вашего аккаунта Spotify.'
-            : 'Добавьте SPOTIFY_CLIENT_ID в .env и перезапустите приложение.'}
+            : import.meta.env.DEV
+              ? 'Добавьте SPOTIFY_CLIENT_ID в корневой .env и перезапустите pnpm dev:desktop.'
+              : 'Установите свежий .exe с GitHub Releases (CI) или положите SPOTIFY_CLIENT_ID в .env рядом с программой.'}
         </p>
       </div>
       {available && <Button onClick={() => void connectSource('spotify', queryClient)}>Подключить</Button>}

@@ -12,6 +12,7 @@ import com.mss.core.model.UnifiedPlaylist
 import com.mss.core.model.ListeningStats
 import com.mss.core.model.UnifiedTrack
 import com.mss.core.model.UserSubscriptionDto
+import com.mss.core.network.EmailNotVerifiedException
 import com.mss.core.player.PlayerController
 import dagger.hilt.android.lifecycle.HiltViewModel
 import javax.inject.Inject
@@ -43,6 +44,12 @@ class MssViewModel @Inject constructor(
     private val _error = MutableStateFlow<String?>(null)
     val error: StateFlow<String?> = _error
 
+    private val _authVerify = MutableStateFlow(false)
+    val authVerify: StateFlow<Boolean> = _authVerify
+
+    private val _authInfo = MutableStateFlow<String?>(null)
+    val authInfo: StateFlow<String?> = _authInfo
+
     private val _stats = MutableStateFlow<ListeningStats?>(null)
     val stats: StateFlow<ListeningStats?> = _stats
 
@@ -55,10 +62,52 @@ class MssViewModel @Inject constructor(
 
     fun login(email: String, password: String, register: Boolean) {
         viewModelScope.launch {
+            _error.value = null
+            _authInfo.value = null
             runCatching {
-                if (register) repo.register(email, password) else repo.login(email, password)
+                if (register) {
+                    val pending = repo.register(email, password)
+                    _authVerify.value = true
+                    _authInfo.value = "Код отправлен на ${pending.email}"
+                } else {
+                    repo.login(email, password)
+                    _authVerify.value = false
+                }
+            }.onFailure { e ->
+                if (e is EmailNotVerifiedException) {
+                    _authVerify.value = true
+                    _authInfo.value = e.message
+                } else {
+                    _error.value = e.message
+                }
+            }
+        }
+    }
+
+    fun verifyEmail(email: String, code: String) {
+        viewModelScope.launch {
+            _error.value = null
+            runCatching {
+                repo.verifyEmail(email, code)
+                _authVerify.value = false
+                _authInfo.value = null
             }.onFailure { _error.value = it.message }
         }
+    }
+
+    fun resendVerification(email: String, password: String) {
+        viewModelScope.launch {
+            _error.value = null
+            runCatching {
+                repo.resendVerification(email, password)
+                _authInfo.value = "Новый код отправлен"
+            }.onFailure { _error.value = it.message }
+        }
+    }
+
+    fun cancelVerify() {
+        _authVerify.value = false
+        _authInfo.value = null
     }
 
     fun logout() {

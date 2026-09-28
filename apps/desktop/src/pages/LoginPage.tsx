@@ -4,49 +4,94 @@ import { AppLogo } from '@/components/layout/AppLogo';
 import { StandaloneTitleBar } from '@/components/layout/WindowControls';
 import { Button } from '@/components/ui/button';
 import { Input } from '@/components/ui/input';
-import { apiFetch, saveSession } from '@/lib/api';
-import type { AuthSession } from '@/lib/api';
+import {
+  completeLogin,
+  EmailNotVerifiedError,
+  postAuthJson,
+  type AuthSession,
+  type RegisterPending,
+} from '@/lib/api';
 import { getApiBaseUrl, setApiBaseUrl } from '@/lib/api-base';
+
+type Step = 'credentials' | 'verify';
 
 export function LoginPage() {
   const nav = useNavigate();
   const [serverUrl, setServerUrl] = useState(() => getApiBaseUrl());
   const [email, setEmail] = useState('');
   const [password, setPassword] = useState('');
+  const [code, setCode] = useState('');
   const [mode, setMode] = useState<'login' | 'register'>('login');
+  const [step, setStep] = useState<Step>('credentials');
   const [error, setError] = useState<string | null>(null);
   const [submitting, setSubmitting] = useState(false);
+  const [info, setInfo] = useState<string | null>(null);
 
-  const submit = async () => {
+  const syncServerUrl = async () => {
+    if (import.meta.env.DEV) return;
+    const base = serverUrl.trim();
+    if (!base) {
+      setError('Укажите URL сервера (как на лендинге, с /MusicStreamService)');
+      return false;
+    }
+    setApiBaseUrl(base);
+    await window.electronAPI?.system.setSettings({ apiPublicUrl: base });
+    return true;
+  };
+
+  const submitCredentials = async () => {
+    setError(null);
+    setInfo(null);
+    setSubmitting(true);
+    try {
+      if (!(await syncServerUrl())) return;
+      const path = mode === 'login' ? '/auth/login' : '/auth/register';
+      const data = await postAuthJson<AuthSession | RegisterPending>(path, { email, password });
+      if ('needsVerification' in data && data.needsVerification) {
+        setStep('verify');
+        setInfo(`Код отправлен на ${data.email}`);
+        return;
+      }
+      await completeLogin(data as AuthSession);
+      nav('/');
+    } catch (e) {
+      if (e instanceof EmailNotVerifiedError) {
+        setEmail(e.email);
+        setStep('verify');
+        setInfo('Подтвердите email — введите код из письма');
+        return;
+      }
+      setError(e instanceof Error ? e.message : 'Ошибка входа');
+    } finally {
+      setSubmitting(false);
+    }
+  };
+
+  const submitVerify = async () => {
     setError(null);
     setSubmitting(true);
     try {
-      if (!import.meta.env.DEV) {
-        const base = serverUrl.trim();
-        if (!base) {
-          setError('Укажите URL сервера (как на лендинге, с /MusicStreamService)');
-          setSubmitting(false);
-          return;
-        }
-        setApiBaseUrl(base);
-        await window.electronAPI?.system.setSettings({ apiPublicUrl: base });
-      }
-      const path = mode === 'login' ? '/auth/login' : '/auth/register';
-      const data = await apiFetch<AuthSession>(path, {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ email, password }),
-      });
-      saveSession(data);
-      const deviceId = await window.electronAPI.getDeviceId();
-      await apiFetch('/devices/register', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ deviceId, name: 'Desktop' }),
-      });
+      if (!(await syncServerUrl())) return;
+      const session = await postAuthJson<AuthSession>('/auth/verify-email', { email, code: code.trim() });
+      await completeLogin(session);
       nav('/');
     } catch (e) {
-      setError(e instanceof Error ? e.message : 'Ошибка входа');
+      setError(e instanceof Error ? e.message : 'Неверный код');
+    } finally {
+      setSubmitting(false);
+    }
+  };
+
+  const resendCode = async () => {
+    setError(null);
+    setInfo(null);
+    setSubmitting(true);
+    try {
+      if (!(await syncServerUrl())) return;
+      await postAuthJson('/auth/resend-verification', { email, password });
+      setInfo('Новый код отправлен');
+    } catch (e) {
+      setError(e instanceof Error ? e.message : 'Не удалось отправить код');
     } finally {
       setSubmitting(false);
     }
@@ -60,43 +105,82 @@ export function LoginPage() {
           <AppLogo className="h-10 w-10" />
           <h1 className="text-2xl font-semibold">MusicStreamService</h1>
         </div>
-        <p className="mb-6 text-sm text-muted">Войдите в свой аккаунт</p>
+        <p className="mb-6 text-sm text-muted">
+          {step === 'verify' ? 'Подтверждение почты' : 'Войдите в свой аккаунт'}
+        </p>
         <div className="space-y-4">
           {error && (
             <div role="alert" className="rounded-lg border border-danger/30 bg-danger/10 px-3 py-2 text-sm text-danger">
               {error}
             </div>
           )}
-          {!import.meta.env.DEV && (
-            <Input
-              placeholder="https://your-domain/MusicStreamService"
-              value={serverUrl}
-              onChange={(e) => setServerUrl(e.target.value)}
-              autoComplete="url"
-            />
+          {info && (
+            <div className="rounded-lg border border-border bg-muted/20 px-3 py-2 text-sm text-muted">{info}</div>
           )}
-          <Input placeholder="Email" value={email} onChange={(e) => setEmail(e.target.value)} autoComplete="email" />
-          <Input
-            type="password"
-            placeholder="Пароль"
-            value={password}
-            onChange={(e) => setPassword(e.target.value)}
-            autoComplete={mode === 'login' ? 'current-password' : 'new-password'}
-            onKeyDown={(e) => e.key === 'Enter' && void submit()}
-          />
-          <Button className="w-full" disabled={submitting} onClick={() => void submit()}>
-            {mode === 'login' ? 'Войти' : 'Регистрация'}
-          </Button>
-          <button
-            type="button"
-            className="w-full text-center text-sm text-muted hover:text-foreground"
-            onClick={() => {
-              setMode(mode === 'login' ? 'register' : 'login');
-              setError(null);
-            }}
-          >
-            {mode === 'login' ? 'Создать аккаунт' : 'Уже есть аккаунт?'}
-          </button>
+          {step === 'credentials' && (
+            <>
+              {!import.meta.env.DEV && (
+                <Input
+                  placeholder="https://your-domain/MusicStreamService"
+                  value={serverUrl}
+                  onChange={(e) => setServerUrl(e.target.value)}
+                  autoComplete="url"
+                />
+              )}
+              <Input placeholder="Email" value={email} onChange={(e) => setEmail(e.target.value)} autoComplete="email" />
+              <Input
+                type="password"
+                placeholder="Пароль"
+                value={password}
+                onChange={(e) => setPassword(e.target.value)}
+                autoComplete={mode === 'login' ? 'current-password' : 'new-password'}
+                onKeyDown={(e) => e.key === 'Enter' && void submitCredentials()}
+              />
+              <Button className="w-full" disabled={submitting} onClick={() => void submitCredentials()}>
+                {mode === 'login' ? 'Войти' : 'Регистрация'}
+              </Button>
+              <button
+                type="button"
+                className="w-full text-center text-sm text-muted hover:text-foreground"
+                onClick={() => {
+                  setMode(mode === 'login' ? 'register' : 'login');
+                  setError(null);
+                }}
+              >
+                {mode === 'login' ? 'Создать аккаунт' : 'Уже есть аккаунт?'}
+              </button>
+            </>
+          )}
+          {step === 'verify' && (
+            <>
+              <Input
+                placeholder="6-значный код"
+                value={code}
+                onChange={(e) => setCode(e.target.value.replace(/\D/g, '').slice(0, 6))}
+                inputMode="numeric"
+                autoComplete="one-time-code"
+                onKeyDown={(e) => e.key === 'Enter' && void submitVerify()}
+              />
+              <Button className="w-full" disabled={submitting || code.length !== 6} onClick={() => void submitVerify()}>
+                Подтвердить
+              </Button>
+              <Button variant="secondary" className="w-full" disabled={submitting} onClick={() => void resendCode()}>
+                Отправить код снова
+              </Button>
+              <button
+                type="button"
+                className="w-full text-center text-sm text-muted hover:text-foreground"
+                onClick={() => {
+                  setStep('credentials');
+                  setCode('');
+                  setError(null);
+                  setInfo(null);
+                }}
+              >
+                Назад
+              </button>
+            </>
+          )}
         </div>
       </div>
     </div>

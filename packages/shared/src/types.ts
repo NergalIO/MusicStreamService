@@ -1,3 +1,19 @@
+export interface AuthUserDto {
+  id: string;
+  email: string;
+}
+
+export interface AuthSessionDto {
+  accessToken: string;
+  refreshToken: string;
+  user: AuthUserDto;
+}
+
+export interface RegisterPendingDto {
+  needsVerification: true;
+  email: string;
+}
+
 export type SourceId = 'local' | 'spotify' | 'yandex';
 
 export type TrackStatus = 'processing' | 'ready' | 'failed' | 'registered' | 'cached';

@@ -27,9 +27,12 @@ async function bootstrapAdmin() {
 
   const existing = await db.select().from(users).where(eq(users.email, email)).limit(1);
   if (existing.length) {
-    if (existing[0].role !== 'admin') {
-      await db.update(users).set({ role: 'admin' }).where(eq(users.email, email));
-      console.log('Promoted existing user to admin:', email);
+    const patch: { role?: string; emailVerifiedAt?: Date } = {};
+    if (existing[0].role !== 'admin') patch.role = 'admin';
+    if (!existing[0].emailVerifiedAt) patch.emailVerifiedAt = new Date();
+    if (Object.keys(patch).length) {
+      await db.update(users).set(patch).where(eq(users.email, email));
+      console.log('Updated bootstrap admin:', email, Object.keys(patch).join(', '));
     } else {
       console.log('Admin user already exists:', email);
     }
@@ -39,7 +42,7 @@ async function bootstrapAdmin() {
   const passwordHash = await bcrypt.hash(password, 10);
   const [user] = await db
     .insert(users)
-    .values({ email, passwordHash, role: 'admin' })
+    .values({ email, passwordHash, role: 'admin', emailVerifiedAt: new Date() })
     .returning();
   await assignPlan(user.id, 'premium', 3650, 'bootstrap');
   console.log('Bootstrap admin created:', email);

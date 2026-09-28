@@ -111,6 +111,10 @@ nano .env
 | `API_PUBLIC_URL` | `https://example.com/MusicStreamService` | Публичный URL API |
 | `STORAGE_BACKEND` | `local` | Файлы в `LOCAL_STORAGE_PATH` |
 | `GITHUB_REPO` | `your-org/MusicStreamService` | Лендинг → GitHub Releases |
+| `SMTP_HOST`, `SMTP_USER`, `SMTP_PASS`, `SMTP_FROM` | ваш SMTP | OTP при регистрации (без SMTP в production регистрация недоступна) |
+| `EMAIL_VERIFICATION_TTL_MIN` | `15` | Срок действия кода (минуты) |
+
+После обновления API с верификацией почты выполните миграции (`migrate` в compose или `pnpm db:migrate`). Существующие пользователи помечаются подтверждёнными автоматически.
 
 Для **Docker-стека** используйте [`.env.docker.example`](../.env.docker.example) (`DATABASE_URL` с хостом `postgres`).
 
@@ -165,7 +169,8 @@ location /MusicStreamService/ {
 ## 8. GitHub Releases (клиенты)
 
 1. Secrets в GitHub Actions (Windows CI): `API_PUBLIC_URL`, `SPOTIFY_CLIENT_ID`, `YANDEX_CLIENT_ID`, `YANDEX_CLIENT_SECRET`, `DISCORD_CLIENT_ID` (те же ключи, что в корневом `.env` для dev).
-2. `git tag v0.1.0 && git push origin v0.1.0`
+2. `git tag v0.1.0 && git push origin v0.1.0` — CI выставит версию пакетов/API/desktop/APK по тегу (`scripts/sync-version-from-tag.cjs`).
+3. Пользователям нужен **новый** `.exe` с Releases; `.env` на ПК для OAuth не обязателен, если сборка с secrets.
 3. `GITHUB_REPO` в `.env` на VPS.
 
 ---
