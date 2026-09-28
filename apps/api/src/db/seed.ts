@@ -45,9 +45,7 @@ async function bootstrapAdmin() {
   console.log('Bootstrap admin created:', email);
 }
 
-async function main() {
-  await bootstrapAdmin();
-
+async function seedPlans(): Promise<void> {
   const existing = await db.select().from(subscriptionPlans).limit(1);
   if (existing.length === 0) {
     const [free] = await db
@@ -78,6 +76,11 @@ async function main() {
   } else {
     console.log('Plans already seeded');
   }
+}
+
+async function main() {
+  await seedPlans();
+  await bootstrapAdmin();
 }
 
 main().catch((e) => {
