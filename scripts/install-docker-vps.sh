@@ -16,6 +16,8 @@
 #
 set -euo pipefail
 
+MSS_INSTALL_SCRIPT_VERSION=4
+
 MSS_REPO="${MSS_REPO:-https://github.com/NergalIO/MusicStreamService.git}"
 MSS_INSTALL_DIR="${MSS_INSTALL_DIR:-/opt/MusicStreamService}"
 MSS_BRANCH="${MSS_BRANCH:-main}"
@@ -35,19 +37,23 @@ need_root_hint() {
   fi
 }
 
-run_sudo() {
-  if [[ "${EUID:-$(id -u)}" -eq 0 ]]; then
-    "$@"
+is_root() {
+  [[ "${EUID:-$(id -u)}" -eq 0 ]]
+}
+
+run_apt_get() {
+  if is_root; then
+    DEBIAN_FRONTEND=noninteractive apt-get "$@"
   else
-    sudo "$@"
+    sudo env DEBIAN_FRONTEND=noninteractive apt-get "$@"
   fi
 }
 
 install_prerequisites() {
   if command -v apt-get >/dev/null 2>&1; then
     log "Пакеты: git, curl, openssl…"
-    run_sudo apt-get update -qq
-    run_sudo env DEBIAN_FRONTEND=noninteractive apt-get install -y -qq git curl openssl ca-certificates python3
+    run_apt_get update -qq
+    run_apt_get install -y -qq git curl openssl ca-certificates python3
   else
     for c in git curl openssl; do
       command -v "$c" >/dev/null 2>&1 || {
@@ -97,12 +103,17 @@ clone_or_update_repo() {
 
   if [[ ! -d "$MSS_INSTALL_DIR" ]]; then
     log "Клонирование ${MSS_REPO} → ${MSS_INSTALL_DIR}"
-    run_sudo mkdir -p "$(dirname "$MSS_INSTALL_DIR")"
-    run_sudo git clone --depth 1 --branch "$MSS_BRANCH" "$MSS_REPO" "$MSS_INSTALL_DIR"
-    if [[ "${EUID:-$(id -u)}" -ne 0 ]] && [[ -n "${SUDO_USER:-}" ]]; then
-      run_sudo chown -R "$SUDO_USER:$SUDO_USER" "$MSS_INSTALL_DIR"
-    elif [[ "${EUID:-$(id -u)}" -ne 0 ]]; then
-      run_sudo chown -R "$USER:$USER" "$MSS_INSTALL_DIR" 2>/dev/null || true
+    if is_root; then
+      mkdir -p "$(dirname "$MSS_INSTALL_DIR")"
+      git clone --depth 1 --branch "$MSS_BRANCH" "$MSS_REPO" "$MSS_INSTALL_DIR"
+    else
+      sudo mkdir -p "$(dirname "$MSS_INSTALL_DIR")"
+      sudo git clone --depth 1 --branch "$MSS_BRANCH" "$MSS_REPO" "$MSS_INSTALL_DIR"
+      if [[ -n "${SUDO_USER:-}" ]]; then
+        sudo chown -R "$SUDO_USER:$SUDO_USER" "$MSS_INSTALL_DIR"
+      else
+        sudo chown -R "$USER:$USER" "$MSS_INSTALL_DIR" 2>/dev/null || true
+      fi
     fi
   elif [[ -d "$MSS_INSTALL_DIR/.git" ]]; then
     log "Обновление репозитория в ${MSS_INSTALL_DIR}"
@@ -119,11 +130,13 @@ clone_or_update_repo() {
 docker_bin() {
   if docker info >/dev/null 2>&1; then
     echo docker
-  elif run_sudo docker info >/dev/null 2>&1; then
-    echo "sudo docker"
-  else
-    echo ""
+    return 0
   fi
+  if ! is_root && sudo docker info >/dev/null 2>&1; then
+    echo "sudo docker"
+    return 0
+  fi
+  echo ""
 }
 
 install_docker() {
@@ -143,9 +156,17 @@ install_docker() {
 
   log "Устанавливаем Docker через get.docker.com…"
   if command -v curl >/dev/null 2>&1; then
-    curl -fsSL https://get.docker.com | run_sudo sh
+    if is_root; then
+      curl -fsSL https://get.docker.com | sh
+    else
+      curl -fsSL https://get.docker.com | sudo sh
+    fi
   elif command -v wget >/dev/null 2>&1; then
-    wget -qO- https://get.docker.com | run_sudo sh
+    if is_root; then
+      wget -qO- https://get.docker.com | sh
+    else
+      wget -qO- https://get.docker.com | sudo sh
+    fi
   else
     echo "Нужен curl или wget" >&2
     exit 1
@@ -157,8 +178,8 @@ install_docker() {
     exit 1
   fi
 
-  if [[ "${EUID:-$(id -u)}" -ne 0 ]] && ! id -nG "$USER" 2>/dev/null | grep -qw docker; then
-    run_sudo usermod -aG docker "$USER" 2>/dev/null || true
+  if ! is_root && ! id -nG "$USER" 2>/dev/null | grep -qw docker; then
+    sudo usermod -aG docker "$USER" 2>/dev/null || true
     warn "Пользователь $USER добавлен в группу docker — выполните newgrp docker или перелогиньтесь"
   fi
 }
@@ -402,6 +423,7 @@ print_summary() {
 }
 
 main() {
+  log "install-docker-vps.sh v${MSS_INSTALL_SCRIPT_VERSION} (uid=${EUID:-$(id -u)})"
   need_root_hint
   install_prerequisites
   ROOT="$(clone_or_update_repo)"
