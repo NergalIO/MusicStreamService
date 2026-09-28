@@ -3,6 +3,7 @@ import { useEffect, useRef } from 'react';
 import { useLocation, useNavigate, useOutlet } from 'react-router-dom';
 import { DeviceCodeDialog } from '@/components/connectors/DeviceCodeDialog';
 import { ScrollContainerContext } from '@/components/layout/scroll-context';
+import { LobbyBar } from '@/components/lobby/LobbyBar';
 import { Sidebar } from '@/components/layout/Sidebar';
 import { Onboarding } from '@/components/onboarding/Onboarding';
 import { NowPlaying } from '@/components/player/NowPlaying';
@@ -82,6 +83,7 @@ export function AppShell() {
       <Sidebar />
       <div className="relative flex min-w-0 flex-1 flex-col">
         <TopPlayer />
+        <LobbyBar />
         <ScrollContainerContext.Provider value={scrollRef}>
           <main ref={scrollRef} className="min-h-0 flex-1 overflow-y-auto">
             <AnimatePresence mode="wait" initial={false}>

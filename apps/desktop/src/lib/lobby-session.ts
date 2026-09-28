@@ -1,6 +1,6 @@
 import { toast } from 'sonner';
 import type { LobbyDto, LobbyMemberRole, LobbyWsEvent } from '@mss/shared';
-import { LobbyWsClient } from '@/lib/lobby-api';
+import { leaveLobby, LobbyWsClient } from '@/lib/lobby-api';
 import { startLobbyBroadcast, stopLobbyBroadcast } from '@/lib/lobby-broadcast';
 import { appendLobbyAudioChunk, setLobbyListenPaused, startLobbyListen, stopLobbyListen } from '@/lib/lobby-listen';
 import { useLobbyStore } from '@/store/lobby-store';
@@ -30,6 +30,11 @@ function handleWsEvent(event: LobbyWsEvent): void {
         members: [...(store.lobby?.members ?? []).filter((m) => m.userId !== event.member.userId), event.member],
       });
       notifyLobbyPresence(store.lobby!, store.role!);
+      break;
+    case 'listener_ready':
+      if (store.role === 'host' && client) {
+        void startLobbyBroadcast(client).catch(() => undefined);
+      }
       break;
     case 'member_leave':
       store.patchLobby({
@@ -61,21 +66,38 @@ export function connectLobbySession(lobby: LobbyDto, role: LobbyMemberRole): voi
   useLobbyStore.getState().setLobby(lobby, role);
   useLobbyStore.getState().setWsStatus('connecting');
 
-  client = new LobbyWsClient(handleWsEvent);
+  client = new LobbyWsClient(handleWsEvent, {
+    onOpen: () => {
+      useLobbyStore.getState().setWsStatus('open');
+      if (role === 'host' && client) {
+        void startLobbyBroadcast(client).catch((e) => {
+          toast.error(e instanceof Error ? e.message : 'Не удалось начать трансляцию');
+        });
+      }
+    },
+  });
   if (role === 'guest') {
-    client.setBinaryHandler((chunk) => appendLobbyAudioChunk(chunk));
+    client.setBinaryHandler((chunk) => {
+      appendLobbyAudioChunk(chunk);
+      useLobbyStore.getState().setLive(true);
+    });
     startLobbyListen();
   }
   useLobbyStore.getState().setWsClient(client);
   client.connect(lobby.id);
-  useLobbyStore.getState().setWsStatus('open');
-
-  if (role === 'host') {
-    void startLobbyBroadcast(client).catch((e) => {
-      toast.error(e instanceof Error ? e.message : 'Не удалось начать трансляцию');
-    });
-  }
   notifyLobbyPresence(lobby, role);
+}
+
+export async function leaveCurrentLobby(): Promise<void> {
+  const id = useLobbyStore.getState().lobby?.id;
+  if (id) {
+    try {
+      await leaveLobby(id);
+    } catch {
+      /* комната уже закрыта */
+    }
+  }
+  disconnectLobbySession();
 }
 
 export function disconnectLobbySession(): void {

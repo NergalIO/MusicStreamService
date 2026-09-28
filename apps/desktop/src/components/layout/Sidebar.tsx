@@ -21,6 +21,7 @@ import { createContext, useContext, useEffect, useMemo, useState } from 'react';
 import { NavLink, useLocation, useNavigate, useSearchParams } from 'react-router-dom';
 import { AppLogo } from '@/components/layout/AppLogo';
 import { clearSession, loadSession } from '@/lib/api';
+import { leaveCurrentLobby } from '@/lib/lobby-session';
 import { useYandexConnected } from '@/lib/connectors';
 import { playlistPath } from '@/lib/links';
 import { libraryPath, MSS_HOME, searchPath, SPOTIFY_HOME, YANDEX_HOME } from '@/lib/service-routes';
@@ -319,8 +320,10 @@ export function Sidebar() {
             title={email ? `Выйти (${email})` : 'Выйти'}
             aria-label={email ? `Выйти (${email})` : 'Выйти'}
             onClick={() => {
-              clearSession();
-              navigate('/login');
+              void leaveCurrentLobby().finally(() => {
+                clearSession();
+                navigate('/login');
+              });
             }}
             className={cn(
               'flex h-8 w-full items-center gap-2.5 rounded-md text-[13px] text-foreground/60 transition-colors hover:bg-foreground/[0.05] hover:text-foreground',

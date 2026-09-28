@@ -282,7 +282,7 @@ const api = {
         chromeMediaSource: 'desktop';
       } | null;
       if (!meta) return null;
-      return navigator.mediaDevices.getUserMedia({
+      const stream = await navigator.mediaDevices.getUserMedia({
         audio: {
           mandatory: {
             chromeMediaSource: meta.chromeMediaSource,
@@ -299,6 +299,11 @@ const api = {
           },
         },
       } as MediaStreamConstraints);
+      for (const track of stream.getVideoTracks()) {
+        track.stop();
+        stream.removeTrack(track);
+      }
+      return stream.getAudioTracks().length ? stream : null;
     },
   },
   window: {

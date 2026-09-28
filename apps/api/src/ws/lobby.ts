@@ -10,9 +10,9 @@ import {
   stripAudioPrefix,
   unregisterLobbySocket,
 } from '../lib/lobby-hub.js';
-import { endLobby, isLobbyMember, loadLobbyDto } from '../lib/lobby-load.js';
+import { isLobbyMember, loadLobbyDto } from '../lib/lobby-load.js';
 import { db } from '../db/client.js';
-import { listeningLobbies, listeningLobbyMembers } from '../db/schema.js';
+import { listeningLobbyMembers } from '../db/schema.js';
 import { and, eq } from 'drizzle-orm';
 
 export async function wsLobbyRoutes(app: FastifyInstance) {
@@ -50,6 +50,7 @@ export async function wsLobbyRoutes(app: FastifyInstance) {
       const role = (member?.role === 'host' ? 'host' : 'guest') as 'host' | 'guest';
 
       registerLobbySocket(lobbyId, userId, role, socket);
+      if (role === 'guest') broadcastLobbyJson(lobbyId, { type: 'listener_ready', userId });
       const lobby = await loadLobbyDto(lobbyId);
       if (lobby) socket.send(JSON.stringify({ type: 'lobby_state', lobby }));
 
@@ -68,19 +69,9 @@ export async function wsLobbyRoutes(app: FastifyInstance) {
         }
       });
 
-      socket.on('close', async () => {
-        unregisterLobbySocket(lobbyId, userId);
-        const [lobby] = await db.select().from(listeningLobbies).where(eq(listeningLobbies.id, lobbyId)).limit(1);
-        if (!lobby || lobby.endedAt) return;
-        if (lobby.hostUserId === userId) {
-          await endLobby(lobbyId);
-          broadcastLobbyJson(lobbyId, { type: 'lobby_closed' });
-          return;
-        }
-        await db
-          .delete(listeningLobbyMembers)
-          .where(and(eq(listeningLobbyMembers.lobbyId, lobbyId), eq(listeningLobbyMembers.userId, userId)));
-        broadcastLobbyJson(lobbyId, { type: 'member_leave', userId });
+      socket.on('close', () => {
+        // Обрыв сокета не закрывает комнату: участник остаётся, пока сам не выйдет.
+        unregisterLobbySocket(lobbyId, userId, socket);
       });
     })();
   });

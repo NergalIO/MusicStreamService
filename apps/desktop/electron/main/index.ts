@@ -187,7 +187,7 @@ async function ensureWidevine(): Promise<void> {
 }
 
 function allowPlaybackPermissions(ses: Session): void {
-  const allowed = new Set(['media', 'autoplay', 'mediaKeySystem']);
+  const allowed = new Set(['media', 'autoplay', 'mediaKeySystem', 'display-capture']);
   ses.setPermissionRequestHandler((_wc, permission, callback) => {
     callback(allowed.has(permission));
   });

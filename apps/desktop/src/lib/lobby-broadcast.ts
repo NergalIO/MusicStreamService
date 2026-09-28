@@ -1,36 +1,88 @@
 import { getAudioEngine } from '@/hooks/useAudioEngine';
-import { isSpotifyPlaybackActive } from '@/lib/spotify-web-player';
 import type { LobbyWsClient } from '@/lib/lobby-api';
+import { isSpotifyPlaybackActive } from '@/lib/spotify-web-player';
+import { useLobbyStore } from '@/store/lobby-store';
 
 let recorder: MediaRecorder | null = null;
 let captureStream: MediaStream | null = null;
+let generation = 0;
+let mode: 'spotify' | 'engine' | null = null;
 
-async function resolveCaptureStream(): Promise<MediaStream> {
-  if (isSpotifyPlaybackActive()) {
-    const stream = await window.electronAPI?.lobby?.captureWindowAudio?.();
-    if (stream) return stream;
+function wantedMode(): 'spotify' | 'engine' {
+  return isSpotifyPlaybackActive() ? 'spotify' : 'engine';
+}
+
+async function resolveCaptureStream(next: 'spotify' | 'engine'): Promise<MediaStream> {
+  if (next === 'spotify') {
+    try {
+      const stream = await window.electronAPI?.lobby?.captureWindowAudio?.();
+      if (stream?.getAudioTracks().length) return stream;
+    } catch {
+      /* окно не отдало звук — пишем выход плеера */
+    }
   }
   return getAudioEngine().createBroadcastStream();
 }
 
-export async function startLobbyBroadcast(ws: LobbyWsClient): Promise<void> {
-  stopLobbyBroadcast();
-  captureStream = await resolveCaptureStream();
+function haltRecorder(): void {
+  generation += 1;
+  const rec = recorder;
+  recorder = null;
+  if (rec && rec.state !== 'inactive') {
+    rec.ondataavailable = null;
+    rec.stop();
+  }
+  captureStream?.getTracks().forEach((track) => track.stop());
+  captureStream = null;
+  mode = null;
+}
+
+async function openRecorder(ws: LobbyWsClient): Promise<void> {
+  const gen = generation;
+  const next = wantedMode();
+  const stream = await resolveCaptureStream(next);
+  if (gen !== generation) {
+    stream.getTracks().forEach((track) => track.stop());
+    return;
+  }
+  captureStream = stream;
+  mode = next;
   const mime = MediaRecorder.isTypeSupported('audio/webm;codecs=opus')
     ? 'audio/webm;codecs=opus'
     : 'audio/webm';
-  recorder = new MediaRecorder(captureStream, { mimeType: mime, audioBitsPerSecond: 128_000 });
-  recorder.ondataavailable = (ev) => {
-    if (ev.data.size > 0) {
-      void ev.data.arrayBuffer().then((buf) => ws.sendAudioChunk(buf));
-    }
+  const rec = new MediaRecorder(stream, { mimeType: mime, audioBitsPerSecond: 96_000 });
+  recorder = rec;
+  rec.ondataavailable = (ev) => {
+    if (gen !== generation || ev.data.size === 0) return;
+    void ev.data.arrayBuffer().then((buf) => {
+      if (gen !== generation) return;
+      ws.sendAudioChunk(buf);
+      useLobbyStore.getState().setLive(true);
+    });
   };
-  recorder.start(400);
+  rec.start(300);
+}
+
+/** Пишет эфир только после открытия сокета, чтобы первый кадр (заголовок WebM) не потерялся. */
+export async function startLobbyBroadcast(ws: LobbyWsClient): Promise<void> {
+  haltRecorder();
+  useLobbyStore.getState().setLive(false);
+  await openRecorder(ws);
+}
+
+/** Новый заголовок WebM — гости по нему заново открывают плеер. */
+export async function restartLobbyBroadcast(ws: LobbyWsClient): Promise<void> {
+  if (!recorder || recorder.state !== 'recording' || mode !== wantedMode()) {
+    await startLobbyBroadcast(ws);
+  }
+}
+
+export function ensureLobbyBroadcast(ws: LobbyWsClient): void {
+  if (recorder?.state === 'recording' && mode === wantedMode()) return;
+  void startLobbyBroadcast(ws).catch(() => undefined);
 }
 
 export function stopLobbyBroadcast(): void {
-  if (recorder && recorder.state !== 'inactive') recorder.stop();
-  recorder = null;
-  captureStream?.getTracks().forEach((t) => t.stop());
-  captureStream = null;
+  haltRecorder();
+  useLobbyStore.getState().setLive(false);
 }

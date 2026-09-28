@@ -39,19 +39,22 @@ export function startLobbyListen(): void {
         flushQueue();
       });
       flushQueue();
+      void el.play().catch(() => undefined);
     },
     { once: true },
   );
 }
 
+function isWebmHeader(chunk: ArrayBuffer): boolean {
+  const bytes = new Uint8Array(chunk);
+  return bytes.length > 4 && bytes[0] === 0x1a && bytes[1] === 0x45 && bytes[2] === 0xdf && bytes[3] === 0xa3;
+}
+
 export function appendLobbyAudioChunk(chunk: ArrayBuffer): void {
-  if (!sourceBuffer) {
-    queue.push(chunk);
-    if (!mediaSource) startLobbyListen();
-    return;
-  }
+  if (isWebmHeader(chunk) || !mediaSource) startLobbyListen();
   queue.push(chunk);
   flushQueue();
+  if (audioEl?.paused) void audioEl.play().catch(() => undefined);
 }
 
 export function stopLobbyListen(): void {

@@ -46,9 +46,11 @@ export function registerLobbySocket(
   room.set(userId, { ws, userId, role });
 }
 
-export function unregisterLobbySocket(lobbyId: string, userId: string): boolean {
+export function unregisterLobbySocket(lobbyId: string, userId: string, ws?: WebSocket): boolean {
   const room = rooms.get(lobbyId);
   if (!room) return false;
+  const current = room.get(userId);
+  if (ws && current && current.ws !== ws) return false;
   room.delete(userId);
   if (!room.size) rooms.delete(lobbyId);
   return true;

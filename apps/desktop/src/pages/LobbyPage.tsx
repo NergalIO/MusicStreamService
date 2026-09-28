@@ -12,11 +12,10 @@ import {
   createLobby,
   fetchLobby,
   joinLobby,
-  leaveLobby,
   rejectSuggestion,
   suggestTrack,
 } from '@/lib/lobby-api';
-import { connectLobbySession, disconnectLobbySession } from '@/lib/lobby-session';
+import { connectLobbySession, disconnectLobbySession, leaveCurrentLobby } from '@/lib/lobby-session';
 import { loadSession } from '@/lib/api';
 import { useLobbyStore } from '@/store/lobby-store';
 import { usePlayerStore } from '@/store/player-store';
@@ -32,6 +31,8 @@ export function LobbyPage() {
   const navigate = useNavigate();
   const lobby = useLobbyStore((s) => s.lobby);
   const role = useLobbyStore((s) => s.role);
+  const live = useLobbyStore((s) => s.live);
+  const wsStatus = useLobbyStore((s) => s.wsStatus);
   const [joinCode, setJoinCode] = useState(search.get('code') ?? '');
   const current = usePlayerStore((s) => s.current);
 
@@ -72,12 +73,6 @@ export function LobbyPage() {
   }, [search, id, lobby]);
 
   useEffect(() => {
-    return () => {
-      if (useLobbyStore.getState().lobby) disconnectLobbySession();
-    };
-  }, []);
-
-  useEffect(() => {
     if (!id || lobby?.id === id) return;
     void fetchLobby(id)
       .then((dto) => {
@@ -96,8 +91,8 @@ export function LobbyPage() {
       <div className="mx-auto max-w-lg space-y-6 pt-8">
         <h1 className="text-2xl font-semibold">Listening party</h1>
         <p className="text-sm text-muted">
-          DJ с Premium или Яндекс Плюс ведёт эфир; гости слышат поток и могут предлагать треки. Ретрансляция Spotify/Яндекс —
-          на вашу ответственность по правилам сервисов.
+          Создайте комнату или введите код. DJ включает треки в обычном плеере — гости слышат этот звук. Комната не
+          закрывается, если уйти в медиатеку. Ретрансляция Spotify и Яндекса — на вашу ответственность.
         </p>
         <Button className="w-full" onClick={() => createMut.mutate()} disabled={createMut.isPending}>
           <Radio size={16} className="mr-2" /> Создать лобби
@@ -130,7 +125,18 @@ export function LobbyPage() {
           <h1 className="text-2xl font-semibold">{lobby.title}</h1>
           <p className="mt-1 flex items-center gap-2 text-sm text-muted">
             <Users size={14} />
-            {lobby.members.length}/{lobby.maxMembers} · {role === 'host' ? 'Вы DJ' : 'Гость'}
+            {lobby.members.length}/{lobby.maxMembers} · {role === 'host' ? 'Вы DJ' : 'Вы слушаете'}
+          </p>
+          <p className="mt-2 text-sm text-foreground/80">
+            {wsStatus !== 'open'
+              ? 'Подключение к комнате…'
+              : role === 'host'
+                ? live
+                  ? 'Эфир идёт. Включите или смените трек в любом разделе — гости слышат ваш плеер. Уход со страницы комнату не закрывает.'
+                  : 'Включите трек в плеере. Пока звука нет, гости ждут.'
+                : live
+                  ? 'Вы слышите эфир DJ. Свой плеер на это не влияет. Можно уйти в другой раздел — комната останется.'
+                  : 'Ждём звук от DJ. Если тишина долгая, пусть DJ перезапустит трек.'}
           </p>
         </div>
         <div className="flex items-center gap-2">
@@ -162,10 +168,19 @@ export function LobbyPage() {
         </ul>
       </section>
 
-      {role === 'guest' && current && (
-        <Button variant="secondary" onClick={() => suggestMut.mutate(current)} disabled={suggestMut.isPending}>
-          Предложить текущий трек
-        </Button>
+      {role === 'guest' && (
+        <div className="space-y-2">
+          <p className="text-sm text-muted">
+            Предложение — это просьба DJ включить трек. Оно не запускает ваш плеер в эфире.
+          </p>
+          <Button
+            variant="secondary"
+            onClick={() => current && suggestMut.mutate(current)}
+            disabled={!current || suggestMut.isPending}
+          >
+            {current ? `Предложить «${current.title}»` : 'Сначала откройте трек в плеере'}
+          </Button>
+        </div>
       )}
 
       {role === 'host' && suggestions.length > 0 && (
@@ -194,7 +209,7 @@ export function LobbyPage() {
       <section>
         <h2 className="mb-2 text-sm font-medium">Очередь</h2>
         {queue.filter((q) => q.status === 'queued' || q.status === 'playing').length === 0 ? (
-          <p className="text-sm text-muted">Очередь пуста — DJ выбирает треки в плеере.</p>
+          <p className="text-sm text-muted">Очередь пуста. DJ включает треки сверху, как обычно.</p>
         ) : (
           <ul className="space-y-1 text-sm">
             {queue
@@ -213,13 +228,10 @@ export function LobbyPage() {
         <Button
           variant="secondary"
           onClick={() => {
-            void leaveLobby(lobby.id).finally(() => {
-              disconnectLobbySession();
-              navigate('/lobby');
-            });
+            void leaveCurrentLobby().finally(() => navigate('/lobby'));
           }}
         >
-          <DoorOpen size={16} className="mr-2" /> Выйти
+          <DoorOpen size={16} className="mr-2" /> {role === 'host' ? 'Выйти и закрыть комнату' : 'Выйти'}
         </Button>
         {role === 'host' && (
           <Button

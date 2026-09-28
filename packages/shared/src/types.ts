@@ -342,6 +342,7 @@ export type LobbyWsEvent =
   | { type: 'lobby_state'; lobby: LobbyDto }
   | { type: 'member_join'; member: LobbyMemberDto }
   | { type: 'member_leave'; userId: string }
+  | { type: 'listener_ready'; userId: string }
   | { type: 'queue_updated'; queue: LobbyQueueItemDto[] }
   | { type: 'playback'; playback: LobbyPlaybackState }
   | { type: 'suggestion_new'; item: LobbyQueueItemDto }

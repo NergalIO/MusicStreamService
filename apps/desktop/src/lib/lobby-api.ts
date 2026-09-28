@@ -82,11 +82,17 @@ export type LobbyWsHandler = (event: LobbyWsEvent) => void;
 export class LobbyWsClient {
   private ws: WebSocket | null = null;
   private pingTimer: ReturnType<typeof setInterval> | null = null;
+  private reconnectTimer: ReturnType<typeof setTimeout> | null = null;
   private onEvent: LobbyWsHandler;
+  private onOpen: (() => void) | null = null;
   private onBinary: ((chunk: ArrayBuffer) => void) | null = null;
+  private lobbyId: string | null = null;
+  private intentional = false;
+  private attempts = 0;
 
-  constructor(onEvent: LobbyWsHandler) {
+  constructor(onEvent: LobbyWsHandler, hooks?: { onOpen?: () => void }) {
     this.onEvent = onEvent;
+    this.onOpen = hooks?.onOpen ?? null;
   }
 
   setBinaryHandler(handler: ((chunk: ArrayBuffer) => void) | null): void {
@@ -94,9 +100,25 @@ export class LobbyWsClient {
   }
 
   connect(lobbyId: string): void {
-    this.disconnect();
-    const url = lobbyWsUrl(lobbyId);
-    const ws = new WebSocket(url);
+    this.intentional = false;
+    this.lobbyId = lobbyId;
+    this.attempts = 0;
+    this.openSocket();
+  }
+
+  private openSocket(): void {
+    const lobbyId = this.lobbyId;
+    if (!lobbyId || this.intentional) return;
+    if (this.pingTimer) clearInterval(this.pingTimer);
+    this.pingTimer = null;
+    const prev = this.ws;
+    this.ws = null;
+    if (prev) {
+      prev.onclose = null;
+      prev.close();
+    }
+
+    const ws = new WebSocket(lobbyWsUrl(lobbyId));
     ws.binaryType = 'arraybuffer';
     this.ws = ws;
 
@@ -117,13 +139,24 @@ export class LobbyWsClient {
     };
 
     ws.onopen = () => {
+      this.attempts = 0;
       this.pingTimer = setInterval(() => {
         if (this.ws?.readyState === WebSocket.OPEN) this.ws.send(JSON.stringify({ type: 'ping' }));
       }, 25_000);
+      this.onOpen?.();
     };
 
     ws.onclose = () => {
-      this.onEvent({ type: 'error', message: 'Соединение с лобби закрыто' });
+      if (this.intentional || this.ws !== ws) return;
+      this.ws = null;
+      if (this.pingTimer) clearInterval(this.pingTimer);
+      this.pingTimer = null;
+      this.attempts += 1;
+      if (this.attempts > 5) {
+        this.onEvent({ type: 'error', message: 'Не удалось удержать соединение с лобби' });
+        return;
+      }
+      this.reconnectTimer = setTimeout(() => this.openSocket(), Math.min(1000 * this.attempts, 5000));
     };
   }
 
@@ -136,6 +169,10 @@ export class LobbyWsClient {
   }
 
   disconnect(): void {
+    this.intentional = true;
+    this.lobbyId = null;
+    if (this.reconnectTimer) clearTimeout(this.reconnectTimer);
+    this.reconnectTimer = null;
     if (this.pingTimer) clearInterval(this.pingTimer);
     this.pingTimer = null;
     const ws = this.ws;

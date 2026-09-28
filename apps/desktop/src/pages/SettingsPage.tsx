@@ -19,6 +19,7 @@ import {
   type ConnectorStatus,
 } from '@/lib/connectors';
 import { clearSession, loadSession } from '@/lib/api';
+import { leaveCurrentLobby } from '@/lib/lobby-session';
 import { getApiBaseUrl, setApiBaseUrl } from '@/lib/api-base';
 import { Input } from '@/components/ui/input';
 import { ACCENTS, COVER_ACCENT } from '@/lib/appearance';
@@ -453,8 +454,10 @@ function AboutSection() {
           variant="danger"
           size="sm"
           onClick={() => {
-            clearSession();
-            navigate('/login');
+            void leaveCurrentLobby().finally(() => {
+              clearSession();
+              navigate('/login');
+            });
           }}
         >
           <LogOut size={14} /> Выйти
