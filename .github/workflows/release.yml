@@ -14,8 +14,6 @@ jobs:
     env:
       API_PUBLIC_URL: ${{ secrets.API_PUBLIC_URL }}
       SPOTIFY_CLIENT_ID: ${{ secrets.SPOTIFY_CLIENT_ID }}
-      YANDEX_CLIENT_ID: ${{ secrets.YANDEX_CLIENT_ID }}
-      YANDEX_CLIENT_SECRET: ${{ secrets.YANDEX_CLIENT_SECRET }}
       DISCORD_CLIENT_ID: ${{ secrets.DISCORD_CLIENT_ID }}
     steps:
       - uses: actions/checkout@v4

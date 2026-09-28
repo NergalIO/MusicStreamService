@@ -8,6 +8,9 @@ export interface ResolvedStream {
   preview: boolean;
   codec?: string;
   bitrate?: number;
+  /** Полный трек через Spotify Web Playback SDK (Premium). */
+  spotifyUri?: string;
+  fallbackPreviewUrl?: string;
 }
 
 type PlayableTrack = UnifiedTrack & { streamUrl?: string };
@@ -54,8 +57,12 @@ async function resolveExternal(track: PlayableTrack, quality: Quality): Promise<
     case 'mediaUrl':
       return { url: proxyUrl(handle.url), preview: !!handle.preview, codec: handle.codec, bitrate: handle.bitrate };
     case 'spotifySdk':
-      if (!handle.previewUrl) throw new Error('Для полного трека Spotify нужен Premium и Web Playback SDK');
-      return { url: proxyUrl(handle.previewUrl), preview: true };
+      return {
+        url: '',
+        preview: false,
+        spotifyUri: handle.trackUri,
+        fallbackPreviewUrl: handle.previewUrl,
+      };
     case 'blobStream':
       return { url: handle.blobUrl, preview: false };
   }

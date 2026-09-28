@@ -49,6 +49,11 @@ export function registerConnectorIpc(): void {
   ipcMain.handle('connectors:cancelConnect', (_e, id: string) => connector(id).cancelConnect?.());
   ipcMain.handle('connectors:disconnect', (_e, id: string) => connector(id).disconnect());
   ipcMain.handle('connectors:account', (_e, id: string) => connector(id).getAccount?.() ?? null);
+  ipcMain.handle('connectors:accessToken', async (_e, id: string) => {
+    const c = connectorRegistry.get(id);
+    if (!c?.getAccessToken || c.getAuthStatus() === 'disconnected') return null;
+    return c.getAccessToken();
+  });
 
   ipcMain.handle('connectors:search', async (_e, id: string, query: string, limit: number) => {
     const c = connectorRegistry.get(id);

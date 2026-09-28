@@ -377,7 +377,9 @@ function YandexStatus({ status }: { status: string }) {
           <Crown size={11} /> Плюс активен
         </span>
       ) : (
-        <span className="rounded-full bg-foreground/10 px-2 py-0.5 text-[11px]">Без Плюса — только превью</span>
+        <span className="rounded-full bg-foreground/10 px-2 py-0.5 text-[11px]">
+          Без Плюса — только превью (удалите YANDEX_* из .env, отключите и войдите снова через ya.ru/device)
+        </span>
       )}
     </span>
   );

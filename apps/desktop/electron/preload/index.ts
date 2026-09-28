@@ -179,6 +179,7 @@ const api = {
     disconnect: (id: string) => ipcRenderer.invoke('connectors:disconnect', id) as Promise<void>,
     account: (id: string) =>
       ipcRenderer.invoke('connectors:account', id) as Promise<ExternalAccount | null>,
+    accessToken: (id: string) => ipcRenderer.invoke('connectors:accessToken', id) as Promise<string | null>,
     onDeviceCode: (cb: (prompt: DeviceCodePrompt) => void) => subscribe('connectors:deviceCode', cb),
     search: (id: string, query: string, limit: number) =>
       ipcRenderer.invoke('connectors:search', id, query, limit) as Promise<UnifiedTrack[]>,

@@ -14,7 +14,7 @@ const VAULT_KEY = 'spotify_tokens';
 const MAX_ARTIST_ALBUMS = 40;
 const MAX_PLAYLISTS = 100;
 const SPOTIFY_SCOPES =
-  'user-read-email streaming user-read-playback-state user-library-read playlist-read-private playlist-read-collaborative';
+  'user-read-email streaming user-modify-playback-state user-read-playback-state user-library-read playlist-read-private playlist-read-collaborative';
 
 interface SpotifyAlbum {
   id: string;
@@ -294,6 +294,7 @@ export function createSpotifyConnector(opts: SpotifyConnectorOptions): StreamCon
     async disconnect() {
       vault.delete(VAULT_KEY);
     },
+    getAccessToken: refreshIfNeeded,
     async getAccount(): Promise<ExternalAccount | null> {
       try {
         const me = await spotifyGet<{ id: string; display_name?: string; email?: string; product?: string }>('/me');
@@ -319,7 +320,7 @@ export function createSpotifyConnector(opts: SpotifyConnectorOptions): StreamCon
       const data = await spotifyGet<{ artists: { items: SpotifyArtist[] } }>('/search', {
         q: query,
         type: 'artist',
-        limit: String(limit),
+        limit: String(Math.min(limit, 50)),
       });
       return (data.artists.items ?? []).map((a) => ({
         source: 'spotify' as const,
@@ -475,11 +476,12 @@ export function createSpotifyConnector(opts: SpotifyConnectorOptions): StreamCon
       const res = await fetch(`https://api.spotify.com/v1/tracks/${track.id}`, {
         headers: { Authorization: `Bearer ${token}` },
       });
-      const data = (await res.json()) as { uri: string; preview_url: string | null };
-      if (data.preview_url) {
-        return { kind: 'mediaUrl', url: data.preview_url };
+      if (!res.ok) {
+        const err = await res.text().catch(() => '');
+        throw new Error(spotifyApiErrorMessage(res.status, err, `/tracks/${track.id}`));
       }
-      return { kind: 'spotifySdk', trackUri: data.uri };
+      const data = (await res.json()) as { uri: string; preview_url: string | null };
+      return { kind: 'spotifySdk', trackUri: data.uri, previewUrl: data.preview_url ?? undefined };
     },
   };
 }

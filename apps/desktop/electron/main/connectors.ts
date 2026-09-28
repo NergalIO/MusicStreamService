@@ -35,12 +35,17 @@ export function initConnectors(): void {
     );
   }
 
+  const customYandexId = clientSecret('YANDEX_CLIENT_ID').trim();
+  const customYandexSecret = clientSecret('YANDEX_CLIENT_SECRET').trim();
+  const useCustomYandexOAuth =
+    process.env.MSS_YANDEX_CUSTOM_OAUTH === '1' || process.env.MSS_YANDEX_CUSTOM_OAUTH === 'true';
   yandex = createYandexConnector({
     vault: tokenVault,
     openExternal: (url) => shell.openExternal(url),
     onDeviceCode: broadcastDeviceCode,
-    clientId: clientSecret('YANDEX_CLIENT_ID'),
-    clientSecret: clientSecret('YANDEX_CLIENT_SECRET'),
+    ...(useCustomYandexOAuth && customYandexId
+      ? { clientId: customYandexId, clientSecret: customYandexSecret }
+      : {}),
   });
   connectorRegistry.register(yandex);
 }

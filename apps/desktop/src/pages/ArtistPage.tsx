@@ -11,7 +11,12 @@ import { TrackList } from '@/components/tracks/TrackList';
 import { Button } from '@/components/ui/button';
 import { Input } from '@/components/ui/input';
 import { ErrorState } from '@/components/ui/states';
-import { artistPath, loadLocalArtistTracks, resolveExternalArtist } from '@/lib/artists';
+import {
+  artistPath,
+  loadLocalArtistTracks,
+  resolveExternalArtist,
+  shouldSkipExternalArtistLookup,
+} from '@/lib/artists';
 import { albumMenu, artistMenu } from '@/lib/card-menus';
 import { formatTrackCount } from '@/lib/format';
 import { albumLink } from '@/lib/links';
@@ -90,7 +95,9 @@ export function ArtistPage() {
     setRefs({});
     setTracks({ local: null, spotify: null, yandex: null });
     setFailed([]);
-    setFilter('all');
+    setFilter(
+      spotifyId && !yandexId ? 'spotify' : yandexId && !spotifyId ? 'yandex' : 'all',
+    );
     setTextFilter('');
     setShowAllPopular(false);
 
@@ -108,6 +115,10 @@ export function ArtistPage() {
 
     const ids: Record<(typeof EXTERNAL_SOURCES)[number], string | null> = { spotify: spotifyId, yandex: yandexId };
     for (const source of EXTERNAL_SOURCES) {
+      if (shouldSkipExternalArtistLookup(source, ids)) {
+        put(source, []);
+        continue;
+      }
       resolveExternalArtist(source, name, ids[source])
         .then(async (artist) => {
           if (!artist) return put(source, []);
@@ -149,12 +160,21 @@ export function ArtistPage() {
 
   const loading = SOURCE_ORDER.some((s) => matchesFilter(filter, s) && tracks[s] === null);
   const p = profile.data;
-  const imageUrl = p?.artist.imageUrl ?? refs.yandex?.imageUrl ?? refs.spotify?.imageUrl;
+  const spotifyPinned = Boolean(spotifyId && !yandexId);
+  const yandexPinned = Boolean(yandexId && !spotifyId);
+  const imageUrl = spotifyPinned
+    ? (refs.spotify?.imageUrl ?? refs.yandex?.imageUrl ?? p?.artist.imageUrl)
+    : (p?.artist.imageUrl ?? refs.yandex?.imageUrl ?? refs.spotify?.imageUrl);
   const genres = [...new Set([...(p?.artist.genres ?? []), ...(refs.spotify?.genres ?? []), ...(refs.yandex?.genres ?? [])])];
   const followers = refs.spotify?.followers;
   const foundIn = SOURCE_ORDER.filter((s) => (tracks[s]?.length ?? 0) > 0);
   const context: PlayContext = { type: 'artist', title: name, path: `/artist/${encodeURIComponent(name)}` };
-  const popular = p?.popularTracks ?? [];
+  const popular =
+    spotifyPinned && tracks.spotify?.length
+      ? tracks.spotify.slice(0, 10)
+      : yandexPinned && p?.popularTracks?.length
+        ? p.popularTracks
+        : (p?.popularTracks ?? tracks.spotify?.slice(0, 10) ?? []);
   const allTracks = SOURCE_ORDER.flatMap((s) => tracks[s] ?? []);
 
   return (

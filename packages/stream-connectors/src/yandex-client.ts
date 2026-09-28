@@ -61,6 +61,17 @@ function sleep(ms: number): Promise<void> {
   return new Promise((r) => setTimeout(r, ms));
 }
 
+function parseYandexHasPlus(data: Record<string, unknown>): boolean {
+  const plus = data.plus as Record<string, unknown> | undefined;
+  if (plus?.hasPlus === true || plus?.has_plus === true) return true;
+  const sub = data.subscription as Record<string, unknown> | undefined;
+  if (sub?.autoRenewable === true || sub?.auto_renewable === true) return true;
+  if (sub?.hadPlus === true || sub?.had_plus === true) return true;
+  const perms = data.permissions as { values?: string[] } | undefined;
+  if (perms?.values?.some((v) => /plus|premium|subscription/i.test(v))) return true;
+  return false;
+}
+
 export class YandexClient {
   private readonly clientId: string;
   private readonly clientSecret: string;
@@ -273,15 +284,15 @@ export class YandexClient {
   }
 
   async fetchAccount(): Promise<ExternalAccount> {
-    const data = await this.get<{
-      account?: { uid?: number; login?: string; displayName?: string; fullName?: string };
-      plus?: { hasPlus?: boolean };
-    }>('/account/status');
+    const data = await this.get<Record<string, unknown>>('/account/status');
+    const acc = data.account as
+      | { uid?: number; login?: string; displayName?: string; fullName?: string }
+      | undefined;
     const account: ExternalAccount = {
-      uid: String(data.account?.uid ?? ''),
-      login: data.account?.login,
-      displayName: data.account?.displayName ?? data.account?.fullName,
-      hasPlus: Boolean(data.plus?.hasPlus),
+      uid: String(acc?.uid ?? ''),
+      login: acc?.login,
+      displayName: acc?.displayName ?? acc?.fullName,
+      hasPlus: parseYandexHasPlus(data),
     };
     this.opts.vault.set(ACCOUNT_KEY, JSON.stringify(account));
     return account;

@@ -1,6 +1,7 @@
 import type { UnifiedTrack, WaveSettings } from '@mss/shared';
 import { toast } from 'sonner';
 import { getAudioEngine } from '@/hooks/useAudioEngine';
+import { getSpotifyWebPlayer, isSpotifyPlaybackActive } from '@/lib/spotify-web-player';
 import { undoableToast } from '@/lib/undo';
 import { useLikesStore } from '@/store/likes-store';
 import { upcomingTracks, usePlayerStore, type PlayContext } from '@/store/player-store';
@@ -65,17 +66,24 @@ export function skipNext(): void {
 
 export function skipPrev(): void {
   const engine = getAudioEngine();
-  if (engine.getCurrentTime() > 3) {
-    engine.seek(0);
+  const t = isSpotifyPlaybackActive() ? getSpotifyWebPlayer().getCurrentTime() : engine.getCurrentTime();
+  if (t > 3) {
+    seekTo(0);
     return;
   }
-  if (!usePlayerStore.getState().prev()) engine.seek(0);
+  if (!usePlayerStore.getState().prev()) seekTo(0);
 }
 
 export function togglePlay(): void {
   const engine = getAudioEngine();
   const { current, replay, resumeAt } = usePlayerStore.getState();
   if (!current) return;
+  if (isSpotifyPlaybackActive()) {
+    const sp = getSpotifyWebPlayer();
+    if (sp.paused) void sp.resume().catch((e) => toast.error(ipcMessage(e)));
+    else sp.pause();
+    return;
+  }
   if (!engine.currentUrl) {
     replay(resumeAt);
     return;
@@ -85,11 +93,17 @@ export function togglePlay(): void {
 }
 
 export function seekTo(seconds: number): void {
-  getAudioEngine().seek(seconds);
+  if (isSpotifyPlaybackActive()) getSpotifyWebPlayer().seek(seconds);
+  else getAudioEngine().seek(seconds);
 }
 
 export function seekBy(seconds: number): void {
   const engine = getAudioEngine();
+  if (isSpotifyPlaybackActive()) {
+    const sp = getSpotifyWebPlayer();
+    seekTo(Math.max(0, sp.getCurrentTime() + seconds));
+    return;
+  }
   if (!engine.currentUrl) return;
   engine.seek(Math.max(0, engine.getCurrentTime() + seconds));
 }

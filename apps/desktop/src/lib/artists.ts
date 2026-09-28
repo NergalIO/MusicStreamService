@@ -91,6 +91,16 @@ export async function searchArtistsEverywhere(
   return groupArtists(all, query);
 }
 
+/** URL задаёт одного провайдера — не подбираем второй каталог по совпадению имени. */
+export function shouldSkipExternalArtistLookup(
+  source: (typeof EXTERNAL_SOURCES)[number],
+  ids: { spotify: string | null; yandex: string | null },
+): boolean {
+  if (ids.spotify && !ids.yandex && source === 'yandex') return true;
+  if (ids.yandex && !ids.spotify && source === 'spotify') return true;
+  return false;
+}
+
 /** Находит исполнителя во внешнем источнике: по id из URL или по точному совпадению имени. */
 export async function resolveExternalArtist(
   source: (typeof EXTERNAL_SOURCES)[number],
