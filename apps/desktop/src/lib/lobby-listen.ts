@@ -1,8 +1,11 @@
+import { getAudioEngine } from '@/hooks/useAudioEngine';
+
 let mediaSource: MediaSource | null = null;
 let sourceBuffer: SourceBuffer | null = null;
 let audioEl: HTMLAudioElement | null = null;
 const queue: ArrayBuffer[] = [];
 let appending = false;
+let effectsRouted = false;
 
 function ensurePlayer(): HTMLAudioElement {
   if (!audioEl) {
@@ -68,8 +71,21 @@ function isWebmHeader(chunk: ArrayBuffer): boolean {
   return bytes.length > 4 && bytes[0] === 0x1a && bytes[1] === 0x45 && bytes[2] === 0xdf && bytes[3] === 0xa3;
 }
 
+export function ensureLobbyListenAudioEffects(): void {
+  if (!audioEl || effectsRouted) return;
+  getAudioEngine().attachExternalMediaElement(audioEl);
+  effectsRouted = true;
+}
+
+export function detachLobbyListenAudioEffects(): void {
+  if (!effectsRouted) return;
+  getAudioEngine().detachExternalMediaElement();
+  effectsRouted = false;
+}
+
 export function appendLobbyAudioChunk(chunk: ArrayBuffer): void {
   if (isWebmHeader(chunk) || !mediaSource) startLobbyListen();
+  ensureLobbyListenAudioEffects();
   queue.push(chunk);
   flushQueue();
   if (audioEl?.paused) void audioEl.play().catch(() => undefined);
@@ -80,11 +96,30 @@ export function resumeLobbyListen(): void {
   void audioEl.play().catch(() => undefined);
 }
 
+export function getLobbyListenTiming(): { currentTime: number; duration: number; paused: boolean } {
+  if (!audioEl) return { currentTime: 0, duration: 0, paused: true };
+  const duration = Number.isFinite(audioEl.duration) ? audioEl.duration : 0;
+  return { currentTime: audioEl.currentTime, duration, paused: audioEl.paused };
+}
+
+export function setLobbyListenOutput(volume: number, muted: boolean): void {
+  if (effectsRouted) {
+    const engine = getAudioEngine();
+    engine.setVolume(volume);
+    engine.setMuted(muted);
+    return;
+  }
+  if (!audioEl) return;
+  audioEl.muted = muted;
+  audioEl.volume = Math.min(1, Math.max(0, muted ? 0 : volume));
+}
+
 export function isLobbyListenPaused(): boolean {
   return !audioEl || audioEl.paused;
 }
 
 export function stopLobbyListen(): void {
+  detachLobbyListenAudioEffects();
   queue.length = 0;
   appending = false;
   sourceBuffer = null;

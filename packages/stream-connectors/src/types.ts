@@ -34,6 +34,8 @@ export interface StreamConnector {
   /** Подборка для «Слушать сейчас» на главной источника. */
   getHomeTracks?(limit: number): Promise<UnifiedTrack[]>;
   resolvePlayback(track: UnifiedTrack, options?: { quality?: Quality }): Promise<PlaybackHandle>;
+  /** Добавить или убрать трек из «Моей музыки» источника. */
+  setSavedTrack?(track: UnifiedTrack, saved: boolean): Promise<void>;
   /** Access token for Web Playback SDK (Spotify). */
   getAccessToken?(): Promise<string | null>;
 }

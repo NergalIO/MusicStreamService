@@ -1,7 +1,7 @@
 import { ipcMain } from 'electron';
 import type { Quality, UnifiedTrack } from '@mss/shared';
 import type { YandexMusicApi } from '@mss/stream-connectors';
-import { connectorRegistry, getYandex } from './connectors.js';
+import { connectorRegistry, getYandex, resolveLoginReply, cancelPendingLogin } from './connectors.js';
 
 const YANDEX_METHODS = [
   'account',
@@ -38,15 +38,14 @@ function connector(id: string) {
 export function registerConnectorIpc(): void {
   ipcMain.handle('connectors:status', async () => {
     const list = connectorRegistry.list();
-    for (const c of list) {
-      if (c.id === 'spotify' && c.getAuthStatus() !== 'disconnected') {
-        await c.getAccount?.().catch(() => null);
-      }
-    }
     return list.map((c) => ({ id: c.id, status: c.getAuthStatus(), name: c.displayName }));
   });
   ipcMain.handle('connectors:connect', (_e, id: string) => connector(id).connect());
-  ipcMain.handle('connectors:cancelConnect', (_e, id: string) => connector(id).cancelConnect?.());
+  ipcMain.handle('connectors:cancelConnect', (_e, id: string) => {
+    connector(id).cancelConnect?.();
+    cancelPendingLogin();
+  });
+  ipcMain.handle('connectors:loginReply', (_e, reply) => resolveLoginReply(reply));
   ipcMain.handle('connectors:disconnect', (_e, id: string) => connector(id).disconnect());
   ipcMain.handle('connectors:account', (_e, id: string) => connector(id).getAccount?.() ?? null);
   ipcMain.handle('connectors:accessToken', async (_e, id: string) => {
@@ -94,6 +93,11 @@ export function registerConnectorIpc(): void {
     'connectors:resolvePlayback',
     (_e, id: string, track: UnifiedTrack, quality?: Quality) => connector(id).resolvePlayback(track, { quality }),
   );
+  ipcMain.handle('connectors:setSaved', (_e, id: string, track: UnifiedTrack, saved: boolean) => {
+    const c = connector(id);
+    if (!c.setSavedTrack) throw new Error('Сохранение не поддерживается');
+    return c.setSavedTrack(track, saved);
+  });
 
   ipcMain.handle('connectors:listPlaylists', async (_e, id: string) => {
     const c = connectorRegistry.get(id);

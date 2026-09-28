@@ -2,7 +2,7 @@ import type { UnifiedPlaylist, UnifiedTrack } from '@mss/shared';
 import { useQuery } from '@tanstack/react-query';
 import { Clock, Disc3, ListMusic, Search, X } from 'lucide-react';
 import { useEffect, useRef, useState } from 'react';
-import { useSearchParams } from 'react-router-dom';
+import { Navigate, useSearchParams } from 'react-router-dom';
 import { ArtistGrid } from '@/components/artists/ArtistCard';
 import { CardRowSkeleton, TrackListSkeleton } from '@/components/media/CollectionHeader';
 import { Shelf } from '@/components/media/Carousel';
@@ -14,7 +14,7 @@ import { EmptyState, ErrorState } from '@/components/ui/states';
 import { apiFetch } from '@/lib/api';
 import { searchArtistsEverywhere } from '@/lib/artists';
 import { albumMenu, loadPlaylistTracks, playlistMenu } from '@/lib/card-menus';
-import { useSpotifyConnected, useYandexConnected } from '@/lib/connectors';
+import { useYandexConnected } from '@/lib/connectors';
 import { formatTrackCount } from '@/lib/format';
 import { albumLink, playlistPath } from '@/lib/links';
 import { playCollection } from '@/lib/player-actions';
@@ -47,6 +47,7 @@ async function searchTracks(q: string, filter: SourceFilterId, limit: number): P
     );
   }
   for (const source of EXTERNAL_SOURCES) {
+    if (source === 'spotify') continue;
     if (window.electronAPI && matchesFilter(filter, source)) {
       tasks.push(window.electronAPI.connectors.search(source, q, limit));
     }
@@ -309,7 +310,6 @@ function AlbumResults({ q, kind }: { q: string; kind: SearchKind }) {
 const MSS_KINDS = KINDS.filter((k) => k.value !== 'albums');
 
 export function SearchPage({ scope }: { scope: ServiceScope }) {
-  const spotifyConnected = useSpotifyConnected();
   const [params, setParams] = useSearchParams();
   const q = (params.get('q') ?? '').trim();
   const [filter, setFilter] = useState<SourceFilterId>(
@@ -326,17 +326,16 @@ export function SearchPage({ scope }: { scope: ServiceScope }) {
     if (q) addHistory(q);
   }, [q, addHistory]);
 
-  const spotifySearchReady = scope !== 'spotify' || spotifyConnected;
   const tracks = useQuery({
     queryKey: ['search', 'tracks', q, filter, kind],
     queryFn: () => searchTracks(q, filter, kind === 'tracks' ? 40 : 15),
-    enabled: !!q && spotifySearchReady && (kind === 'all' || kind === 'tracks'),
+    enabled: !!q && (kind === 'all' || kind === 'tracks'),
     staleTime: 5 * 60_000,
   });
   const artists = useQuery({
     queryKey: ['search', 'artists', q, filter, kind],
     queryFn: () => searchArtistsEverywhere(q, filter, kind === 'artists' ? 24 : 8),
-    enabled: !!q && spotifySearchReady && (kind === 'all' || kind === 'artists'),
+    enabled: !!q && (kind === 'all' || kind === 'artists'),
     staleTime: 5 * 60_000,
   });
 
@@ -350,7 +349,7 @@ export function SearchPage({ scope }: { scope: ServiceScope }) {
         ? 'Ищите в каталоге Яндекс Музыки: треки, альбомы, плейлисты и исполнители.'
         : scope === 'spotify'
           ? 'Ищите треки и исполнителей в каталоге Spotify.'
-          : 'Ищите по всей медиатеке — MSS, Яндекс Музыка и другие источники. Ctrl+F открывает поиск.';
+          : 'Ищите по всей медиатеке — MSS, Яндекс Музыка, VK и другие источники. Ctrl+F открывает поиск.';
 
   const pageTitle =
     scope === 'mss'
@@ -360,6 +359,8 @@ export function SearchPage({ scope }: { scope: ServiceScope }) {
         : scope === 'spotify'
           ? 'Поиск в Spotify'
           : 'Поиск';
+
+  if (scope === 'spotify') return <Navigate to="/spotify" replace />;
 
   return (
     <div>
@@ -375,8 +376,6 @@ export function SearchPage({ scope }: { scope: ServiceScope }) {
 
       {!q ? (
         <EmptyState icon={Search} title="Что будем слушать?" description={emptyDescription} className="py-20" />
-      ) : scope === 'spotify' && !spotifyConnected ? (
-        <p className="text-sm text-muted">Подключите Spotify в настройках, чтобы искать треки и исполнителей.</p>
       ) : (
         <div className="space-y-10">
           {show('artists') && (

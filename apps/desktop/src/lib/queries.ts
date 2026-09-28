@@ -2,7 +2,7 @@ import type { PlaylistDto, UnifiedPlaylist, UnifiedTrack } from '@mss/shared';
 import { useQuery } from '@tanstack/react-query';
 import { useMemo } from 'react';
 import { apiFetch } from '@/lib/api';
-import { useSpotifyConnected, useYandexConnected } from '@/lib/connectors';
+import { useVkConnected, useYandexConnected } from '@/lib/connectors';
 import { statsTrackToUnified, useShelves } from '@/lib/stats';
 import { mapLocalTrack, type LocalTrackDto } from '@/lib/sources';
 import { loadLocalLikedTracks } from '@/store/likes-store';
@@ -47,36 +47,6 @@ export function useYandexPlaylists() {
     queryFn: () => window.electronAPI.yandex.playlists(),
     enabled: connected,
     staleTime: 5 * 60_000,
-  });
-}
-
-export function useSpotifyPlaylists() {
-  const connected = useSpotifyConnected();
-  return useQuery({
-    queryKey: ['spotify', 'playlists'],
-    queryFn: () => window.electronAPI.connectors.listPlaylists('spotify'),
-    enabled: connected,
-    staleTime: 5 * 60_000,
-  });
-}
-
-export function useSpotifySavedTracks(limit = 1000) {
-  const connected = useSpotifyConnected();
-  return useQuery({
-    queryKey: ['spotify', 'saved', limit],
-    queryFn: () => window.electronAPI.connectors.savedTracks('spotify', limit),
-    enabled: connected,
-    staleTime: 2 * 60_000,
-  });
-}
-
-export function useSpotifyListenNow(limit = 30) {
-  const connected = useSpotifyConnected();
-  return useQuery({
-    queryKey: ['spotify', 'listen-now', limit],
-    queryFn: () => window.electronAPI.connectors.homeTracks('spotify', limit),
-    enabled: connected,
-    staleTime: 15 * 60_000,
   });
 }
 
@@ -132,6 +102,26 @@ export function useYandexChart() {
     queryFn: () => window.electronAPI.yandex.chart(),
     enabled: connected,
     staleTime: 10 * 60_000,
+  });
+}
+
+export function useVkPlaylists() {
+  const connected = useVkConnected();
+  return useQuery({
+    queryKey: ['vk', 'playlists'],
+    queryFn: () => window.electronAPI.connectors.listPlaylists('vk'),
+    enabled: connected,
+    staleTime: 5 * 60_000,
+  });
+}
+
+export function useVkSavedTracks(limit = 2000) {
+  const connected = useVkConnected();
+  return useQuery({
+    queryKey: ['vk', 'saved', limit],
+    queryFn: () => window.electronAPI.connectors.savedTracks('vk', limit),
+    enabled: connected,
+    staleTime: 2 * 60_000,
   });
 }
 

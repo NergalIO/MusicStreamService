@@ -70,6 +70,8 @@ export class AudioEngine {
   private playbackRate = 1;
   private sinkId = '';
   private fadingOut = false;
+  private externalSource: MediaElementAudioSourceNode | null = null;
+  private externalGain: GainNode | null = null;
 
   constructor() {
     this.decks.forEach((deck) => {
@@ -423,6 +425,34 @@ export class AudioEngine {
     return b.length ? b.end(b.length - 1) : 0;
   }
 
+  /** Локальный эфир лобби: EQ и громкость гостя, не влияют на DJ. */
+  attachExternalMediaElement(el: HTMLAudioElement): void {
+    this.detachExternalMediaElement();
+    const ctx = this.ensureContext();
+    void ctx.resume();
+    el.volume = 1;
+    el.muted = false;
+    const source = ctx.createMediaElementSource(el);
+    const gain = ctx.createGain();
+    gain.gain.value = 1;
+    source.connect(gain);
+    gain.connect(this.bus!);
+    this.externalSource = source;
+    this.externalGain = gain;
+  }
+
+  detachExternalMediaElement(): void {
+    if (!this.externalSource) return;
+    try {
+      this.externalSource.disconnect();
+      this.externalGain?.disconnect();
+    } catch {
+      /* already disconnected */
+    }
+    this.externalSource = null;
+    this.externalGain = null;
+  }
+
   /** Tap master output for lobby broadcast (parallel to speakers). */
   createBroadcastStream(): MediaStream {
     const ctx = this.ensureContext();
@@ -433,6 +463,7 @@ export class AudioEngine {
 
   dispose(): void {
     this.stop();
+    this.detachExternalMediaElement();
     this.modules.forEach((m) => m.dispose());
     this.modules.clear();
     this.moduleNodes.clear();

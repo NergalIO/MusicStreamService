@@ -59,7 +59,7 @@ export const externalTrackSnapshotSchema = z.object({
 export const playlistEntryInputSchema = z.union([
   z.object({ trackId: z.string().uuid() }),
   z.object({
-    source: z.enum(['yandex', 'spotify']),
+    source: z.enum(['yandex', 'spotify', 'vk']),
     externalId: z.string().min(1).max(100),
     snapshot: externalTrackSnapshotSchema,
   }),
@@ -92,7 +92,7 @@ export const registerTrackSchema = z.object({
 
 export const listeningEventSchema = z.object({
   clientEventId: z.string().uuid(),
-  source: z.enum(['local', 'yandex', 'spotify']),
+  source: z.enum(['local', 'yandex', 'spotify', 'vk']),
   trackId: z.string().min(1).max(100),
   title: z.string().min(1).max(500),
   artist: z.string().max(500),
@@ -136,7 +136,7 @@ export const joinLobbySchema = z.object({
 
 export const lobbySuggestSchema = z.object({
   track: z.object({
-    source: z.enum(['local', 'spotify', 'yandex']),
+    source: z.enum(['local', 'spotify', 'yandex', 'vk']),
     id: z.string().min(1).max(100),
     title: z.string().min(1).max(500),
     artist: z.string().max(500),

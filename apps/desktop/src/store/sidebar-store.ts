@@ -8,9 +8,11 @@ export type SidebarSectionId =
   | 'spotify'
   | 'mssPlaylists'
   | 'yandexPlaylists'
-  | 'spotifyPlaylists';
+  | 'spotifyPlaylists'
+  | 'vk'
+  | 'vkPlaylists';
 
-export type SidebarPlaylistPin = { source: 'local' | 'yandex' | 'spotify'; id: string };
+export type SidebarPlaylistPin = { source: 'local' | 'yandex' | 'spotify' | 'vk'; id: string };
 
 export function sidebarPinKey(pin: SidebarPlaylistPin): string {
   return `${pin.source}:${pin.id}`;
@@ -33,6 +35,8 @@ const defaultOpen: Record<SidebarSectionId, boolean> = {
   mssPlaylists: true,
   yandexPlaylists: true,
   spotifyPlaylists: true,
+  vk: true,
+  vkPlaylists: true,
 };
 
 export const useSidebarStore = create<SidebarState>()(

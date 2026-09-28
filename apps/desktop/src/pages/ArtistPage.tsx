@@ -1,7 +1,7 @@
 import type { SourceId, UnifiedAlbum, UnifiedArtist, UnifiedTrack } from '@mss/shared';
 import { useQuery } from '@tanstack/react-query';
 import { useEffect, useMemo, useState } from 'react';
-import { useParams, useSearchParams } from 'react-router-dom';
+import { Link, useParams, useSearchParams } from 'react-router-dom';
 import { ArtistAvatar } from '@/components/artists/ArtistCard';
 import { CollectionHeader, TrackListSkeleton } from '@/components/media/CollectionHeader';
 import { Carousel, Shelf } from '@/components/media/Carousel';
@@ -21,11 +21,12 @@ import { albumMenu, artistMenu } from '@/lib/card-menus';
 import { formatTrackCount } from '@/lib/format';
 import { albumLink } from '@/lib/links';
 import { playCollection } from '@/lib/player-actions';
+import { SPOTIFY_HOME } from '@/lib/service-routes';
 import { EXTERNAL_SOURCES, SOURCE_LABEL, matchesFilter, type SourceFilterId } from '@/lib/sources';
 import type { PlayContext } from '@/store/player-store';
 
 const ARTIST_TRACKS_LIMIT = 500;
-const SOURCE_ORDER: SourceId[] = ['local', 'yandex', 'spotify'];
+const SOURCE_ORDER: SourceId[] = ['local', 'yandex', 'vk', 'spotify'];
 
 type TracksBySource = Record<SourceId, UnifiedTrack[] | null>;
 
@@ -81,23 +82,24 @@ export function ArtistPage() {
   const [params] = useSearchParams();
   const spotifyId = params.get('spotify');
   const yandexId = params.get('yandex');
+  const vkId = params.get('vk');
 
   const [filter, setFilter] = useState<SourceFilterId>('all');
   const [textFilter, setTextFilter] = useState('');
   const [showAllPopular, setShowAllPopular] = useState(false);
   const [refs, setRefs] = useState<Partial<Record<SourceId, UnifiedArtist>>>({});
-  const [tracks, setTracks] = useState<TracksBySource>({ local: null, spotify: null, yandex: null });
+  const emptyTracks = (): TracksBySource => ({ local: null, spotify: null, yandex: null, vk: null });
+  const [tracks, setTracks] = useState<TracksBySource>(emptyTracks);
   const [failed, setFailed] = useState<SourceId[]>([]);
   const [reloadKey, setReloadKey] = useState(0);
 
   useEffect(() => {
     let cancelled = false;
     setRefs({});
-    setTracks({ local: null, spotify: null, yandex: null });
+    setTracks(emptyTracks());
     setFailed([]);
-    setFilter(
-      spotifyId && !yandexId ? 'spotify' : yandexId && !spotifyId ? 'yandex' : 'all',
-    );
+    const specified = [spotifyId && 'spotify', yandexId && 'yandex', vkId && 'vk'].filter(Boolean);
+    setFilter(specified.length === 1 ? (specified[0] as SourceFilterId) : 'all');
     setTextFilter('');
     setShowAllPopular(false);
 
@@ -113,8 +115,16 @@ export function ArtistPage() {
       .then((list) => put('local', list))
       .catch(() => fail('local'));
 
-    const ids: Record<(typeof EXTERNAL_SOURCES)[number], string | null> = { spotify: spotifyId, yandex: yandexId };
+    const ids: Record<(typeof EXTERNAL_SOURCES)[number], string | null> = {
+      spotify: spotifyId,
+      yandex: yandexId,
+      vk: vkId,
+    };
     for (const source of EXTERNAL_SOURCES) {
+      if (source === 'spotify') {
+        put(source, []);
+        continue;
+      }
       if (shouldSkipExternalArtistLookup(source, ids)) {
         put(source, []);
         continue;
@@ -133,7 +143,7 @@ export function ArtistPage() {
     return () => {
       cancelled = true;
     };
-  }, [name, spotifyId, yandexId, reloadKey]);
+  }, [name, spotifyId, yandexId, vkId, reloadKey]);
 
   const yandexArtistId = refs.yandex?.id ?? yandexId;
   const profile = useQuery({
@@ -151,6 +161,7 @@ export function ArtistPage() {
       local: tracks.local?.length ?? null,
       spotify: tracks.spotify?.length ?? null,
       yandex: tracks.yandex?.length ?? null,
+      vk: tracks.vk?.length ?? null,
     };
   }, [tracks]);
 
@@ -198,6 +209,15 @@ export function ArtistPage() {
         onPlay={() => playCollection(popular.length ? popular : allTracks, context)}
         onShuffle={() => playCollection(allTracks.length ? allTracks : popular, context, true)}
       />
+
+      {spotifyPinned && (
+        <p className="mb-8 text-sm text-muted">
+          Каталог Spotify в MSS больше не загружается.{' '}
+          <Link to={SPOTIFY_HOME} className="text-foreground underline-offset-2 hover:underline">
+            Слушать в разделе Spotify
+          </Link>
+        </p>
+      )}
 
       <div className="space-y-10">
         {popular.length > 0 && (

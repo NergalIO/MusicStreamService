@@ -1,4 +1,4 @@
-import type { DeviceCodePrompt } from '@mss/shared';
+import type { DeviceCodePrompt, LoginPrompt, UnifiedTrack } from '@mss/shared';
 import { useQuery, type QueryClient } from '@tanstack/react-query';
 import { toast } from 'sonner';
 import { create } from 'zustand';
@@ -23,14 +23,9 @@ export function useYandexConnected(): boolean {
   return data?.some((c) => c.id === 'yandex' && c.status === 'connected') ?? false;
 }
 
-export function useSpotifyConnected(): boolean {
+export function useVkConnected(): boolean {
   const { data } = useConnectors();
-  return data?.some((c) => c.id === 'spotify' && c.status !== 'disconnected') ?? false;
-}
-
-export function useSpotifyAvailable(): boolean {
-  const { data } = useConnectors();
-  return data?.some((c) => c.id === 'spotify') ?? false;
+  return data?.some((c) => c.id === 'vk' && c.status === 'connected') ?? false;
 }
 
 export function useYandexAccount() {
@@ -43,33 +38,52 @@ export function useYandexAccount() {
   });
 }
 
+export function useVkAccount() {
+  const connected = useVkConnected();
+  return useQuery({
+    queryKey: ['vk-account'],
+    queryFn: () => window.electronAPI.connectors.account('vk'),
+    enabled: connected,
+    staleTime: 5 * 60_000,
+  });
+}
+
 interface ConnectState {
   connecting: string | null;
   prompt: DeviceCodePrompt | null;
+  loginPrompt: LoginPrompt | null;
   setPrompt: (prompt: DeviceCodePrompt) => void;
+  setLoginPrompt: (prompt: LoginPrompt | null) => void;
 }
 
 export const useConnectStore = create<ConnectState>()((set) => ({
   connecting: null,
   prompt: null,
+  loginPrompt: null,
   setPrompt: (prompt) => set({ prompt }),
+  setLoginPrompt: (loginPrompt) => set({ loginPrompt }),
 }));
 
+function connectedToast(id: string): string {
+  if (id === 'yandex') return 'Яндекс Музыка подключена';
+  if (id === 'vk') return 'VK Музыка подключена';
+  if (id === 'spotify') return 'Spotify подключён';
+  return 'Сервис подключён';
+}
+
 export async function connectSource(id: string, queryClient: QueryClient): Promise<void> {
-  useConnectStore.setState({ connecting: id, prompt: null });
+  useConnectStore.setState({ connecting: id, prompt: null, loginPrompt: null });
   try {
     await window.electronAPI.connectors.connect(id);
-    toast.success(
-      id === 'yandex' ? 'Яндекс Музыка подключена' : id === 'spotify' ? 'Spotify подключён' : 'Сервис подключён',
-    );
+    toast.success(connectedToast(id));
   } catch (e) {
     const message = e instanceof Error ? e.message.replace(/^Error invoking remote method '[^']+': (Error: )?/, '') : '';
     if (!/abort|отмен/i.test(message)) toast.error(message || 'Не удалось подключиться');
   } finally {
-    useConnectStore.setState({ connecting: null, prompt: null });
+    useConnectStore.setState({ connecting: null, prompt: null, loginPrompt: null });
     await queryClient.invalidateQueries({ queryKey: ['connectors'] });
     await queryClient.invalidateQueries({ queryKey: ['yandex-account'] });
-    await queryClient.invalidateQueries({ queryKey: ['spotify'] });
+    await queryClient.invalidateQueries({ queryKey: ['vk-account'] });
   }
 }
 
@@ -78,24 +92,19 @@ export async function cancelConnect(): Promise<void> {
   if (id) await window.electronAPI.connectors.cancelConnect(id);
 }
 
+export async function replyVkLogin(reply: Parameters<typeof window.electronAPI.connectors.loginReply>[0]): Promise<void> {
+  await window.electronAPI.connectors.loginReply(reply);
+}
+
 export async function disconnectSource(id: string, queryClient: QueryClient): Promise<void> {
   await window.electronAPI.connectors.disconnect(id);
   if (id === 'yandex') queryClient.removeQueries({ queryKey: ['yandex'] });
-  if (id === 'spotify') queryClient.removeQueries({ queryKey: ['spotify'] });
+  if (id === 'vk') queryClient.removeQueries({ queryKey: ['vk'] });
   await queryClient.invalidateQueries({ queryKey: ['connectors'] });
   if (id === 'yandex') queryClient.setQueryData(['yandex-account'], null);
+  if (id === 'vk') queryClient.setQueryData(['vk-account'], null);
 }
 
-/** Отключить и снова пройти OAuth (нужно после смены scopes Spotify). */
-export async function reconnectSource(id: string, queryClient: QueryClient): Promise<void> {
-  await disconnectSource(id, queryClient);
-  await connectSource(id, queryClient);
-}
-
-export function isSpotifyScopeError(error: unknown): boolean {
-  const msg = error instanceof Error ? error.message : String(error ?? '');
-  if (/allowlist|User Management|403 Forbidden для/i.test(msg)) return false;
-  return /invalid token scopes|нет права streaming|недостаточно прав spotify|scope streaming|подтвердив доступ/i.test(
-    msg,
-  );
+export async function setVkSaved(track: UnifiedTrack, saved: boolean): Promise<void> {
+  await window.electronAPI.connectors.setSaved('vk', track, saved);
 }

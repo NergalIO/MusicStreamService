@@ -1,6 +1,7 @@
 import { useEffect } from 'react';
-import { useNavigate } from 'react-router-dom';
+import { useLocation, useNavigate } from 'react-router-dom';
 import { searchPath } from '@/lib/service-routes';
+import { isSpotifyPath } from '@/lib/spotify-session';
 import { changeVolumeBy, seekBy, skipNext, skipPrev, toggleLike, togglePlay } from '@/lib/player-actions';
 import { usePlaybackStore } from '@/store/playback-store';
 import { usePlayerStore } from '@/store/player-store';
@@ -37,10 +38,12 @@ function focusSearch(): void {
 
 export function useHotkeys(): void {
   const navigate = useNavigate();
+  const location = useLocation();
 
   useEffect(() => {
     const onKey = (e: KeyboardEvent) => {
       const ctrl = e.ctrlKey || e.metaKey;
+      const spotify = isSpotifyPath(location.pathname);
       if (ctrl && e.code === 'KeyF') {
         e.preventDefault();
         if (document.querySelector('[data-search-input]')) focusSearch();
@@ -51,11 +54,13 @@ export function useHotkeys(): void {
         return;
       }
       if (ctrl && e.code === 'KeyP') {
+        if (spotify) return;
         e.preventDefault();
         const { nowPlayingOpen, setNowPlaying } = usePlaybackStore.getState();
         if (usePlayerStore.getState().current || nowPlayingOpen) setNowPlaying(!nowPlayingOpen);
         return;
       }
+      if (spotify) return;
       if (isTyping(e.target) || e.altKey) return;
       // Внутри открытых меню и списков стрелки заняты навигацией.
       if ((e.target as HTMLElement | null)?.closest('[role="menu"], [role="listbox"], [role="slider"]')) return;
@@ -98,5 +103,5 @@ export function useHotkeys(): void {
     };
     window.addEventListener('keydown', onKey);
     return () => window.removeEventListener('keydown', onKey);
-  }, [navigate]);
+  }, [navigate, location.pathname]);
 }

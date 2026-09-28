@@ -1,8 +1,9 @@
-export type ServiceScope = 'mss' | 'yandex' | 'spotify' | 'media';
+export type ServiceScope = 'mss' | 'yandex' | 'spotify' | 'vk' | 'media';
 
 export const MSS_HOME = '/mss';
 export const YANDEX_HOME = '/yandex';
 export const SPOTIFY_HOME = '/spotify';
+export const VK_HOME = '/vk';
 export const MEDIA_HOME = '/media/library/likes';
 
 export function libraryPath(scope: ServiceScope, tab: string): string {
@@ -18,6 +19,7 @@ export function searchPath(scope: ServiceScope, q?: string): string {
 export function scopeFromPathname(pathname: string): ServiceScope {
   if (pathname.startsWith('/yandex')) return 'yandex';
   if (pathname.startsWith('/spotify')) return 'spotify';
+  if (pathname.startsWith('/vk')) return 'vk';
   if (pathname.startsWith('/mss')) return 'mss';
   if (pathname.startsWith('/media')) return 'media';
   return 'media';

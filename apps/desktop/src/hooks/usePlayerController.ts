@@ -1,7 +1,7 @@
 import { useEffect } from 'react';
 import { toast } from 'sonner';
 import { applyEqualizer, getAnalyser, getAudioEngine } from '@/hooks/useAudioEngine';
-import { useYandexConnected } from '@/lib/connectors';
+import { useVkConnected, useYandexConnected } from '@/lib/connectors';
 import {
   changeVolumeBy,
   loadMoreWave,
@@ -16,12 +16,12 @@ import {
 import { initListeningSync, recordPlay } from '@/lib/listening';
 import { externalUrl } from '@/lib/playlist-io';
 import { useSleepStore } from '@/store/sleep-store';
-import { invalidateStream, proxyUrl, resolveStream } from '@/lib/playback';
-import { getSpotifyWebPlayer, isSpotifyPlaybackActive } from '@/lib/spotify-web-player';
+import { invalidateStream, resolveStream } from '@/lib/playback';
 import { useLikesStore } from '@/store/likes-store';
 import { usePlaybackStore } from '@/store/playback-store';
 import { upcomingTracks, usePlayerStore, type QueueItem } from '@/store/player-store';
 import { syncLobbyPause, syncLobbyPlay } from '@/lib/lobby-host-sync';
+import { isLobbyGuestMirroring, syncLobbyListenVolume, tickLobbyGuestPlayback } from '@/lib/lobby-guest-player';
 import { isLobbyGuest } from '@/store/lobby-store';
 import { normalizationGainDb, useSettingsStore } from '@/store/settings-store';
 
@@ -121,14 +121,8 @@ function publishProgress(): void {
     return;
   }
   const { currentTime, duration, playing } = usePlaybackStore.getState();
-  const position = isSpotifyPlaybackActive()
-    ? getSpotifyWebPlayer().getCurrentTime()
-    : engine.currentUrl
-      ? engine.getCurrentTime()
-      : currentTime;
-  const dur = isSpotifyPlaybackActive()
-    ? getSpotifyWebPlayer().getDuration() || duration
-    : engine.getDuration() || duration;
+  const position = engine.currentUrl ? engine.getCurrentTime() : currentTime;
+  const dur = engine.getDuration() || duration;
   window.electronAPI?.player.publishProgress({
     position,
     duration: dur,
@@ -198,46 +192,21 @@ async function startCurrent(playId: number): Promise<void> {
     const stream = await resolveStream(current, quality);
     if (usePlayerStore.getState().playId !== playId) return;
     usePlaybackStore.setState({ preview: stream.preview, codec: stream.codec, bitrate: stream.bitrate });
-    if (stream.spotifyUri) {
-      getSpotifyWebPlayer().stop();
-      engine.stop();
-      try {
-        await getSpotifyWebPlayer().play(stream.spotifyUri, startAt);
-      } catch (sdkErr) {
-        if (stream.fallbackPreviewUrl) {
-          usePlaybackStore.setState({ preview: true });
-          if (!previewWarned.has(current.id)) {
-            previewWarned.add(current.id);
-            toast.warning('Spotify SDK недоступен — играет превью', {
-              description: sdkErr instanceof Error ? sdkErr.message : String(sdkErr),
-            });
-          }
-          await engine.play(proxyUrl(stream.fallbackPreviewUrl), {
-            crossfade: transition === 'crossfade' ? crossfade : 0,
-            startAt,
-            gainDb: normalizationGainDb(current.loudnessLufs),
-          });
-        } else {
-          throw sdkErr;
-        }
-      }
-    } else {
-      getSpotifyWebPlayer().stop();
-      if (stream.preview && !previewWarned.has(current.id)) {
-        previewWarned.add(current.id);
-        toast.warning('Играет 30-секундный фрагмент', {
-          description:
-            current.source === 'yandex'
-              ? 'Яндекс не выдал полный трек. Проверьте Плюс или войдите заново в Настройках.'
-              : 'Полный трек доступен только с Premium-подпиской сервиса.',
-        });
-      }
-      await engine.play(stream.url, {
-        crossfade: transition === 'crossfade' ? crossfade : 0,
-        startAt,
-        gainDb: normalizationGainDb(current.loudnessLufs),
+    void window.electronAPI?.spotifySession.pause();
+    if (stream.preview && !previewWarned.has(current.id)) {
+      previewWarned.add(current.id);
+      toast.warning('Играет 30-секундный фрагмент', {
+        description:
+          current.source === 'yandex'
+            ? 'Яндекс не выдал полный трек. Проверьте Плюс или войдите заново в Настройках.'
+            : 'Полный трек доступен только с Premium-подпиской сервиса.',
       });
     }
+    await engine.play(stream.url, {
+      crossfade: transition === 'crossfade' ? crossfade : 0,
+      startAt,
+      gainDb: normalizationGainDb(current.loudnessLufs),
+    });
     if (usePlayerStore.getState().playId !== playId) return;
     consecutiveErrors = 0;
     void syncLobbyPlay(current, Math.round(startAt * 1000));
@@ -277,7 +246,7 @@ async function preloadNext(): Promise<void> {
   if (!next || !next.playable) return;
   try {
     const stream = await resolveStream(next, useSettingsStore.getState().quality);
-    if (!stream.spotifyUri && stream.url) getAudioEngine().preload(stream.url);
+    if (stream.url) getAudioEngine().preload(stream.url);
   } catch {
     /* resolved again when it actually starts */
   }
@@ -285,16 +254,18 @@ async function preloadNext(): Promise<void> {
 
 export function usePlayerController(): void {
   const yandexConnected = useYandexConnected();
+  const vkConnected = useVkConnected();
 
   useEffect(() => {
     const engine = getAudioEngine();
-    const spotify = getSpotifyWebPlayer();
     const sync = () => {
       const s = usePlayerStore.getState();
+      if (isLobbyGuestMirroring()) {
+        syncLobbyListenVolume();
+        return;
+      }
       engine.setVolume(s.volume);
       engine.setMuted(s.muted);
-      const linear = s.muted ? 0 : s.volume;
-      spotify.setVolume(linear);
     };
     sync();
     engine.setCrossfade(useSettingsStore.getState().crossfade);
@@ -315,7 +286,6 @@ export function usePlayerController(): void {
         if (s.playId !== prev.playId) void startCurrent(s.playId);
         if (s.current?.uid !== prev.current?.uid && !s.current) {
           engine.stop();
-          spotify.stop();
           updateMediaSession(null);
           publishSnapshot();
         }
@@ -408,95 +378,6 @@ export function usePlayerController(): void {
         }
         handlePlaybackFailure(`Ошибка потока: ${e.error?.message || 'код ' + (e.error?.code ?? '?')}`, true);
       }),
-
-      spotify.on('play', () => {
-        usePlaybackStore.setState({ playing: true });
-        publishSnapshot();
-      }),
-      spotify.on('pause', () => {
-        usePlaybackStore.setState({ playing: false });
-        publishSnapshot();
-      }),
-      spotify.on('playing', () => usePlaybackStore.setState({ loading: false, playing: true })),
-      spotify.on('durationchange', () => {
-        const d = spotify.getDuration();
-        if (d) usePlaybackStore.setState({ duration: d });
-      }),
-      spotify.on('timeupdate', () => {
-        const t = spotify.getCurrentTime();
-        const d = spotify.getDuration();
-        usePlaybackStore.setState({ currentTime: t, ...(d ? { duration: d } : {}) });
-        if (Math.abs(t - lastSavedResume) >= RESUME_SAVE_EVERY) saveResumePosition(t);
-        const now = Date.now();
-        if (now - lastProgressSent >= 1000) {
-          lastProgressSent = now;
-          publishProgress();
-        }
-        if (session && isSpotifyPlaybackActive()) {
-          const delta = t - session.lastTime;
-          if (delta > 0 && delta < 1.5) session.played += delta;
-          session.lastTime = t;
-          if (!session.preloaded && d && d - t < PRELOAD_BEFORE_END) {
-            session.preloaded = true;
-            void preloadNext();
-          }
-        }
-        if ('mediaSession' in navigator && d && Number.isFinite(d)) {
-          try {
-            navigator.mediaSession.setPositionState({
-              duration: d,
-              position: Math.min(t, d),
-              playbackRate: 1,
-            });
-          } catch {
-            /* invalid state */
-          }
-        }
-      }),
-      spotify.on('nearend', () => {
-        if (usePlayerStore.getState().repeat === 'one') return;
-        if (session) session.finished = true;
-        void playNextTrack(true);
-      }),
-      spotify.on('ended', () => {
-        if (session) session.finished = true;
-        void playNextTrack(true).then((advanced) => {
-          if (!advanced) {
-            finalizeSession();
-            usePlaybackStore.setState({ playing: false });
-            if (useSleepStore.getState().afterTrack) {
-              useSleepStore.getState().cancel();
-              toast('Таймер сна: воспроизведение остановлено');
-            }
-          }
-        });
-      }),
-      spotify.on('error', () => {
-        const s = session;
-        if (!s || s.track.source !== 'spotify') return;
-        if (!s.retried) {
-          s.retried = true;
-          invalidateStream(s.track, useSettingsStore.getState().quality);
-          void (async () => {
-            try {
-              const stream = await resolveStream(s.track, useSettingsStore.getState().quality);
-              if (stream.fallbackPreviewUrl) {
-                getSpotifyWebPlayer().stop();
-                usePlaybackStore.setState({ preview: true });
-                await engine.play(proxyUrl(stream.fallbackPreviewUrl), {
-                  gainDb: normalizationGainDb(s.track.loudnessLufs),
-                });
-                return;
-              }
-            } catch {
-              /* retry SDK below */
-            }
-            usePlayerStore.getState().replay(s.lastTime);
-          })();
-          return;
-        }
-        handlePlaybackFailure('Ошибка Spotify Web Playback', true);
-      }),
     ];
 
     if ('mediaSession' in navigator) {
@@ -507,8 +388,7 @@ export function usePlayerController(): void {
       ms.setActionHandler('previoustrack', () => skipPrev());
       ms.setActionHandler('seekto', (d) => {
         if (d.seekTime === undefined) return;
-        if (isSpotifyPlaybackActive()) getSpotifyWebPlayer().seek(d.seekTime);
-        else engine.seek(d.seekTime);
+        engine.seek(d.seekTime);
       });
       updateMediaSession(usePlayerStore.getState().current);
     }
@@ -527,16 +407,17 @@ export function usePlayerController(): void {
       else if (cmd.startsWith('sleep:')) runSleepCommand(cmd);
     });
 
+    const offSpotifyMedia = window.electronAPI?.spotifySession?.onMedia(({ playing }) => {
+      if (!playing) return;
+      if (!engine.paused) engine.pause();
+    });
+
     const sleepTimer = setInterval(() => {
       const { endsAt } = useSleepStore.getState();
       if (!endsAt || Date.now() < endsAt) return;
       useSleepStore.getState().cancel();
-      if (isSpotifyPlaybackActive()) {
-        getSpotifyWebPlayer().pause();
-        toast('Таймер сна: воспроизведение остановлено');
-      } else {
-        void engine.fadeOutAndPause(8).then(() => toast('Таймер сна: воспроизведение остановлено'));
-      }
+      void window.electronAPI?.spotifySession.pause();
+      void engine.fadeOutAndPause(8).then(() => toast('Таймер сна: воспроизведение остановлено'));
     }, 1000);
 
     // Спектр для мини-плеера шлём, только пока он открыт и визуализатор там включён.
@@ -571,8 +452,7 @@ export function usePlayerController(): void {
     });
 
     const onUnload = () => {
-      if (isSpotifyPlaybackActive()) saveResumePosition(getSpotifyWebPlayer().getCurrentTime());
-      else if (engine.currentUrl) saveResumePosition(engine.getCurrentTime());
+      if (engine.currentUrl) saveResumePosition(engine.getCurrentTime());
       finalizeSession();
     };
     window.addEventListener('beforeunload', onUnload);
@@ -580,10 +460,23 @@ export function usePlayerController(): void {
 
     publishSnapshot();
 
+    const guestUiTimer = setInterval(() => {
+      if (!isLobbyGuestMirroring()) return;
+      tickLobbyGuestPlayback();
+      publishSnapshot();
+      const now = Date.now();
+      if (now - lastProgressSent >= 1000) {
+        lastProgressSent = now;
+        publishProgress();
+      }
+    }, 250);
+
     return () => {
+      clearInterval(guestUiTimer);
       offListeningSync();
       unsubs.forEach((u) => u());
       offCommand?.();
+      offSpotifyMedia?.();
       offVolume?.();
       offMini?.();
       offMiniVis();
@@ -594,8 +487,8 @@ export function usePlayerController(): void {
   }, []);
 
   useEffect(() => {
-    void useLikesStore.getState().sync({ yandex: yandexConnected });
-  }, [yandexConnected]);
+    void useLikesStore.getState().sync({ yandex: yandexConnected, vk: vkConnected });
+  }, [yandexConnected, vkConnected]);
 
   useEffect(() => {
     if ('mediaSession' in navigator) {

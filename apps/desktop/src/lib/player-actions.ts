@@ -2,8 +2,7 @@ import type { UnifiedTrack, WaveSettings } from '@mss/shared';
 import { toast } from 'sonner';
 import { getAudioEngine } from '@/hooks/useAudioEngine';
 import { syncLobbyPause } from '@/lib/lobby-host-sync';
-import { getSpotifyWebPlayer, isSpotifyPlaybackActive } from '@/lib/spotify-web-player';
-import { isLobbyHost } from '@/store/lobby-store';
+import { isLobbyGuest, isLobbyHost } from '@/store/lobby-store';
 import { undoableToast } from '@/lib/undo';
 import { useLikesStore } from '@/store/likes-store';
 import { upcomingTracks, usePlayerStore, type PlayContext } from '@/store/player-store';
@@ -63,12 +62,14 @@ export async function playNextTrack(auto = false): Promise<boolean> {
 }
 
 export function skipNext(): void {
+  if (isLobbyGuest()) return;
   void playNextTrack(false);
 }
 
 export function skipPrev(): void {
+  if (isLobbyGuest()) return;
   const engine = getAudioEngine();
-  const t = isSpotifyPlaybackActive() ? getSpotifyWebPlayer().getCurrentTime() : engine.getCurrentTime();
+  const t = engine.getCurrentTime();
   if (t > 3) {
     seekTo(0);
     return;
@@ -77,18 +78,10 @@ export function skipPrev(): void {
 }
 
 export function togglePlay(): void {
+  if (isLobbyGuest()) return;
   const engine = getAudioEngine();
   const { current, replay, resumeAt } = usePlayerStore.getState();
   if (!current) return;
-  if (isSpotifyPlaybackActive()) {
-    const sp = getSpotifyWebPlayer();
-    if (sp.paused) void sp.resume().catch((e) => toast.error(ipcMessage(e)));
-    else {
-      sp.pause();
-      if (isLobbyHost()) void syncLobbyPause(Math.round(sp.getCurrentTime() * 1000));
-    }
-    return;
-  }
   if (!engine.currentUrl) {
     replay(resumeAt);
     return;
@@ -101,17 +94,13 @@ export function togglePlay(): void {
 }
 
 export function seekTo(seconds: number): void {
-  if (isSpotifyPlaybackActive()) getSpotifyWebPlayer().seek(seconds);
-  else getAudioEngine().seek(seconds);
+  if (isLobbyGuest()) return;
+  getAudioEngine().seek(seconds);
 }
 
 export function seekBy(seconds: number): void {
+  if (isLobbyGuest()) return;
   const engine = getAudioEngine();
-  if (isSpotifyPlaybackActive()) {
-    const sp = getSpotifyWebPlayer();
-    seekTo(Math.max(0, sp.getCurrentTime() + seconds));
-    return;
-  }
   if (!engine.currentUrl) return;
   engine.seek(Math.max(0, engine.getCurrentTime() + seconds));
 }
@@ -155,9 +144,14 @@ export function playCollection(
   context: PlayContext | null,
   shuffle = false,
 ): void {
-  const playable = tracks.filter((t) => t.playable);
+  const skippedSpotify = tracks.some((t) => t.source === 'spotify');
+  const playable = tracks.filter((t) => t.playable && t.source !== 'spotify');
   if (!playable.length) {
-    toast.error('Нет доступных для воспроизведения треков');
+    toast.error(
+      skippedSpotify
+        ? 'Spotify слушается в разделе Spotify — откройте его в сайдбаре'
+        : 'Нет доступных для воспроизведения треков',
+    );
     return;
   }
   usePlayerStore.setState({ shuffle });

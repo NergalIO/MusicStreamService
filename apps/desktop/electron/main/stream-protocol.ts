@@ -4,6 +4,7 @@ import path from 'node:path';
 import { Readable } from 'node:stream';
 import { isDownloadedFile } from './downloads.js';
 import { isRegisteredLocalPath } from './local-tracks.js';
+import { serveVkAudio } from './vk-hls.js';
 
 export const STREAM_SCHEME = 'mss-stream';
 
@@ -82,7 +83,8 @@ async function proxyRemote(target: string, rangeHeader: string | null): Promise<
 
 /**
  * mss-stream://proxy/?u=<url> — удалённый поток с CORS-заголовками (иначе Web Audio выдаёт тишину);
- * mss-stream://file/?p=<path> — локальный файл из temp/userData или папки загрузок с поддержкой Range.
+ * mss-stream://file/?p=<path> — локальный файл из temp/userData или папки загрузок с поддержкой Range;
+ * mss-stream://vk/?u=<m3u8> — HLS VK, расшифровка и MPEG-TS → MP3.
  */
 export function handleStreamProtocol(): void {
   protocol.handle(STREAM_SCHEME, async (request) => {
@@ -91,6 +93,7 @@ export function handleStreamProtocol(): void {
     try {
       if (url.hostname === 'proxy') return await proxyRemote(url.searchParams.get('u') ?? '', range);
       if (url.hostname === 'file') return serveFile(url.searchParams.get('p') ?? '', range);
+      if (url.hostname === 'vk') return await serveVkAudio(url.searchParams.get('u') ?? '', range);
     } catch (e) {
       return new Response(e instanceof Error ? e.message : 'Stream error', { status: 502, headers: CORS_HEADERS });
     }

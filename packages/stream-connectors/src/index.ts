@@ -5,3 +5,7 @@ export * from './yandex.js';
 export * from './yandex-api.js';
 export * from './yandex-client.js';
 export * from './yandex-mappers.js';
+export * from './vk.js';
+export * from './vk-client.js';
+export * from './vk-mappers.js';
+export * from './vk-hls.js';

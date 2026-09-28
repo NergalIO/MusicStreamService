@@ -6,6 +6,7 @@ import type { DownloadProgress, DownloadRecord, Quality, UnifiedTrack } from '@m
 import { compressToAac, isFfmpegAvailable, shouldCompress } from './audio-compress.js';
 import { flacMp4ToTaggedFlac, tagFlac, tagMp3, type AudioTags, type CoverImage } from './audio-tags.js';
 import { connectorRegistry } from './connectors.js';
+import { materializeVkMp3, parseVkStreamTarget } from './vk-hls.js';
 
 const MAX_PARALLEL = 3;
 const PROGRESS_INTERVAL_MS = 250;
@@ -234,8 +235,13 @@ async function performDownload(track: UnifiedTrack, quality: Quality, compressKb
     if (handle.preview) throw new Error('Доступно только превью — для загрузки нужна подписка');
 
     broadcast('downloads:progress', { key, received: 0, total: 0 } satisfies DownloadProgress);
+    const vkTarget = parseVkStreamTarget(handle.url) ?? (/m3u8(\?|$)/i.test(handle.url) ? handle.url : null);
     const [audio, cover] = await Promise.all([
-      fetchWithProgress(handle.url, key, controller.signal),
+      vkTarget
+        ? materializeVkMp3(vkTarget, (received, total) => {
+            broadcast('downloads:progress', { key, received, total } satisfies DownloadProgress);
+          })
+        : fetchWithProgress(handle.url, key, controller.signal),
       fetchCover(track.coverUrl),
     ]);
     throwIfCancelled(key);

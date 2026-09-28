@@ -1,5 +1,5 @@
 import type { FeedBlock, FeedItem, StatsTopArtist, StatsTopTrack, UnifiedTrack } from '@mss/shared';
-import { useQueryClient } from '@tanstack/react-query';
+import { useQuery, useQueryClient } from '@tanstack/react-query';
 import { Pause, Play, Radio } from 'lucide-react';
 import { Link } from 'react-router-dom';
 import { CardRowSkeleton, TrackListSkeleton } from '@/components/media/CollectionHeader';
@@ -8,22 +8,19 @@ import { MediaCard } from '@/components/media/MediaCard';
 import { trackMenuGroups } from '@/components/tracks/TrackContextMenu';
 import { TrackList } from '@/components/tracks/TrackList';
 import { Button } from '@/components/ui/button';
-import { SpotifyReconnectButton } from '@/components/connectors/SpotifyReconnectButton';
 import { ErrorState } from '@/components/ui/states';
 import { artistPath } from '@/lib/artists';
-import { connectSource, useSpotifyAvailable, useSpotifyConnected, useYandexConnected } from '@/lib/connectors';
+import { connectSource, useVkConnected, useYandexConnected } from '@/lib/connectors';
 import { greeting } from '@/lib/format';
 import { albumMenu, artistMenu, playlistMenu } from '@/lib/card-menus';
 import { statsArtistGroup, statsTrackToUnified, useShelves } from '@/lib/stats';
 import { albumLink, playlistPath } from '@/lib/links';
 import { playCollection, startWave, togglePlay } from '@/lib/player-actions';
-import { libraryPath, MSS_HOME, SPOTIFY_HOME, YANDEX_HOME } from '@/lib/service-routes';
+import { libraryPath, MSS_HOME, YANDEX_HOME } from '@/lib/service-routes';
 import {
   useLocalTracks,
   useMssListenNow,
-  useSpotifyListenNow,
-  useSpotifyPlaylists,
-  useSpotifySavedTracks,
+  useVkPlaylists,
   useYandexChart,
   useYandexFeed,
   useYandexPlaylists,
@@ -249,7 +246,6 @@ export function MssHomePage() {
             <ListenNowHero
               tracks={listenNow.tracks}
               homePath={MSS_HOME}
-              accent="brand"
               idleSubtitle="То, что вы слушаете чаще всего, и свежие треки из библиотеки"
               trackInMix={(current) =>
                 !!current && listenNow.tracks.some((t) => t.source === current.source && t.id === current.id)
@@ -345,36 +341,14 @@ export function YandexHomePage() {
   );
 }
 
-function ConnectSpotifyCard() {
-  const queryClient = useQueryClient();
-  const available = useSpotifyAvailable();
-  return (
-    <div className="flex flex-wrap items-center justify-between gap-4 rounded-2xl border border-border bg-card p-6">
-      <div>
-        <div className="text-lg font-semibold">Подключите Spotify</div>
-        <p className="mt-1 text-sm text-muted">
-          {available
-            ? 'Сохранённые треки и плейлисты из вашего аккаунта Spotify.'
-            : import.meta.env.DEV
-              ? 'Добавьте SPOTIFY_CLIENT_ID в корневой .env и перезапустите pnpm dev:desktop.'
-              : 'Установите свежий .exe с GitHub Releases (CI) или положите SPOTIFY_CLIENT_ID в .env рядом с программой.'}
-        </p>
-      </div>
-      {available && <Button onClick={() => void connectSource('spotify', queryClient)}>Подключить</Button>}
-    </div>
-  );
-}
-
 function ListenNowHero({
   tracks,
   homePath,
-  accent,
   idleSubtitle,
   trackInMix,
 }: {
   tracks: UnifiedTrack[];
   homePath: string;
-  accent: 'brand' | 'spotify';
   idleSubtitle: string;
   trackInMix: (current: QueueItem | null) => boolean;
 }) {
@@ -382,15 +356,10 @@ function ListenNowHero({
   const playing = usePlaybackStore((s) => s.playing);
   const context: PlayContext = { type: 'other', title: 'Слушать сейчас', path: homePath };
   const active = trackInMix(current);
-  const gradient =
-    accent === 'spotify'
-      ? 'from-emerald-500/35 via-emerald-500/10'
-      : 'from-primary/40 via-primary/15';
-  const glow = accent === 'spotify' ? 'bg-emerald-500/30' : 'bg-primary/40';
 
   return (
-    <div className={`relative overflow-hidden rounded-2xl border border-foreground/[0.06] bg-gradient-to-br ${gradient} to-card p-7`}>
-      <div className={`pointer-events-none absolute -right-16 -top-24 h-72 w-72 rounded-full ${glow} blur-3xl motion-reduce:blur-none`} />
+    <div className="relative overflow-hidden rounded-2xl border border-foreground/[0.06] bg-gradient-to-br from-primary/40 via-primary/15 to-card p-7">
+      <div className="pointer-events-none absolute -right-16 -top-24 h-72 w-72 rounded-full bg-primary/40 blur-3xl motion-reduce:blur-none" />
       <div className="relative flex items-center gap-6">
         <button
           type="button"
@@ -416,118 +385,66 @@ function ListenNowHero({
   );
 }
 
-export function SpotifyHomePage() {
-  const spotify = useSpotifyConnected();
-  const listenNow = useSpotifyListenNow(30);
-  const playlists = useSpotifyPlaylists();
-  const saved = useSpotifySavedTracks(20);
-  const savedContext: PlayContext = { type: 'likes', title: 'Сохранённые треки', path: libraryPath('spotify', 'likes') };
-  const listenContext: PlayContext = { type: 'other', title: 'Слушать сейчас', path: SPOTIFY_HOME };
+export function VkHomePage() {
+  const vk = useVkConnected();
+  const queryClient = useQueryClient();
+  const playlists = useVkPlaylists();
+  const home = useQuery({
+    queryKey: ['vk', 'home'],
+    queryFn: () => window.electronAPI.connectors.homeTracks('vk', 40),
+    enabled: vk,
+    staleTime: 2 * 60_000,
+  });
+  const context: PlayContext = { type: 'library', title: 'Моя музыка VK', path: libraryPath('vk', 'likes') };
 
   return (
     <div className="space-y-10">
-      <h1 className="text-3xl font-bold tracking-tight">Spotify</h1>
-
-      {spotify ? null : <ConnectSpotifyCard />}
-
-      {spotify && listenNow.isError && (
-        <ErrorState
-          className="py-8"
-          title="Не удалось загрузить подборку Spotify"
-          error={listenNow.error}
-          action={<SpotifyReconnectButton error={listenNow.error} />}
-          onRetry={() => void listenNow.refetch()}
-        />
+      <h1 className="text-3xl font-bold tracking-tight">VK Музыка</h1>
+      {vk ? null : (
+        <div className="flex flex-wrap items-center justify-between gap-4 rounded-2xl border border-border bg-card p-6">
+          <div>
+            <div className="text-lg font-semibold">Подключите VK</div>
+            <p className="mt-1 text-sm text-muted">Моя музыка, плейлисты и поиск — токен остаётся только на этом устройстве.</p>
+          </div>
+          <Button onClick={() => void connectSource('vk', queryClient)}>Подключить</Button>
+        </div>
       )}
-
-      {spotify && !listenNow.isError && (listenNow.isLoading || (listenNow.data?.length ?? 0) > 0) && (
+      {vk && (
         <>
-          {listenNow.isLoading ? (
-            <div className="h-32 animate-pulse rounded-2xl bg-foreground/[0.06]" />
-          ) : (
-            <ListenNowHero
-              tracks={listenNow.data ?? []}
-              homePath={SPOTIFY_HOME}
-              accent="spotify"
-              idleSubtitle="Подборка из ваших трендов и рекомендаций Spotify"
-              trackInMix={(current) =>
-                !!current &&
-                current.source === 'spotify' &&
-                (listenNow.data ?? []).some((t) => t.id === current.id)
-              }
-            />
-          )}
-          <Shelf title="Слушать сейчас" subtitle="Топ за месяц и рекомендации Spotify">
-            {listenNow.isLoading ? (
+          <Shelf title="Моя музыка" moreTo={libraryPath('vk', 'likes')}>
+            {home.isError ? (
+              <ErrorState className="py-8" error={home.error} onRetry={() => void home.refetch()} />
+            ) : home.isLoading ? (
               <TrackListSkeleton rows={8} />
             ) : (
-              <TrackList
-                tracks={listenNow.data ?? []}
-                context={listenContext}
-                showSource={false}
-                emptyText="Подборка пуста"
-              />
+              <TrackList tracks={home.data ?? []} context={context} emptyText="В «Моей музыке» пока пусто" />
             )}
           </Shelf>
+          {(playlists.isLoading || (playlists.data?.length ?? 0) > 0) && (
+            <Shelf title="Ваши плейлисты" moreTo={libraryPath('vk', 'playlists')}>
+              {playlists.isLoading ? (
+                <CardRowSkeleton />
+              ) : (
+                <Carousel>
+                  {(playlists.data ?? []).map((p) => (
+                    <MediaCard
+                      key={p.id}
+                      title={p.title}
+                      subtitle={p.trackCount !== undefined ? `${p.trackCount} треков` : p.owner}
+                      coverUrl={p.coverUrl}
+                      to={playlistPath(p)}
+                      menu={() => playlistMenu(p)}
+                      onPlay={async () => {
+                        const full = await window.electronAPI.connectors.getPlaylist('vk', p.id);
+                        playCollection(full.tracks, { type: 'playlist', title: full.title, path: playlistPath(p) });
+                      }}
+                    />
+                  ))}
+                </Carousel>
+              )}
+            </Shelf>
+          )}
         </>
-      )}
-
-      {spotify && (
-        <Shelf title="Ваши плейлисты" moreTo={libraryPath('spotify', 'playlists')}>
-          {playlists.isError ? (
-            <ErrorState
-              className="py-8"
-              title="Не удалось загрузить плейлисты"
-              error={playlists.error}
-              action={<SpotifyReconnectButton error={playlists.error} />}
-              onRetry={() => void playlists.refetch()}
-            />
-          ) : playlists.isLoading ? (
-            <CardRowSkeleton />
-          ) : !(playlists.data?.length ?? 0) ? (
-            <p className="text-sm text-muted">Плейлистов пока нет или они недоступны для этого аккаунта.</p>
-          ) : (
-            <Carousel>
-              {(playlists.data ?? []).map((p) => (
-                <MediaCard
-                  key={p.id}
-                  title={p.title}
-                  subtitle={p.trackCount !== undefined ? `${p.trackCount} треков` : p.owner}
-                  coverUrl={p.coverUrl}
-                  to={playlistPath(p)}
-                  menu={() => playlistMenu(p)}
-                  onPlay={async () => {
-                    const full = await window.electronAPI.connectors.getPlaylist('spotify', p.id);
-                    playCollection(full.tracks, { type: 'playlist', title: full.title, path: playlistPath(p) });
-                  }}
-                />
-              ))}
-            </Carousel>
-          )}
-        </Shelf>
-      )}
-
-      {spotify && (
-        <Shelf title="Сохранённые треки" moreTo={libraryPath('spotify', 'likes')}>
-          {saved.isError ? (
-            <ErrorState
-              className="py-8"
-              title="Не удалось загрузить сохранённые треки"
-              error={saved.error}
-              action={<SpotifyReconnectButton error={saved.error} />}
-              onRetry={() => void saved.refetch()}
-            />
-          ) : saved.isLoading ? (
-            <TrackListSkeleton rows={5} />
-          ) : (
-            <TrackList
-              tracks={saved.data ?? []}
-              context={savedContext}
-              showSource={false}
-              emptyText="В Spotify пока нет сохранённых треков"
-            />
-          )}
-        </Shelf>
       )}
     </div>
   );
@@ -536,3 +453,4 @@ export function SpotifyHomePage() {
 export function HomePage() {
   return <MssHomePage />;
 }
+

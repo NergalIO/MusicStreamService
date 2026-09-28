@@ -18,7 +18,7 @@ import { usePlayerStore } from '@/store/player-store';
 import { AlbumPage } from '@/pages/AlbumPage';
 import { ArtistPage } from '@/pages/ArtistPage';
 import { ExternalPlaylistPage } from '@/pages/ExternalPlaylistPage';
-import { MssHomePage, SpotifyHomePage, YandexHomePage } from '@/pages/HomePage';
+import { MssHomePage, VkHomePage, YandexHomePage } from '@/pages/HomePage';
 import { LibraryPage } from '@/pages/LibraryPage';
 import { LoginPage } from '@/pages/LoginPage';
 import { PlaylistDetailPage } from '@/pages/PlaylistDetailPage';
@@ -115,11 +115,12 @@ function AppRoutes() {
           <Route path="/" element={<Navigate to="/mss" replace />} />
           <Route path="/mss" element={<MssHomePage />} />
           <Route path="/yandex" element={<YandexHomePage />} />
-          <Route path="/spotify" element={<SpotifyHomePage />} />
+          <Route path="/vk" element={<VkHomePage />} />
+          <Route path="/spotify" element={null} />
+          <Route path="/spotify/*" element={null} />
           <Route path="/media/search" element={<SearchPage scope="media" />} />
           <Route path="/mss/search" element={<Navigate to="/media/search" replace />} />
           <Route path="/yandex/search" element={<Navigate to="/media/search" replace />} />
-          <Route path="/spotify/search" element={<Navigate to="/media/search" replace />} />
           <Route path="/search" element={<Navigate to="/media/search" replace />} />
           <Route path="/media/library" element={<Navigate to="/media/library/likes" replace />} />
           <Route path="/media/library/:tab" element={<LibraryPage scope="media" />} />
@@ -131,8 +132,8 @@ function AppRoutes() {
           <Route path="/mss/library/:tab" element={<LibraryPage scope="mss" />} />
           <Route path="/yandex/library" element={<Navigate to="/yandex/library/likes" replace />} />
           <Route path="/yandex/library/:tab" element={<LibraryPage scope="yandex" />} />
-          <Route path="/spotify/library" element={<Navigate to="/spotify/library/likes" replace />} />
-          <Route path="/spotify/library/:tab" element={<LibraryPage scope="spotify" />} />
+          <Route path="/vk/library" element={<Navigate to="/vk/library/likes" replace />} />
+          <Route path="/vk/library/:tab" element={<LibraryPage scope="vk" />} />
           <Route path="/library" element={<Navigate to="/mss/library/likes" replace />} />
           <Route path="/library/:tab" element={<LegacyLibraryRedirect />} />
           <Route path="/playlists" element={<Navigate to="/mss/library/playlists" replace />} />

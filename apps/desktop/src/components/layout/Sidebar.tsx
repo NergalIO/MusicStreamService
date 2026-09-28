@@ -26,8 +26,8 @@ import { leaveCurrentLobby } from '@/lib/lobby-session';
 import { useLobbyStore } from '@/store/lobby-store';
 import { useYandexConnected } from '@/lib/connectors';
 import { playlistPath } from '@/lib/links';
-import { libraryPath, MSS_HOME, searchPath, SPOTIFY_HOME, YANDEX_HOME } from '@/lib/service-routes';
-import { useMssPlaylists, useSpotifyPlaylists, useYandexPlaylists } from '@/lib/queries';
+import { libraryPath, MSS_HOME, searchPath, SPOTIFY_HOME, VK_HOME, YANDEX_HOME } from '@/lib/service-routes';
+import { useMssPlaylists, useVkPlaylists, useYandexPlaylists } from '@/lib/queries';
 import { cn } from '@/lib/utils';
 import { usePlayerStore } from '@/store/player-store';
 import { useSettingsStore } from '@/store/settings-store';
@@ -135,18 +135,18 @@ function PlaylistSubsection({
   id,
   scope,
 }: {
-  id: Extract<SidebarSectionId, 'mssPlaylists' | 'yandexPlaylists' | 'spotifyPlaylists'>;
-  scope: 'mss' | 'yandex' | 'spotify';
+  id: Extract<SidebarSectionId, 'mssPlaylists' | 'yandexPlaylists' | 'vkPlaylists'>;
+  scope: 'mss' | 'yandex' | 'vk';
 }) {
   const panelCollapsed = useContext(CollapsedContext);
-  const parentSection = scope === 'mss' ? 'mss' : scope === 'yandex' ? 'yandex' : 'spotify';
+  const parentSection = scope === 'mss' ? 'mss' : scope;
   const parentOpen = useSidebarStore((s) => s.sectionsOpen[parentSection]);
   const open = useSidebarStore((s) => s.sectionsOpen[id]);
   const toggleSection = useSidebarStore((s) => s.toggleSection);
   const pinned = useSidebarStore((s) => s.pinnedPlaylists);
   const { data: mssPlaylists = [] } = useMssPlaylists();
   const { data: yandexPlaylists = [] } = useYandexPlaylists();
-  const { data: spotifyPlaylists = [] } = useSpotifyPlaylists();
+  const { data: vkPlaylists = [] } = useVkPlaylists();
 
   const pinSource = scope === 'mss' ? 'local' : scope;
   const pins = pinned.filter((p) => p.source === pinSource);
@@ -159,17 +159,13 @@ function PlaylistSubsection({
           if (!p) return null;
           return { key: `l-${p.id}`, to: `/playlists/${p.id}`, label: p.name, image: p.coverUrl };
         }
-        if (pin.source === 'yandex') {
-          const p = yandexPlaylists.find((x) => x.id === pin.id);
-          if (!p) return null;
-          return { key: `y-${p.id}`, to: playlistPath(p), label: p.title, image: p.coverUrl };
-        }
-        const p = spotifyPlaylists.find((x) => x.id === pin.id);
+        const list = pin.source === 'vk' ? vkPlaylists : yandexPlaylists;
+        const p = list.find((x) => x.id === pin.id);
         if (!p) return null;
-        return { key: `s-${p.id}`, to: playlistPath(p), label: p.title, image: p.coverUrl };
+        return { key: `${pin.source}-${p.id}`, to: playlistPath(p), label: p.title, image: p.coverUrl };
       })
       .filter(Boolean) as { key: string; to: string; label: string; image?: string | null }[];
-  }, [pins, mssPlaylists, yandexPlaylists, spotifyPlaylists]);
+  }, [pins, mssPlaylists, yandexPlaylists, vkPlaylists]);
 
   if (!parentOpen && !panelCollapsed) return null;
   if (!pins.length && panelCollapsed) return null;
@@ -307,10 +303,14 @@ export function Sidebar() {
           </CollapsibleSection>
 
           <CollapsibleSection id="spotify" title="Spotify">
-            <Item to={SPOTIFY_HOME} end icon={Home} label="Слушать сейчас" />
-            <Item to={libraryPath('spotify', 'likes')} icon={Heart} label="Мне нравится" />
-            <Item to={libraryPath('spotify', 'playlists')} icon={ListMusic} label="Все плейлисты" />
-            <PlaylistSubsection id="spotifyPlaylists" scope="spotify" />
+            <Item to={SPOTIFY_HOME} end icon={Home} label="Открыть Spotify" />
+          </CollapsibleSection>
+
+          <CollapsibleSection id="vk" title="VK Музыка">
+            <Item to={VK_HOME} end icon={Home} label="Слушать сейчас" />
+            <Item to={libraryPath('vk', 'likes')} icon={Heart} label="Моя музыка" />
+            <Item to={libraryPath('vk', 'playlists')} icon={ListMusic} label="Все плейлисты" />
+            <PlaylistSubsection id="vkPlaylists" scope="vk" />
           </CollapsibleSection>
         </nav>
 

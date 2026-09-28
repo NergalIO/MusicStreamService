@@ -12,6 +12,10 @@ export function externalUrl(track: UnifiedTrack): string | null {
       : `https://music.yandex.ru/track/${track.id}`;
   }
   if (track.source === 'spotify') return `https://open.spotify.com/track/${track.id}`;
+  if (track.source === 'vk') {
+    const [owner, audio] = track.id.split('_');
+    return owner && audio ? `https://vk.com/audio${owner}_${audio}` : null;
+  }
   return null;
 }
 

@@ -48,6 +48,7 @@ import {
   saveOffline,
 } from './offline-store.js';
 import { initLocalTracks, registerLocalTracksIpc } from './local-tracks-ipc.js';
+import { initSpotifyWebSession } from './spotify-web-session.js';
 import { registerLobbyIpc } from './lobby-ipc.js';
 import { registerRelayBridge } from './relay-bridge.js';
 import { ensureRendererServer, rendererPageUrl } from './renderer-server.js';
@@ -182,7 +183,7 @@ async function ensureWidevine(): Promise<void> {
   try {
     await components.whenReady([components.WIDEVINE_CDM_ID]);
   } catch (err) {
-    console.error('Widevine CDM не установился — Spotify Web Playback не запустится', err);
+    console.error('Widevine CDM не установился — веб-плеер Spotify может не запуститься', err);
   }
 }
 
@@ -229,6 +230,7 @@ app.whenReady().then(async () => {
   registerCrashIpc();
 
   mainWindow = createMainWindow(launchedHidden());
+  initSpotifyWebSession(() => mainWindow);
   registerRelayBridge({ getWindows: () => (mainWindow && !mainWindow.isDestroyed() ? [mainWindow] : []) });
   attachDeepLinkWindow(mainWindow);
   initMedia({

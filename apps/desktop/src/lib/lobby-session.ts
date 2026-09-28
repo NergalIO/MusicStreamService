@@ -2,6 +2,11 @@ import { toast } from 'sonner';
 import type { LobbyDto, LobbyMemberRole, LobbyWsEvent } from '@mss/shared';
 import { leaveLobby, LobbyWsClient } from '@/lib/lobby-api';
 import { startLobbyBroadcast, stopLobbyBroadcast } from '@/lib/lobby-broadcast';
+import {
+  applyLobbyGuestPlayback,
+  beginLobbyGuestPlayerMirror,
+  endLobbyGuestPlayerMirror,
+} from '@/lib/lobby-guest-player';
 import { appendLobbyAudioChunk, setLobbyListenPaused, startLobbyListen, stopLobbyListen } from '@/lib/lobby-listen';
 import { useLobbyStore } from '@/store/lobby-store';
 import { notifyLobbyPresence } from '@/lib/lobby-discord';
@@ -12,13 +17,19 @@ let client: LobbyWsClient | null = null;
 function handleWsEvent(event: LobbyWsEvent): void {
   const store = useLobbyStore.getState();
   switch (event.type) {
-    case 'lobby_state':
-      store.setLobby(event.lobby, store.role ?? inferRole(event.lobby));
-      notifyLobbyPresence(event.lobby, store.role ?? inferRole(event.lobby));
+    case 'lobby_state': {
+      const role = store.role ?? inferRole(event.lobby);
+      store.setLobby(event.lobby, role);
+      notifyLobbyPresence(event.lobby, role);
+      if (role === 'guest') applyLobbyGuestPlayback(event.lobby.playback);
       break;
+    }
     case 'playback':
       store.setPlayback(event.playback);
-      if (store.role === 'guest') setLobbyListenPaused(event.playback.paused);
+      if (store.role === 'guest') {
+        setLobbyListenPaused(event.playback.paused);
+        applyLobbyGuestPlayback(event.playback);
+      }
       break;
     case 'queue_updated':
       store.setQueue(event.queue);
@@ -84,6 +95,7 @@ export function connectLobbySession(lobby: LobbyDto, role: LobbyMemberRole): voi
       useLobbyStore.getState().setLive(true);
     });
     startLobbyListen();
+    beginLobbyGuestPlayerMirror(lobby.playback);
   }
   useLobbyStore.getState().setWsClient(client);
   client.connect(lobby.id);
@@ -103,6 +115,7 @@ export async function leaveCurrentLobby(): Promise<void> {
 }
 
 export function disconnectLobbySession(): void {
+  endLobbyGuestPlayerMirror();
   stopLobbyBroadcast();
   stopLobbyListen();
   client?.disconnect();

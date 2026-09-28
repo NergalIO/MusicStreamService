@@ -14,7 +14,9 @@ export interface RegisterPendingDto {
   email: string;
 }
 
-export type SourceId = 'local' | 'spotify' | 'yandex';
+export type SourceId = 'local' | 'spotify' | 'yandex' | 'vk';
+
+export type ExternalSourceId = Exclude<SourceId, 'local'>;
 
 export type TrackStatus = 'processing' | 'ready' | 'failed' | 'registered' | 'cached';
 
@@ -72,7 +74,7 @@ export type PlaylistEntryDto =
   | {
       entryId: string;
       position: number;
-      external: { source: 'yandex' | 'spotify'; id: string; snapshot: ExternalTrackSnapshot };
+      external: { source: ExternalSourceId; id: string; snapshot: ExternalTrackSnapshot };
     };
 
 export type ListeningPeriod = 'week' | 'month' | 'year' | 'all';
@@ -233,6 +235,24 @@ export interface DeviceCodePrompt {
   userCode: string;
   verificationUrl: string;
   expiresIn: number;
+}
+
+export interface LoginPrompt {
+  source: SourceId;
+  step: 'credentials' | 'code' | 'captcha';
+  captchaImg?: string;
+  phoneMask?: string;
+  error?: string;
+}
+
+export interface LoginReply {
+  source: SourceId;
+  cancelled?: boolean;
+  username?: string;
+  password?: string;
+  code?: string;
+  forceSms?: boolean;
+  captchaKey?: string;
 }
 
 export type FeedItem =

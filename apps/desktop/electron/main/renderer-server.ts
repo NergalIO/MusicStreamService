@@ -36,7 +36,7 @@ function isInside(file: string, root: string): boolean {
   return !rel.startsWith('..') && !path.isAbsolute(rel);
 }
 
-/** Локальный HTTP — secure context для Spotify Web Playback SDK (надёжнее custom scheme). */
+/** Локальный HTTP — постоянный origin и secure context (надёжнее custom scheme). */
 export async function ensureRendererServer(): Promise<string> {
   if (baseUrl) return baseUrl;
 

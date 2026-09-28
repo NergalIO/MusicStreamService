@@ -8,9 +8,6 @@ export interface ResolvedStream {
   preview: boolean;
   codec?: string;
   bitrate?: number;
-  /** Полный трек через Spotify Web Playback SDK (Premium). */
-  spotifyUri?: string;
-  fallbackPreviewUrl?: string;
 }
 
 type PlayableTrack = UnifiedTrack & { streamUrl?: string };
@@ -44,6 +41,9 @@ async function resolveLocal(track: PlayableTrack): Promise<ResolvedStream> {
 }
 
 async function resolveExternal(track: PlayableTrack, quality: Quality): Promise<ResolvedStream> {
+  if (track.source === 'spotify') {
+    throw new Error('Spotify слушается в разделе Spotify — откройте его в сайдбаре');
+  }
   if (!window.electronAPI) throw new Error('Внешние источники доступны только в приложении');
   const downloaded = downloadedFileUrl(track);
   if (downloaded) return { url: downloaded, preview: false };
@@ -54,15 +54,12 @@ async function resolveExternal(track: PlayableTrack, quality: Quality): Promise<
     throw cleanIpcError(e);
   }
   switch (handle.kind) {
-    case 'mediaUrl':
-      return { url: proxyUrl(handle.url), preview: !!handle.preview, codec: handle.codec, bitrate: handle.bitrate };
+    case 'mediaUrl': {
+      const url = handle.url.startsWith('mss-stream://') ? handle.url : proxyUrl(handle.url);
+      return { url, preview: !!handle.preview, codec: handle.codec, bitrate: handle.bitrate };
+    }
     case 'spotifySdk':
-      return {
-        url: '',
-        preview: false,
-        spotifyUri: handle.trackUri,
-        fallbackPreviewUrl: handle.previewUrl,
-      };
+      throw new Error('Spotify слушается в разделе Spotify — откройте его в сайдбаре');
     case 'blobStream':
       return { url: handle.blobUrl, preview: false };
   }

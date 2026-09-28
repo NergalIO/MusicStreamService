@@ -18,6 +18,7 @@ import { dislikeCurrent, skipNext, skipPrev, toggleLike, togglePlay } from '@/li
 import { cn } from '@/lib/utils';
 import { useIsLiked } from '@/store/likes-store';
 import { usePlaybackStore, type NowPlayingTab } from '@/store/playback-store';
+import { useLobbyStore } from '@/store/lobby-store';
 import { usePlayerStore } from '@/store/player-store';
 import { useSettingsStore } from '@/store/settings-store';
 
@@ -33,6 +34,7 @@ export function NowPlaying() {
   const radio = usePlayerStore((s) => s.radio);
   const liked = useIsLiked(current);
   const visualizer = useSettingsStore((s) => s.visualizer);
+  const lobbyGuest = useLobbyStore((s) => s.role === 'guest');
   const color = useDominantColor(current?.coverUrl);
 
   useEffect(() => {
@@ -43,7 +45,11 @@ export function NowPlaying() {
   }, [open, setNowPlaying]);
 
   const activeTab = tab ?? 'lyrics';
-  const tabs: NowPlayingTab[] = current?.source === 'yandex' ? ['lyrics', 'queue', 'similar'] : ['lyrics', 'queue'];
+  const tabs: NowPlayingTab[] = lobbyGuest
+    ? ['lyrics']
+    : current?.source === 'yandex'
+      ? ['lyrics', 'queue', 'similar']
+      : ['lyrics', 'queue'];
   const shownTab = tabs.includes(activeTab) ? activeTab : 'lyrics';
   const albumTo = current ? trackAlbumPath(current) : null;
 
@@ -156,26 +162,30 @@ export function NowPlaying() {
                 </div>
 
                 <div className="mt-4">
-                  <SeekBar />
+                  <SeekBar readOnly={lobbyGuest} />
                 </div>
 
-                <div className="mt-3 flex items-center justify-center gap-8">
-                  <Button variant="overlay" size="icon" aria-label="Предыдущий" onClick={skipPrev} className="h-12 w-12 text-foreground/85">
-                    <SkipBack size={30} fill="currentColor" />
-                  </Button>
-                  <Button
-                    variant="overlay"
-                    size="icon"
-                    aria-label={playing ? 'Пауза' : 'Играть'}
-                    onClick={togglePlay}
-                    className="h-16 w-16 text-foreground motion-reduce:active:scale-100 active:scale-90"
-                  >
-                    {playing ? <Pause size={44} fill="currentColor" /> : <Play size={44} fill="currentColor" />}
-                  </Button>
-                  <Button variant="overlay" size="icon" aria-label="Следующий" onClick={skipNext} className="h-12 w-12 text-foreground/85">
-                    <SkipForward size={30} fill="currentColor" />
-                  </Button>
-                </div>
+                {lobbyGuest ? (
+                  <p className="mt-3 text-center text-sm text-muted">Эфир DJ — переключение и пауза только у ведущего</p>
+                ) : (
+                  <div className="mt-3 flex items-center justify-center gap-8">
+                    <Button variant="overlay" size="icon" aria-label="Предыдущий" onClick={skipPrev} className="h-12 w-12 text-foreground/85">
+                      <SkipBack size={30} fill="currentColor" />
+                    </Button>
+                    <Button
+                      variant="overlay"
+                      size="icon"
+                      aria-label={playing ? 'Пауза' : 'Играть'}
+                      onClick={togglePlay}
+                      className="h-16 w-16 text-foreground motion-reduce:active:scale-100 active:scale-90"
+                    >
+                      {playing ? <Pause size={44} fill="currentColor" /> : <Play size={44} fill="currentColor" />}
+                    </Button>
+                    <Button variant="overlay" size="icon" aria-label="Следующий" onClick={skipNext} className="h-12 w-12 text-foreground/85">
+                      <SkipForward size={30} fill="currentColor" />
+                    </Button>
+                  </div>
+                )}
 
                 <VolumeControl className="mx-auto mt-5 [&_button]:text-foreground/70 [&_input]:w-56" />
                 {visualizer && <Visualizer active={playing} className="mt-5 h-12 shrink-0 opacity-80" />}

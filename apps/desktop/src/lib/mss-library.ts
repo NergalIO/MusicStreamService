@@ -74,17 +74,17 @@ export async function deletePlaylist(id: string): Promise<void> {
 
 type PlaylistEntryInput =
   | { trackId: string }
-  | { source: 'yandex' | 'spotify'; externalId: string; snapshot: ExternalTrackSnapshot };
+  | { source: 'yandex' | 'spotify' | 'vk'; externalId: string; snapshot: ExternalTrackSnapshot };
 
 const isHttp = (url?: string) => !!url && /^https?:\/\//.test(url);
 
 /** Для внешних треков на сервер уходят только метаданные — токены и ссылки на поток остаются на клиенте. */
 export function toPlaylistEntry(track: UnifiedTrack): PlaylistEntryInput | null {
   if (track.source === 'local') return { trackId: track.id };
-  if (track.source !== 'yandex' && track.source !== 'spotify') return null;
+  if (track.source !== 'yandex' && track.source !== 'spotify' && track.source !== 'vk') return null;
   return {
     source: track.source,
-    externalId: track.id,
+    externalId: track.id.slice(0, 100),
     snapshot: {
       title: track.title,
       artist: track.artist,

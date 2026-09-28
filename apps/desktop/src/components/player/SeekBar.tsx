@@ -5,7 +5,15 @@ import { cn } from '@/lib/utils';
 import { usePlaybackStore } from '@/store/playback-store';
 
 /** Thin scrubber; `variant="lcd"` hugs the bottom of the top player panel, `full` shows times below. */
-export function SeekBar({ variant = 'full', className }: { variant?: 'lcd' | 'full'; className?: string }) {
+export function SeekBar({
+  variant = 'full',
+  className,
+  readOnly = false,
+}: {
+  variant?: 'lcd' | 'full';
+  className?: string;
+  readOnly?: boolean;
+}) {
   const currentTime = usePlaybackStore((s) => s.currentTime);
   const duration = usePlaybackStore((s) => s.duration);
   const buffered = usePlaybackStore((s) => s.buffered);
@@ -19,7 +27,7 @@ export function SeekBar({ variant = 'full', className }: { variant?: 'lcd' | 'fu
   };
 
   const onPointerDown = (e: React.PointerEvent) => {
-    if (!duration) return;
+    if (readOnly || !duration) return;
     (e.target as HTMLElement).setPointerCapture(e.pointerId);
     setDrag(ratioAt(e.clientX));
   };
@@ -46,7 +54,12 @@ export function SeekBar({ variant = 'full', className }: { variant?: 'lcd' | 'fu
       onPointerMove={onPointerMove}
       onPointerUp={onPointerUp}
       onPointerLeave={() => setHover(null)}
-      className={cn('group/seek relative flex cursor-pointer items-center', variant === 'lcd' ? 'h-3' : 'h-4', className)}
+      className={cn(
+        'group/seek relative flex items-center',
+        readOnly ? 'cursor-default' : 'cursor-pointer',
+        variant === 'lcd' ? 'h-3' : 'h-4',
+        className,
+      )}
     >
       <div
         className={cn(

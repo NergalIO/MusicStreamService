@@ -29,6 +29,7 @@ export const SOURCE_COLOR: Record<SourceId, string> = {
   local: 'bg-primary',
   yandex: 'bg-amber-400',
   spotify: 'bg-emerald-500',
+  vk: 'bg-sky-500',
 };
 
 const MONTHS = ['янв', 'фев', 'мар', 'апр', 'май', 'июн', 'июл', 'авг', 'сен', 'окт', 'ноя', 'дек'];

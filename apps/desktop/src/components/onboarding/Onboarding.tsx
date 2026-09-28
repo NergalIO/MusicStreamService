@@ -35,7 +35,7 @@ function ServicesStep() {
     <Step
       icon={<Plug size={22} />}
       title="Подключите сервисы"
-      description="Моя волна, лайки, плейлисты и полные треки с Плюсом. Токены остаются только на этом компьютере и не уходят на сервер MSS."
+      description="Моя волна и плейлисты Яндекса, музыка из VK, Spotify как веб-плеер из сайдбара."
     >
       <div className="divide-y divide-border overflow-hidden rounded-xl border border-border bg-card">
         {isLoading && <div className="px-4 py-3 text-sm text-muted">Проверяем подключения…</div>}
@@ -114,7 +114,7 @@ export function Onboarding() {
       key="welcome"
       icon={<Music2 size={22} />}
       title="Добро пожаловать в MusicStream"
-      description="Ваша библиотека MSS, Яндекс Музыка и Spotify в одном плеере. Настроим всё за минуту — любой шаг можно пропустить."
+      description="Ваша библиотека MSS, Яндекс Музыка и встроенный веб-плеер Spotify. Настроим всё за минуту — любой шаг можно пропустить."
     />,
     <AppearanceStep key="appearance" />,
     <ServicesStep key="services" />,

@@ -29,22 +29,19 @@ export function loadPlaylistTracks(p: Pick<UnifiedPlaylist, 'source' | 'id'>): P
       queryFn: async () => (await apiFetch<{ items: PlaylistEntryDto[] }>(`/playlists/${p.id}/tracks`)).items.map(mapPlaylistEntry),
     });
   }
-  if (p.source === 'yandex') {
+  if (p.source === 'yandex' || p.source === 'vk') {
     return queryClient
       .fetchQuery({
-        queryKey: ['yandex', 'playlist', p.id],
-        queryFn: () => window.electronAPI.yandex.playlist(p.id),
+        queryKey: [p.source, 'playlist', p.id],
+        queryFn: () =>
+          p.source === 'yandex'
+            ? window.electronAPI.yandex.playlist(p.id)
+            : window.electronAPI.connectors.getPlaylist('vk', p.id),
         staleTime: 5 * 60_000,
       })
       .then((pl) => pl.tracks);
   }
-  return queryClient
-    .fetchQuery({
-      queryKey: ['spotify', 'playlist', p.id],
-      queryFn: () => window.electronAPI.connectors.getPlaylist('spotify', p.id),
-      staleTime: 5 * 60_000,
-    })
-    .then((pl) => pl.tracks);
+  throw new Error('Плейлисты Spotify открываются в разделе Spotify');
 }
 
 function withTracks(load: () => Promise<UnifiedTrack[]>, run: (tracks: UnifiedTrack[]) => void): () => void {
@@ -145,11 +142,7 @@ export function playlistMenu(playlist: UnifiedPlaylist): MenuSpec {
   const context: PlayContext = { type: 'playlist', title: playlist.title, path: playlistPath(playlist) };
   const external = playlist.source !== 'local';
   const pinSource =
-    playlist.source === 'local'
-      ? ('local' as const)
-      : playlist.source === 'yandex' || playlist.source === 'spotify'
-        ? playlist.source
-        : null;
+    playlist.source === 'local' || playlist.source === 'yandex' || playlist.source === 'vk' ? playlist.source : null;
   const pinned = pinSource ? useSidebarStore.getState().isPinned(pinSource, playlist.id) : false;
   return {
     title: playlist.title,
@@ -195,20 +188,27 @@ export function playlistMenu(playlist: UnifiedPlaylist): MenuSpec {
 
 export function artistMenu(group: ArtistGroup): MenuSpec {
   const yandex = group.refs.yandex;
-  const loadPopular = () => window.electronAPI.connectors.artistTracks('yandex', yandex!.id, 50);
+  const vk = group.refs.vk;
+  const source = yandex ? 'yandex' : vk ? 'vk' : null;
+  const artist = yandex ?? vk;
+  const loadPopular = () => window.electronAPI.connectors.artistTracks(source!, artist!.id, 50, artist!.name);
   const context: PlayContext = { type: 'artist', title: group.name, path: artistPath(group.name, group.refs) };
   return {
     title: group.name,
     groups: [
-      yandex
+      artist
         ? [
             { icon: Play, label: 'Слушать популярное', action: withTracks(loadPopular, (t) => playCollection(t, context)) },
             { icon: Shuffle, label: 'Перемешать', action: withTracks(loadPopular, (t) => playCollection(t, context, true)) },
-            {
-              icon: Radio,
-              label: 'Волна по исполнителю',
-              action: () => void startWave({ seed: `artist:${yandex.id}`, seedTitle: group.name }),
-            },
+            ...(yandex
+              ? [
+                  {
+                    icon: Radio,
+                    label: 'Волна по исполнителю',
+                    action: () => void startWave({ seed: `artist:${yandex.id}`, seedTitle: group.name }),
+                  } as MenuItem,
+                ]
+              : []),
           ]
         : [],
       [

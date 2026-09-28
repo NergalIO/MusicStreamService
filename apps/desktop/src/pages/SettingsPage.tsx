@@ -15,9 +15,12 @@ import {
   disconnectSource,
   useConnectStore,
   useConnectors,
+  useVkAccount,
   useYandexAccount,
   type ConnectorStatus,
 } from '@/lib/connectors';
+import { logoutSpotifySession, useSpotifySessionLoggedIn } from '@/lib/spotify-session';
+import { SPOTIFY_HOME } from '@/lib/service-routes';
 import { clearSession, loadSession } from '@/lib/api';
 import { leaveCurrentLobby } from '@/lib/lobby-session';
 import { getApiBaseUrl, setApiBaseUrl } from '@/lib/api-base';
@@ -150,14 +153,9 @@ export function useSystemSettings() {
 }
 
 const CLIENT_SECRET_META: Record<
-  ClientSecretKey,
+  Exclude<ClientSecretKey, 'SPOTIFY_CLIENT_ID'>,
   { label: string; placeholder: string; hint: string }
 > = {
-  SPOTIFY_CLIENT_ID: {
-    label: 'Spotify Client ID',
-    placeholder: 'Из developer.spotify.com/dashboard',
-    hint: 'Нужен для поиска, плейлистов и Web Playback. После смены переподключите Spotify в «Сервисы».',
-  },
   DISCORD_CLIENT_ID: {
     label: 'Discord Application ID',
     placeholder: 'Числовой ID приложения в Discord Developer Portal',
@@ -207,7 +205,7 @@ function ClientSecretsSection() {
     setSaving(true);
     try {
       const secrets: Partial<Record<ClientSecretKey, string | null>> = {};
-      for (const key of Object.keys(CLIENT_SECRET_META) as ClientSecretKey[]) {
+      for (const key of Object.keys(CLIENT_SECRET_META) as Exclude<ClientSecretKey, 'SPOTIFY_CLIENT_ID'>[]) {
         const value = draft[key]?.trim() ?? '';
         const hadUser = Boolean(view.fields[key].userValue);
         if (value) secrets[key] = value;
@@ -219,7 +217,7 @@ function ClientSecretsSection() {
       });
       setView(next);
       await queryClient.invalidateQueries({ queryKey: ['connectors'] });
-      toast.success('Ключи сохранены. При смене Spotify или Яндекс OAuth переподключите сервисы выше.');
+      toast.success('Ключи сохранены. При смене Яндекс OAuth переподключите сервис выше.');
     } catch (e) {
       toast.error(e instanceof Error ? e.message : 'Не удалось сохранить ключи');
     } finally {
@@ -232,7 +230,7 @@ function ClientSecretsSection() {
       title="Ключи API"
       footer="Значения хранятся только на этом компьютере (app-settings.json). Ручной ввод имеет приоритет над .env и ключами из установщика. Секреты не отправляются на сервер MSS."
     >
-      {(Object.keys(CLIENT_SECRET_META) as ClientSecretKey[]).map((key) => {
+      {(Object.keys(CLIENT_SECRET_META) as Exclude<ClientSecretKey, 'SPOTIFY_CLIENT_ID'>[]).map((key) => {
         const meta = CLIENT_SECRET_META[key];
         const field = view.fields[key];
         if (key.startsWith('YANDEX_') && !yandexCustom) return null;
@@ -526,18 +524,71 @@ function YandexStatus({ status }: { status: string }) {
   );
 }
 
+function SpotifySessionRow() {
+  const loggedIn = useSpotifySessionLoggedIn();
+  const navigate = useNavigate();
+  const queryClient = useQueryClient();
+  const [busy, setBusy] = useState(false);
+  if (!window.electronAPI) return null;
+  return (
+    <Row
+      title="Spotify"
+      subtitle={
+        loggedIn
+          ? 'Вход выполнен в веб-плеере (Premium или бесплатно с рекламой Spotify)'
+          : 'Обычный аккаунт встроенного веб-плеера. Developer Dashboard не нужен.'
+      }
+    >
+      <Button size="sm" onClick={() => navigate(SPOTIFY_HOME)}>
+        Открыть
+      </Button>
+      {loggedIn && (
+        <Button
+          variant="secondary"
+          size="sm"
+          disabled={busy}
+          onClick={() => {
+            setBusy(true);
+            void logoutSpotifySession()
+              .then(() => queryClient.invalidateQueries({ queryKey: ['spotify-session'] }))
+              .finally(() => setBusy(false));
+          }}
+        >
+          {busy && <Loader2 size={14} className="animate-spin" />}
+          Выйти
+        </Button>
+      )}
+    </Row>
+  );
+}
+
+function VkStatus({ status }: { status: string }) {
+  const { data: account, isLoading } = useVkAccount();
+  if (status !== 'connected') return <>Не подключено</>;
+  if (isLoading) return <>Проверяем аккаунт…</>;
+  if (!account) return <>Подключено · токен только на этом устройстве</>;
+  return <>{account.displayName ?? account.login ?? `id ${account.uid}`} · пароль не хранится</>;
+}
+
 function ConnectorRow({ connector }: { connector: ConnectorStatus }) {
   const queryClient = useQueryClient();
   const connecting = useConnectStore((s) => s.connecting);
   const busy = connecting === connector.id;
   const isYandex = connector.id === 'yandex';
+  const isVk = connector.id === 'vk';
   const connected = connector.status === 'connected';
+  const subtitle = isYandex ? (
+    <YandexStatus status={connector.status} />
+  ) : isVk ? (
+    <VkStatus status={connector.status} />
+  ) : connected ? (
+    'Подключено'
+  ) : (
+    'Не подключено'
+  );
 
   return (
-    <Row
-      title={connector.name}
-      subtitle={isYandex ? <YandexStatus status={connector.status} /> : connected ? 'Подключено' : 'Не подключено'}
-    >
+    <Row title={connector.name} subtitle={subtitle}>
       {connected ? (
         <Button variant="secondary" size="sm" onClick={() => void disconnectSource(connector.id, queryClient)}>
           Отключить
@@ -545,7 +596,7 @@ function ConnectorRow({ connector }: { connector: ConnectorStatus }) {
       ) : (
         <Button size="sm" disabled={!!connecting} onClick={() => void connectSource(connector.id, queryClient)}>
           {busy && <Loader2 size={14} className="animate-spin" />}
-          {connector.status === 'expired' ? 'Войти заново' : isYandex ? 'Войти через Яндекс' : 'Подключить'}
+          {connector.status === 'expired' ? 'Войти заново' : isYandex ? 'Войти через Яндекс' : isVk ? 'Войти во VK' : 'Подключить'}
         </Button>
       )}
     </Row>
@@ -562,8 +613,9 @@ export function SettingsPage() {
 
       <Section
         title="Сервисы"
-        footer="Токены хранятся только на этом устройстве в зашифрованном виде и не отправляются на сервер MSS. Вход в Яндекс выполняется по коду на ya.ru/device — так Яндекс выдаёт полные треки для аккаунтов с Плюсом."
+        footer="Яндекс: вход по коду на ya.ru/device. VK: логин и пароль в окне приложения, пароль не сохраняется. Токены только на этом устройстве. Spotify: встроенный веб-плеер."
       >
+        <SpotifySessionRow />
         {connectors.map((c) => (
           <ConnectorRow key={c.id} connector={c} />
         ))}

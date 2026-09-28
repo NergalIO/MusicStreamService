@@ -1,8 +1,8 @@
 import { BrowserWindow, shell } from 'electron';
-import type { DeviceCodePrompt } from '@mss/shared';
+import type { DeviceCodePrompt, LoginPrompt, LoginReply } from '@mss/shared';
 import {
   ConnectorRegistry,
-  createSpotifyConnector,
+  createVkConnector,
   createYandexConnector,
   type YandexConnector,
 } from '@mss/stream-connectors';
@@ -18,25 +18,49 @@ export function getYandex(): YandexConnector {
   return yandex;
 }
 
-function broadcastDeviceCode(prompt: DeviceCodePrompt): void {
+function broadcast(channel: string, payload: unknown): void {
   for (const win of BrowserWindow.getAllWindows()) {
-    win.webContents.send('connectors:deviceCode', prompt);
+    win.webContents.send(channel, payload);
   }
 }
 
-function registerSpotify(): void {
-  const spotifyClientId = clientSecret('SPOTIFY_CLIENT_ID');
-  if (spotifyClientId) {
-    connectorRegistry.register(
-      createSpotifyConnector({
-        clientId: spotifyClientId,
-        vault: tokenVault,
-        openExternal: (url) => shell.openExternal(url),
-      }),
-    );
-  } else {
-    connectorRegistry.unregister('spotify');
-  }
+function broadcastDeviceCode(prompt: DeviceCodePrompt): void {
+  broadcast('connectors:deviceCode', prompt);
+}
+
+let pendingLogin: {
+  resolve: (reply: LoginReply) => void;
+  reject: (err: Error) => void;
+} | null = null;
+
+function waitForLogin(prompt: LoginPrompt, signal?: AbortSignal): Promise<LoginReply> {
+  return new Promise((resolve, reject) => {
+    pendingLogin?.reject(new Error('Отменено'));
+    const finish = (fn: () => void) => {
+      signal?.removeEventListener('abort', onAbort);
+      pendingLogin = null;
+      fn();
+    };
+    const onAbort = () => finish(() => reject(new Error('Отменено')));
+    pendingLogin = {
+      resolve: (reply) => finish(() => resolve(reply)),
+      reject: (err) => finish(() => reject(err)),
+    };
+    if (signal?.aborted) {
+      onAbort();
+      return;
+    }
+    signal?.addEventListener('abort', onAbort);
+    broadcast('connectors:loginPrompt', prompt);
+  });
+}
+
+export function resolveLoginReply(reply: LoginReply): void {
+  pendingLogin?.resolve(reply);
+}
+
+export function cancelPendingLogin(): void {
+  pendingLogin?.reject(new Error('Отменено'));
 }
 
 function registerYandex(): void {
@@ -54,13 +78,22 @@ function registerYandex(): void {
   connectorRegistry.register(yandex);
 }
 
+function registerVk(): void {
+  connectorRegistry.register(
+    createVkConnector({
+      vault: tokenVault,
+      onLoginPrompt: (prompt) => waitForLogin(prompt),
+    }),
+  );
+}
+
 export function initConnectors(): void {
-  registerSpotify();
   registerYandex();
+  registerVk();
 }
 
 /** После смены ключей в настройках — пересобрать коннекторы без перезапуска приложения. */
 export function refreshConnectorsFromSecrets(): void {
-  registerSpotify();
   registerYandex();
+  registerVk();
 }

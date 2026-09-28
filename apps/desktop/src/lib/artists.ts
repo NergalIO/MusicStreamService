@@ -77,6 +77,7 @@ export async function searchArtistsEverywhere(
   const tasks: Promise<UnifiedArtist[]>[] = [];
   if (matchesFilter(filter, 'local')) tasks.push(searchLocalArtists(query, limit));
   for (const source of EXTERNAL_SOURCES) {
+    if (source === 'spotify') continue;
     if (window.electronAPI && matchesFilter(filter, source)) {
       tasks.push(window.electronAPI.connectors.searchArtists(source, query, limit));
     }
@@ -94,11 +95,11 @@ export async function searchArtistsEverywhere(
 /** URL задаёт одного провайдера — не подбираем второй каталог по совпадению имени. */
 export function shouldSkipExternalArtistLookup(
   source: (typeof EXTERNAL_SOURCES)[number],
-  ids: { spotify: string | null; yandex: string | null },
+  ids: Partial<Record<(typeof EXTERNAL_SOURCES)[number], string | null>>,
 ): boolean {
-  if (ids.spotify && !ids.yandex && source === 'yandex') return true;
-  if (ids.yandex && !ids.spotify && source === 'spotify') return true;
-  return false;
+  const specified = EXTERNAL_SOURCES.filter((s) => ids[s]);
+  if (!specified.length) return false;
+  return !ids[source];
 }
 
 /** Находит исполнителя во внешнем источнике: по id из URL или по точному совпадению имени. */

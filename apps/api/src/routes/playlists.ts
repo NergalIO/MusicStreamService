@@ -261,7 +261,7 @@ export async function playlistRoutes(app: FastifyInstance) {
         items.push({
           entryId: entry.id,
           position: entry.position,
-          external: { source: entry.externalSource as 'yandex' | 'spotify', id: entry.externalId, snapshot: entry.snapshot },
+          external: { source: entry.externalSource as 'yandex' | 'spotify' | 'vk', id: entry.externalId, snapshot: entry.snapshot },
         });
       }
     }

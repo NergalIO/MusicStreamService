@@ -7,6 +7,8 @@ import type {
   DownloadRecord,
   ExternalAccount,
   FeedBlock,
+  LoginPrompt,
+  LoginReply,
   PlaybackHandle,
   PlaybackReport,
   PlaylistWithTracks,
@@ -137,6 +139,17 @@ const api = {
     openCrashes: () => ipcRenderer.invoke('system:openCrashes') as Promise<void>,
     openExternal: (url: string) => ipcRenderer.invoke('system:openExternal', url) as Promise<boolean>,
   },
+  spotifySession: {
+    show: () => ipcRenderer.invoke('spotify-session:show') as Promise<void>,
+    hide: () => ipcRenderer.invoke('spotify-session:hide') as Promise<void>,
+    setBounds: (bounds: { x: number; y: number; width: number; height: number }) =>
+      ipcRenderer.invoke('spotify-session:setBounds', bounds) as Promise<void>,
+    pause: () => ipcRenderer.invoke('spotify-session:pause') as Promise<void>,
+    logout: () => ipcRenderer.invoke('spotify-session:logout') as Promise<void>,
+    loggedIn: () => ipcRenderer.invoke('spotify-session:loggedIn') as Promise<boolean>,
+    onLoggedIn: (cb: (loggedIn: boolean) => void) => subscribe('spotify-session:loggedIn', cb),
+    onMedia: (cb: (state: { playing: boolean }) => void) => subscribe('spotify-session:media', cb),
+  },
   localTracks: {
     pickFiles: () => ipcRenderer.invoke('localTracks:pickFiles') as Promise<string[]>,
     prepare: (filePath: string) =>
@@ -206,6 +219,8 @@ const api = {
       ipcRenderer.invoke('connectors:account', id) as Promise<ExternalAccount | null>,
     accessToken: (id: string) => ipcRenderer.invoke('connectors:accessToken', id) as Promise<string | null>,
     onDeviceCode: (cb: (prompt: DeviceCodePrompt) => void) => subscribe('connectors:deviceCode', cb),
+    onLoginPrompt: (cb: (prompt: LoginPrompt) => void) => subscribe('connectors:loginPrompt', cb),
+    loginReply: (reply: LoginReply) => ipcRenderer.invoke('connectors:loginReply', reply) as Promise<void>,
     search: (id: string, query: string, limit: number) =>
       ipcRenderer.invoke('connectors:search', id, query, limit) as Promise<UnifiedTrack[]>,
     searchArtists: (id: string, query: string, limit: number) =>
@@ -222,6 +237,8 @@ const api = {
       ipcRenderer.invoke('connectors:getPlaylist', id, playlistId) as Promise<PlaylistWithTracks>,
     savedTracks: (id: string, limit: number) =>
       ipcRenderer.invoke('connectors:savedTracks', id, limit) as Promise<UnifiedTrack[]>,
+    setSaved: (id: string, track: UnifiedTrack, saved: boolean) =>
+      ipcRenderer.invoke('connectors:setSaved', id, track, saved) as Promise<void>,
   },
   yandex: {
     account: (refresh = false) => yandexCall<ExternalAccount | null>('account', refresh),

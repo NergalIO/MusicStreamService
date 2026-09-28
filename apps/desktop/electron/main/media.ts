@@ -1,6 +1,7 @@
 import { app, BrowserWindow, ipcMain, Menu, nativeImage, nativeTheme, screen, Tray } from 'electron';
 import type { PlayerCommand, PlayerProgress, PlayerSnapshot, VolumeChange } from '../preload/index.js';
 import { getAppSettings, updateAppSettings } from './app-settings.js';
+import { routeSpotifyMediaCommand } from './spotify-web-session.js';
 import { loadBounds, persistBounds } from './window-bounds.js';
 
 interface MediaOptions {
@@ -37,6 +38,7 @@ function showMain(opts: MediaOptions): void {
 }
 
 export function sendPlayerCommand(opts: Pick<MediaOptions, 'getMainWindow'>, command: PlayerCommand): void {
+  if (routeSpotifyMediaCommand(command)) return;
   opts.getMainWindow()?.webContents.send('player:command', command);
 }
 

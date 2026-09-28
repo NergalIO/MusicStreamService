@@ -1,7 +1,7 @@
 import type { UnifiedTrack } from '@mss/shared';
 import { useQueryClient, type QueryKey } from '@tanstack/react-query';
 import { FolderOpen, ListMusic, Play, Plus, Shuffle } from 'lucide-react';
-import { useEffect, useMemo, useState } from 'react';
+import { useMemo, useState } from 'react';
 import { NavLink, Navigate, useNavigate, useParams } from 'react-router-dom';
 import { toast } from 'sonner';
 import { CardRowSkeleton, PageTitle, TrackListSkeleton } from '@/components/media/CollectionHeader';
@@ -15,8 +15,7 @@ import { EmptyState, ErrorState } from '@/components/ui/states';
 import { UploadButton } from '@/components/uploads/UploadButton';
 import { useTrackSort } from '@/hooks/useTrackSort';
 import { loadPlaylistTracks, playlistMenu } from '@/lib/card-menus';
-import { SpotifyReconnectButton } from '@/components/connectors/SpotifyReconnectButton';
-import { useSpotifyConnected, useYandexConnected } from '@/lib/connectors';
+import { useVkConnected, useYandexConnected } from '@/lib/connectors';
 import { formatBytes, formatTrackCount } from '@/lib/format';
 import { playlistPath } from '@/lib/links';
 import { createPlaylist, deleteUploadedTrack } from '@/lib/mss-library';
@@ -27,8 +26,8 @@ import {
   useLocalLikedTracks,
   useMssPlaylists,
   useMyUploads,
-  useSpotifyPlaylists,
-  useSpotifySavedTracks,
+  useVkPlaylists,
+  useVkSavedTracks,
   useYandexLikedTracks,
   useYandexPlaylists,
 } from '@/lib/queries';
@@ -53,8 +52,8 @@ const YANDEX_TABS = [
   { id: 'playlists', label: 'Плейлисты' },
 ] as const;
 
-const SPOTIFY_TABS = [
-  { id: 'likes', label: 'Мне нравится' },
+const VK_TABS = [
+  { id: 'likes', label: 'Моя музыка' },
   { id: 'playlists', label: 'Плейлисты' },
 ] as const;
 
@@ -66,13 +65,12 @@ const MEDIA_TABS = [
 
 type MssTabId = (typeof MSS_TABS)[number]['id'];
 type YandexTabId = (typeof YANDEX_TABS)[number]['id'];
-type SpotifyTabId = (typeof SPOTIFY_TABS)[number]['id'];
+type VkTabId = (typeof VK_TABS)[number]['id'];
 type MediaTabId = (typeof MEDIA_TABS)[number]['id'];
-type TabId = MssTabId | YandexTabId | SpotifyTabId | MediaTabId;
+type TabId = MssTabId | YandexTabId | VkTabId | MediaTabId;
 
 function Tabs({ scope }: { scope: ServiceScope }) {
-  const tabs =
-    scope === 'mss' ? MSS_TABS : scope === 'yandex' ? YANDEX_TABS : scope === 'spotify' ? SPOTIFY_TABS : MEDIA_TABS;
+  const tabs = scope === 'mss' ? MSS_TABS : scope === 'yandex' ? YANDEX_TABS : scope === 'vk' ? VK_TABS : MEDIA_TABS;
   return (
     <div className="mb-6 flex gap-1 border-b border-border">
       {tabs.map((t) => (
@@ -118,44 +116,42 @@ function PlayButtons({
 
 function LikesTab({ scope }: { scope: ServiceScope }) {
   const yandexConnected = useYandexConnected();
-  const spotifyConnected = useSpotifyConnected();
+  const vkConnected = useVkConnected();
   const yandex = useYandexLikedTracks();
-  const spotifySaved = useSpotifySavedTracks();
+  const vk = useVkSavedTracks();
   const local = useLocalLikedTracks();
   const spotifyTracks = useLikesStore((s) => s.spotifyTracks);
   const likedYandex = useLikesStore((s) => s.yandex);
   const likedLocal = useLikesStore((s) => s.local);
+  const likedVk = useLikesStore((s) => s.vk);
   const [mediaFilter, setMediaFilter] = useState<SourceFilterId>('all');
   const filter: SourceFilterId =
-    scope === 'media' ? mediaFilter : scope === 'mss' ? 'local' : scope === 'spotify' ? 'spotify' : 'yandex';
+    scope === 'media' ? mediaFilter : scope === 'mss' ? 'local' : scope === 'vk' ? 'vk' : 'yandex';
 
   const bySource = useMemo(() => {
     const yIds = new Set(likedYandex);
     const lIds = new Set(likedLocal);
+    const vIds = new Set(likedVk);
     return {
       local: (local.data ?? []).filter((t) => lIds.has(t.id)),
       yandex: (yandex.data ?? []).filter((t) => yIds.has(t.id.split(':')[0])),
       spotify: spotifyTracks,
+      vk: scope === 'vk' ? (vk.data ?? []) : (vk.data ?? []).filter((t) => vIds.has(t.id.split('_').slice(0, 2).join('_'))),
     };
-  }, [local.data, yandex.data, spotifyTracks, likedYandex, likedLocal]);
-
-  const spotifyScopeTracks = useMemo(
-    () => (scope === 'spotify' ? (spotifySaved.data ?? []) : bySource.spotify),
-    [scope, spotifySaved.data, bySource.spotify],
-  );
+  }, [local.data, yandex.data, vk.data, spotifyTracks, likedYandex, likedLocal, likedVk, scope]);
 
   const bySelectedSource = useMemo(() => {
-    if (scope === 'spotify') return spotifyScopeTracks;
-    return (['yandex', 'local', 'spotify'] as const).filter((s) => matchesFilter(filter, s)).flatMap((s) => bySource[s]);
-  }, [scope, spotifyScopeTracks, bySource, filter]);
+    return (['yandex', 'local', 'spotify', 'vk'] as const).filter((s) => matchesFilter(filter, s)).flatMap((s) => bySource[s]);
+  }, [bySource, filter]);
   const { view: visible, sort, cycle, filter: text, setFilter: setText } = useTrackSort(bySelectedSource);
 
-  const context: PlayContext = { type: 'likes', title: 'Мне нравится', path: libraryPath(scope, 'likes') };
+  const context: PlayContext = { type: 'likes', title: scope === 'vk' ? 'Моя музыка' : 'Мне нравится', path: libraryPath(scope, 'likes') };
   const counts = {
-    all: bySource.local.length + bySource.yandex.length + bySource.spotify.length,
+    all: bySource.local.length + bySource.yandex.length + bySource.spotify.length + bySource.vk.length,
     local: local.isLoading ? null : bySource.local.length,
     yandex: yandexConnected && yandex.isLoading ? null : bySource.yandex.length,
     spotify: bySource.spotify.length,
+    vk: vkConnected && vk.isLoading ? null : bySource.vk.length,
   };
 
   const loading =
@@ -163,20 +159,11 @@ function LikesTab({ scope }: { scope: ServiceScope }) {
       ? local.isLoading
       : scope === 'yandex'
         ? yandexConnected && yandex.isLoading
-        : scope === 'spotify'
-          ? spotifyConnected && spotifySaved.isLoading
+        : scope === 'vk'
+          ? vkConnected && vk.isLoading
           : (matchesFilter(filter, 'local') && local.isLoading) ||
-            (matchesFilter(filter, 'yandex') && yandexConnected && yandex.isLoading);
-
-  if (scope === 'spotify' && !spotifyConnected) {
-    return (
-      <EmptyState
-        title="Подключите Spotify"
-        description="Сохранённые треки появятся здесь после подключения аккаунта в настройках."
-        className="py-16"
-      />
-    );
-  }
+            (matchesFilter(filter, 'yandex') && yandexConnected && yandex.isLoading) ||
+            (matchesFilter(filter, 'vk') && vkConnected && vk.isLoading);
 
   if (scope === 'yandex' && !yandexConnected) {
     return (
@@ -187,13 +174,22 @@ function LikesTab({ scope }: { scope: ServiceScope }) {
       />
     );
   }
+  if (scope === 'vk' && !vkConnected) {
+    return (
+      <EmptyState
+        title="Подключите VK Музыку"
+        description="Моя музыка из VK появится здесь после входа в аккаунт."
+        className="py-16"
+      />
+    );
+  }
 
   return (
     <>
       <div className="mb-4 flex flex-wrap items-center justify-between gap-3">
         {scope === 'mss' && <p className="text-sm text-muted">Треки из внутренней библиотеки MSS</p>}
         {scope === 'yandex' && <p className="text-sm text-muted">Лайки из вашего аккаунта Яндекс Музыки</p>}
-        {scope === 'spotify' && <p className="text-sm text-muted">Сохранённые треки из вашего аккаунта Spotify</p>}
+        {scope === 'vk' && <p className="text-sm text-muted">Аудио из раздела «Моя музыка» во VK</p>}
         {scope === 'media' && <SourceFilter value={mediaFilter} onChange={setMediaFilter} counts={counts} />}
         <div className="ml-auto flex flex-wrap items-center gap-2">
           <TrackFilterInput value={text} onChange={setText} />
@@ -201,25 +197,22 @@ function LikesTab({ scope }: { scope: ServiceScope }) {
           <DownloadAllButton tracks={visible} size="sm" />
         </div>
       </div>
-      {((scope === 'mss' && local.isError) ||
-        (scope === 'yandex' && yandex.isError) ||
-        (scope === 'spotify' && spotifySaved.isError)) &&
-      !visible.length ? (
+      {((scope === 'mss' && local.isError) || (scope === 'yandex' && yandex.isError) || (scope === 'vk' && vk.isError)) && !visible.length ? (
         <ErrorState
-          error={scope === 'mss' ? local.error : scope === 'spotify' ? spotifySaved.error : yandex.error}
-          action={scope === 'spotify' ? <SpotifyReconnectButton error={spotifySaved.error} /> : undefined}
+          error={scope === 'mss' ? local.error : scope === 'vk' ? vk.error : yandex.error}
           onRetry={() => {
             if (scope === 'mss') void local.refetch();
-            else if (scope === 'spotify') void spotifySaved.refetch();
+            else if (scope === 'vk') void vk.refetch();
             else void yandex.refetch();
           }}
         />
-      ) : scope === 'media' && local.isError && yandex.isError && !visible.length ? (
+      ) : scope === 'media' && local.isError && yandex.isError && vk.isError && !visible.length ? (
         <ErrorState
           error={local.error ?? yandex.error}
           onRetry={() => {
             void local.refetch();
             void yandex.refetch();
+            void vk.refetch();
           }}
         />
       ) : loading && !visible.length ? (
@@ -347,7 +340,7 @@ function DownloadsTab() {
         header
         sort={sort}
         onSort={cycle}
-        emptyText="Скачивайте треки Яндекс Музыки через меню трека или кнопку «Скачать» у альбома и плейлиста — они будут играть без интернета"
+        emptyText="Скачивайте треки Яндекс Музыки и VK через меню трека или кнопку «Скачать» — они будут играть без интернета"
       />
     </>
   );
@@ -374,9 +367,9 @@ function HistoryTab({ scope }: { scope: ServiceScope }) {
 function PlaylistsTab({ scope }: { scope: ServiceScope }) {
   const mss = useMssPlaylists();
   const yandex = useYandexPlaylists();
-  const spotify = useSpotifyPlaylists();
+  const vk = useVkPlaylists();
   const yandexConnected = useYandexConnected();
-  const spotifyConnected = useSpotifyConnected();
+  const vkConnected = useVkConnected();
   const navigate = useNavigate();
   const [creating, setCreating] = useState(false);
   const [name, setName] = useState('');
@@ -405,11 +398,11 @@ function PlaylistsTab({ scope }: { scope: ServiceScope }) {
     );
   }
 
-  if (scope === 'spotify' && !spotifyConnected) {
+  if (scope === 'vk' && !vkConnected) {
     return (
       <EmptyState
-        title="Подключите Spotify"
-        description="Плейлисты Spotify появятся здесь после подключения аккаунта."
+        title="Подключите VK Музыку"
+        description="Плейлисты VK появятся здесь после входа в аккаунт."
         className="py-16"
       />
     );
@@ -417,7 +410,7 @@ function PlaylistsTab({ scope }: { scope: ServiceScope }) {
 
   const showMss = scope === 'mss' || scope === 'media';
   const showYandex = (scope === 'yandex' || scope === 'media') && yandexConnected;
-  const showSpotify = (scope === 'spotify' || scope === 'media') && spotifyConnected;
+  const showVk = (scope === 'vk' || scope === 'media') && vkConnected;
 
   return (
     <div className="space-y-10">
@@ -506,21 +499,16 @@ function PlaylistsTab({ scope }: { scope: ServiceScope }) {
         </section>
       )}
 
-      {showSpotify && (
+      {showVk && (
         <section>
-          <h2 className="mb-4 text-xl font-bold tracking-tight">Плейлисты Spotify</h2>
-          {spotify.isError ? (
-            <ErrorState
-              className="py-8"
-              error={spotify.error}
-              action={<SpotifyReconnectButton error={spotify.error} />}
-              onRetry={() => void spotify.refetch()}
-            />
-          ) : spotify.isLoading ? (
+          <h2 className="mb-4 text-xl font-bold tracking-tight">Плейлисты VK</h2>
+          {vk.isError ? (
+            <ErrorState className="py-8" error={vk.error} onRetry={() => void vk.refetch()} />
+          ) : vk.isLoading ? (
             <CardRowSkeleton />
           ) : (
             <div className={grid}>
-              {(spotify.data ?? []).map((p) => (
+              {(vk.data ?? []).map((p) => (
                 <MediaCard
                   key={p.id}
                   title={p.title}
@@ -529,7 +517,7 @@ function PlaylistsTab({ scope }: { scope: ServiceScope }) {
                   to={playlistPath(p)}
                   menu={() => playlistMenu(p)}
                   onPlay={async () => {
-                    const full = await window.electronAPI.connectors.getPlaylist('spotify', p.id);
+                    const full = await window.electronAPI.connectors.getPlaylist('vk', p.id);
                     playCollection(full.tracks, { type: 'playlist', title: full.title, path: playlistPath(p) });
                   }}
                 />
@@ -566,12 +554,12 @@ function PlaylistsTab({ scope }: { scope: ServiceScope }) {
 
 export function LibraryPage({ scope }: { scope: ServiceScope }) {
   const { tab } = useParams();
-  const tabs =
-    scope === 'mss' ? MSS_TABS : scope === 'yandex' ? YANDEX_TABS : scope === 'spotify' ? SPOTIFY_TABS : MEDIA_TABS;
+  if (scope === 'spotify') return <Navigate to="/spotify" replace />;
+  const tabs = scope === 'mss' ? MSS_TABS : scope === 'yandex' ? YANDEX_TABS : scope === 'vk' ? VK_TABS : MEDIA_TABS;
   if (!tabs.some((t) => t.id === tab)) return <Navigate to={libraryPath(scope, 'likes')} replace />;
   const id = tab as TabId;
   const title =
-    scope === 'mss' ? 'MSS' : scope === 'yandex' ? 'Яндекс Музыка' : scope === 'spotify' ? 'Spotify' : 'Медиатека';
+    scope === 'mss' ? 'MSS' : scope === 'yandex' ? 'Яндекс Музыка' : scope === 'vk' ? 'VK Музыка' : 'Медиатека';
   return (
     <div>
       <PageTitle title={title} />

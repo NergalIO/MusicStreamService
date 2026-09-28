@@ -57,7 +57,7 @@ export function downloadKey(track: TrackRef): string {
 }
 
 export function canDownload(track: UnifiedTrack): boolean {
-  return track.source === 'yandex' && track.playable && !!window.electronAPI;
+  return track.playable && !!window.electronAPI && (track.source === 'yandex' || track.source === 'vk');
 }
 
 /** Файлы, удаление которых ещё можно отменить: из списка они уже скрыты, с диска — ещё нет. */

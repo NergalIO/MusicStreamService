@@ -1,4 +1,4 @@
-import type { UnifiedTrack } from '@mss/shared';
+import type { SourceId, UnifiedTrack } from '@mss/shared';
 import { apiFetch, currentAccessToken } from '@/lib/api';
 import { log } from '@/lib/logger';
 import { queryClient } from '@/lib/query-client';
@@ -11,7 +11,7 @@ const MIN_PLAYED_SECONDS = 30;
 
 interface PlayEvent {
   clientEventId: string;
-  source: 'local' | 'yandex' | 'spotify';
+  source: SourceId;
   trackId: string;
   title: string;
   artist: string;
@@ -55,7 +55,7 @@ function scheduleFlush(delay = FLUSH_DELAY): void {
 export function recordPlay(track: UnifiedTrack, playedSeconds: number, finished: boolean): void {
   const durationSec = (track.durationMs ?? 0) / 1000;
   const enough = playedSeconds >= MIN_PLAYED_SECONDS || (durationSec > 0 && playedSeconds >= durationSec / 2);
-  if (!enough || (track.source !== 'local' && track.source !== 'yandex' && track.source !== 'spotify')) return;
+  if (!enough) return;
   const event: PlayEvent = {
     clientEventId: crypto.randomUUID(),
     source: track.source,

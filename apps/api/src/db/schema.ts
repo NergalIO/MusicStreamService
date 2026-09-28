@@ -200,7 +200,7 @@ export const trackLikes = pgTable(
 export type LobbyQueueStatus = 'suggested' | 'queued' | 'playing' | 'played' | 'rejected';
 
 export interface LobbyTrackSnapshot {
-  source: 'local' | 'spotify' | 'yandex';
+  source: 'local' | 'spotify' | 'yandex' | 'vk';
   id: string;
   title: string;
   artist: string;

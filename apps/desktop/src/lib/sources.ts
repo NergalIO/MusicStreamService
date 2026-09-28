@@ -8,15 +8,17 @@ export const SOURCE_FILTERS: { id: SourceFilterId; label: string }[] = [
   { id: 'local', label: 'Наша библиотека' },
   { id: 'spotify', label: 'Spotify' },
   { id: 'yandex', label: 'Yandex' },
+  { id: 'vk', label: 'VK' },
 ];
 
 export const SOURCE_LABEL: Record<SourceId, string> = {
   local: 'MSS',
   spotify: 'Spotify',
   yandex: 'Yandex',
+  vk: 'VK',
 };
 
-export const EXTERNAL_SOURCES = ['spotify', 'yandex'] as const;
+export const EXTERNAL_SOURCES = ['spotify', 'yandex', 'vk'] as const;
 
 export function matchesFilter(filter: SourceFilterId, source: SourceId): boolean {
   return filter === 'all' || filter === source;
