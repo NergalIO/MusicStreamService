@@ -16,8 +16,10 @@
     "db:migrate": "pnpm --filter @mss/api db:migrate",
     "db:seed": "pnpm --filter @mss/api db:seed"
   },
+  "packageManager": "pnpm@9.15.9",
   "engines": {
-    "node": ">=20"
+    "node": ">=20",
+    "pnpm": "9"
   },
   "pnpm": {
     "onlyBuiltDependencies": ["electron", "esbuild", "msgpackr-extract"]

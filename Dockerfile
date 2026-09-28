@@ -1,7 +1,8 @@
 # MusicStreamService — API + worker (monorepo)
 FROM node:20-bookworm AS build
 
-RUN corepack enable && corepack prepare pnpm@latest --activate
+# pnpm@latest (v12+) блокирует postinstall без approve-builds — ломает esbuild в Docker build
+RUN corepack enable && corepack prepare pnpm@9.15.9 --activate
 
 WORKDIR /app
 
@@ -22,7 +23,7 @@ RUN apt-get update \
   && apt-get install -y --no-install-recommends ffmpeg ca-certificates \
   && rm -rf /var/lib/apt/lists/*
 
-RUN corepack enable && corepack prepare pnpm@latest --activate
+RUN corepack enable && corepack prepare pnpm@9.15.9 --activate
 
 WORKDIR /app
 
