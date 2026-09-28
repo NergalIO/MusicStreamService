@@ -1,5 +1,5 @@
 import dotenv from 'dotenv';
-import { app, BrowserWindow, ipcMain, session, shell } from 'electron';
+import { app, BrowserWindow, components, ipcMain, session, shell, type Session } from 'electron';
 import { repairChromiumDiskCache } from './cache-repair.js';
 import { randomUUID } from 'node:crypto';
 import fs from 'node:fs';
@@ -177,6 +177,22 @@ function registerAppIpc(): void {
   });
 }
 
+/** Stock Electron не содержит Widevine. Сборка castlabs ставит CDM до открытия окна. */
+async function ensureWidevine(): Promise<void> {
+  try {
+    await components.whenReady([components.WIDEVINE_CDM_ID]);
+  } catch (err) {
+    console.error('Widevine CDM не установился — Spotify Web Playback не запустится', err);
+  }
+}
+
+function allowPlaybackPermissions(ses: Session): void {
+  const allowed = new Set(['media', 'autoplay', 'mediaKeySystem']);
+  ses.setPermissionRequestHandler((_wc, permission, callback) => {
+    callback(allowed.has(permission));
+  });
+}
+
 if (process.platform === 'win32') app.setAppUserModelId('com.mss.desktop');
 
 const gotLock = app.requestSingleInstanceLock();
@@ -200,9 +216,8 @@ app.whenReady().then(async () => {
   handleStreamProtocol();
   await ensureRendererServer();
 
-  session.defaultSession.setPermissionRequestHandler((_wc, permission, callback) => {
-    callback(permission === 'media' || permission === 'autoplay');
-  });
+  allowPlaybackPermissions(session.defaultSession);
+  await ensureWidevine();
 
   registerAppIpc();
   registerLocalTracksIpc();

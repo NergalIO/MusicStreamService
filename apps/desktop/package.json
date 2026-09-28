@@ -8,6 +8,7 @@
     "build": "electron-vite build",
     "preview": "electron-vite preview",
     "dist": "electron-vite build && electron-builder",
+    "postinstall": "node ./node_modules/electron/install.js",
     "icons": "node scripts/build-icons.mjs"
   },
   "dependencies": {
@@ -40,7 +41,7 @@
     "@types/ws": "^8.5.13",
     "@vitejs/plugin-react": "^4.3.4",
     "autoprefixer": "^10.4.20",
-    "electron": "^33.2.1",
+    "electron": "github:castlabs/electron-releases#v44.1.0+wvcus",
     "electron-builder": "^25.1.8",
     "electron-vite": "^2.3.0",
     "png-to-ico": "^3.0.2",

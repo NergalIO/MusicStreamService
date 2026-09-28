@@ -7,6 +7,11 @@ const PLAYER_NAME = 'MusicStream';
 const DEVICE_WAIT_MS = 25_000;
 
 function mapSpotifySdkError(raw: string): string {
+  if (/failed to initialize player/i.test(raw)) {
+    return (
+      'Spotify не запустил плеер: нет модуля Widevine (DRM). Перезапустите приложение — он скачивается при первом запуске. Нужен Premium.'
+    );
+  }
   if (/invalid token scopes?/i.test(raw)) {
     return (
       'Invalid token scopes: для Web Playback нужны streaming, user-read-email и user-read-private. ' +
