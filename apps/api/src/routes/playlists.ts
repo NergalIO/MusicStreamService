@@ -16,7 +16,8 @@ import { config } from '../config.js';
 import { db } from '../db/client.js';
 import { playlistTracks, playlists, tracks } from '../db/schema.js';
 import { deleteObject, getObjectFull, putObject } from '../lib/storage.js';
-import { computeAvailability, heldTrackIdsForUser, toTrackDto, toTrackDtoWithAvailability } from './tracks.js';
+import { computeAvailability } from '../lib/track-availability.js';
+import { heldTrackIdsForUser, toTrackDto, toTrackDtoWithAvailability } from './tracks.js';
 
 const COVER_TYPES: Record<string, string> = {
   'image/jpeg': 'jpg',
