@@ -47,7 +47,7 @@ install_prerequisites() {
   if command -v apt-get >/dev/null 2>&1; then
     log "Пакеты: git, curl, openssl…"
     run_sudo apt-get update -qq
-    run_sudo DEBIAN_FRONTEND=noninteractive apt-get install -y -qq git curl openssl ca-certificates python3
+    run_sudo env DEBIAN_FRONTEND=noninteractive apt-get install -y -qq git curl openssl ca-certificates python3
   else
     for c in git curl openssl; do
       command -v "$c" >/dev/null 2>&1 || {
