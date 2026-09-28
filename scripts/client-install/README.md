@@ -20,7 +20,7 @@
 
 ## Windows (быстро, без сборки)
 
-Скачайте `MusicStreamService-setup.exe` с [GitHub Releases](https://github.com/mss/MusicStreamService/releases) — файл собирается в CI.
+Скачайте `MusicStreamService-setup.exe` с [GitHub Releases](https://github.com/NergalIO/MusicStreamService/releases) — файл собирается в CI.
 
 ## Android
 
@@ -28,7 +28,13 @@
 
 ## Синхронизация с лендингом
 
-Копии скриптов для раздачи API: [`apps/api/public/downloads/`](../apps/api/public/downloads/) — обновляйте вместе с этой папкой.
+После правок здесь выполните из корня репозитория:
+
+```bash
+pnpm sync:downloads
+```
+
+(в Docker-образе API копирование выполняется при сборке). Целевая папка: [`apps/api/public/downloads/`](../apps/api/public/downloads/).
 
 ## Разработчикам
 

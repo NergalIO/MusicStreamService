@@ -11,6 +11,7 @@
     "docker:up": "docker compose -f docker-compose.yml -f docker-compose.app.yml up -d --build",
     "docker:down": "docker compose -f docker-compose.yml -f docker-compose.app.yml down",
     "docker:logs": "docker compose -f docker-compose.yml -f docker-compose.app.yml logs -f api worker",
+    "sync:downloads": "node scripts/sync-client-downloads.cjs",
     "build": "pnpm -r build",
     "db:migrate": "pnpm --filter @mss/api db:migrate",
     "db:seed": "pnpm --filter @mss/api db:seed"

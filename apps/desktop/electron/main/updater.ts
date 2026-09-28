@@ -35,7 +35,7 @@ function githubRepo(): string {
   } catch {
     /* ignore */
   }
-  return 'mss/MusicStreamService';
+  return 'NergalIO/MusicStreamService';
 }
 
 function exeAssetName(): string {

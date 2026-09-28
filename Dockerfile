@@ -9,7 +9,10 @@ COPY package.json pnpm-lock.yaml pnpm-workspace.yaml ./
 COPY packages packages
 COPY apps/api apps/api
 COPY apps/worker apps/worker
+COPY scripts/client-install scripts/client-install
+COPY scripts/sync-client-downloads.cjs scripts/sync-client-downloads.cjs
 
+RUN node scripts/sync-client-downloads.cjs
 RUN pnpm install --frozen-lockfile
 RUN pnpm build
 

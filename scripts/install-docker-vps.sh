@@ -117,7 +117,12 @@ clone_or_update_repo() {
     fi
   elif [[ -d "$MSS_INSTALL_DIR/.git" ]]; then
     log "Обновление репозитория в ${MSS_INSTALL_DIR}"
-    git -C "$MSS_INSTALL_DIR" fetch origin "$MSS_BRANCH" --depth 1 2>/dev/null || true
+    if [[ -f "$MSS_INSTALL_DIR/.git/shallow" ]]; then
+      git -C "$MSS_INSTALL_DIR" fetch --unshallow origin "$MSS_BRANCH" 2>/dev/null \
+        || git -C "$MSS_INSTALL_DIR" fetch origin "$MSS_BRANCH" --depth=1 2>/dev/null || true
+    else
+      git -C "$MSS_INSTALL_DIR" fetch origin "$MSS_BRANCH" 2>/dev/null || true
+    fi
     git -C "$MSS_INSTALL_DIR" checkout "$MSS_BRANCH" 2>/dev/null || true
     git -C "$MSS_INSTALL_DIR" pull --ff-only origin "$MSS_BRANCH" 2>/dev/null || warn "git pull пропущен (локальные изменения?)"
   else
@@ -392,13 +397,6 @@ wait_for_api() {
   done
   warn "API не ответил за 3 мин — проверьте: compose logs api"
   return 1
-}
-
-run_seed() {
-  log "Миграции (migrate) и seed (планы + admin)…"
-  compose up -d --build
-  wait_for_api || true
-  compose run --rm api node apps/api/dist/db/seed.js
 }
 
 print_summary() {

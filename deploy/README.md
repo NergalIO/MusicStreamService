@@ -46,10 +46,10 @@ cat /opt/MusicStreamService/.mss-install-credentials
 Обновление:
 
 ```bash
-cd /opt/MusicStreamService && git pull
-docker compose -f docker-compose.yml -f docker-compose.app.yml up -d --build
-docker compose -f docker-compose.yml -f docker-compose.app.yml run --rm migrate
+cd /opt/MusicStreamService && chmod +x scripts/update-docker-vps.sh && ./scripts/update-docker-vps.sh
 ```
+
+(или вручную: `git pull`, `docker compose -f docker-compose.yml -f docker-compose.app.yml up -d --build`, `compose run --rm migrate`)
 
 | Файл | Роль |
 |------|------|

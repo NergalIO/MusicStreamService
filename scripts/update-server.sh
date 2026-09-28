@@ -32,6 +32,9 @@ for arg in "$@"; do
     --apk) FORCE_APK=1 ;;
     -h|--help)
       echo "Usage: $0 [--watch] [--force] [--reset] [--client] [--no-client] [--apk] [--no-apk]"
+      echo "  --client / --no-client  Windows (.exe через Wine), BUILD_CLIENT=1 для включения"
+      echo "  --apk / --no-apk        Android APK (Docker), BUILD_APK=1 для включения"
+      echo "  --force                 сервер + клиенты (если BUILD_*=1); --client/--apk форсируют только свой target"
       exit 0
       ;;
     *)
@@ -199,9 +202,9 @@ pack_win() {
     -v "$ROOT":/project \
     -v mss-electron-cache:/root/.cache/electron \
     -v mss-electron-builder-cache:/root/.cache/electron-builder \
-    -w /project/apps/desktop \
+    -w /project \
     "$WINE_IMAGE" \
-    bash -lc 'corepack enable && corepack prepare pnpm@latest --activate && pnpm install --frozen-lockfile && node scripts/pack-win.cjs' || return 1
+    bash -lc 'corepack enable && corepack prepare pnpm@latest --activate && pnpm install --frozen-lockfile && pnpm build && node apps/desktop/scripts/pack-win.cjs' || return 1
   cleanup_old_installers
   [[ -f "$RELEASES_DIR/$CANONICAL_EXE" ]] || {
     echo "$(LOG_PREFIX) нет $CANONICAL_EXE" >&2
@@ -283,7 +286,7 @@ once() {
 
   if [[ "$DO_APK" != 1 ]]; then
     echo "$(LOG_PREFIX) сборка APK отключена"
-  elif [[ "$FORCE" == 1 || "$FORCE_CLIENT" == 1 || "$FORCE_APK" == 1 ]] || changed "$apk_now" "$STAMP_APK"; then
+  elif [[ "$FORCE" == 1 || "$FORCE_APK" == 1 ]] || changed "$apk_now" "$STAMP_APK"; then
     if pack_apk; then
       echo "$apk_now" >"$STAMP_APK"
     else

@@ -59,7 +59,15 @@ function run(command, args, cwd) {
 
 function findInstaller(dir) {
   if (!fs.existsSync(dir)) return null;
+  const canonical = path.join(dir, CANONICAL_EXE);
+  if (fs.existsSync(canonical)) return canonical;
+
   const names = fs.readdirSync(dir).filter((n) => n.endsWith('.exe') && !n.includes('uninstall'));
+  const setup = names.filter((n) => /MusicStreamService Setup/i.test(n));
+  if (setup.length) {
+    setup.sort();
+    return path.join(dir, setup[setup.length - 1]);
+  }
   names.sort();
   return names.length ? path.join(dir, names[names.length - 1]) : null;
 }

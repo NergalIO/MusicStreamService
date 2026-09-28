@@ -1,6 +1,13 @@
 import { MotionConfig } from 'framer-motion';
 import { useEffect } from 'react';
-import { BrowserRouter, Navigate, Route, Routes, useParams } from 'react-router-dom';
+import {
+  BrowserRouter,
+  HashRouter,
+  Navigate,
+  Route,
+  Routes,
+  useParams,
+} from 'react-router-dom';
 import { libraryPath } from '@/lib/service-routes';
 import { toast, Toaster } from 'sonner';
 import { AppShell } from '@/components/layout/AppShell';
@@ -71,9 +78,15 @@ export default function App() {
   );
 }
 
+/** file:// в установленном .exe не даёт нормальный pathname для BrowserRouter — только чёрный экран */
+function AppRouter({ children }: { children: React.ReactNode }) {
+  const Router = import.meta.env.DEV ? BrowserRouter : HashRouter;
+  return <Router>{children}</Router>;
+}
+
 function AppRoutes() {
   return (
-    <BrowserRouter>
+    <AppRouter>
       <Appearance />
       <Routes>
         <Route path="/login" element={<LoginPage />} />
@@ -117,6 +130,6 @@ function AppRoutes() {
           <Route path="*" element={<Navigate to="/mss" replace />} />
         </Route>
       </Routes>
-    </BrowserRouter>
+    </AppRouter>
   );
 }

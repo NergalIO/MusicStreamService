@@ -23,7 +23,7 @@ Kotlin + Jetpack Compose клиент с MSS API, коннекторами Spoti
 
 ## Установка для пользователей
 
-Скачайте **`mss-android.apk`** с [GitHub Releases](https://github.com/mss/MusicStreamService/releases) (сборка в CI при tag `v*`). Лендинг MSS подставит прямую ссылку, если задан `GITHUB_REPO` на сервере.
+Скачайте **`mss-android.apk`** с [GitHub Releases](https://github.com/NergalIO/MusicStreamService/releases) (сборка в CI при tag `v*`). Лендинг MSS подставит прямую ссылку, если задан `GITHUB_REPO` на сервере.
 
 Локальная сборка разработчиком: `gradlew.bat :app:assembleDebug`.
 

@@ -17,7 +17,9 @@ function fileExists(filePath: string): boolean {
 export async function siteRoutes(app: FastifyInstance) {
   fs.mkdirSync(config.releasesDir, { recursive: true });
   const baseHref = config.basePath ? `${config.basePath}/` : '/';
-  const dlPrefix = 'downloads';
+  const bootstrapPrefix = 'downloads';
+  /** Legacy VPS-сборки в data/releases — отдельно от public/downloads (bootstrap). */
+  const legacyPrefix = 'release-assets';
 
   app.get('/', async (_req, reply) => {
     const indexPath = path.join(config.publicDir, 'index.html');
@@ -33,8 +35,8 @@ export async function siteRoutes(app: FastifyInstance) {
 
   app.get('/site/downloads', async () => {
     const gh = await fetchLatestReleaseDownloads();
-    const bootstrapCmd = `${dlPrefix}/install-windows.cmd`;
-    const bootstrapPs1 = `${dlPrefix}/install-windows.ps1`;
+    const bootstrapCmd = `${bootstrapPrefix}/install-windows.cmd`;
+    const bootstrapPs1 = `${bootstrapPrefix}/install-windows.ps1`;
     const hasBootstrap =
       fileExists(path.join(config.publicDir, 'downloads', 'install-windows.cmd')) ||
       fileExists(path.join(config.publicDir, 'downloads', 'install-windows.ps1'));
@@ -52,13 +54,17 @@ export async function siteRoutes(app: FastifyInstance) {
       },
       windowsExe: {
         available: Boolean(gh.windowsExeUrl) || fileExists(legacyWin),
-        href: gh.windowsExeUrl ?? (fileExists(legacyWin) ? `${dlPrefix}/${config.releaseFiles.windows}` : null),
+        href:
+          gh.windowsExeUrl ??
+          (fileExists(legacyWin) ? `${legacyPrefix}/${config.releaseFiles.windows}` : null),
         fileName: config.releaseFiles.windows,
         source: gh.windowsExeUrl ? 'github' : fileExists(legacyWin) ? 'legacy' : null,
       },
       androidApk: {
         available: Boolean(gh.androidApkUrl) || fileExists(legacyApk),
-        href: gh.androidApkUrl ?? (fileExists(legacyApk) ? `${dlPrefix}/${config.releaseFiles.android}` : null),
+        href:
+          gh.androidApkUrl ??
+          (fileExists(legacyApk) ? `${legacyPrefix}/${config.releaseFiles.android}` : null),
         fileName: config.releaseFiles.android,
         source: gh.androidApkUrl ? 'github' : fileExists(legacyApk) ? 'legacy' : null,
       },
@@ -70,8 +76,15 @@ export async function siteRoutes(app: FastifyInstance) {
   });
 
   await app.register(fastifyStatic, {
+    root: config.publicDir,
+    prefix: '/',
+    decorateReply: false,
+    index: false,
+  });
+
+  await app.register(fastifyStatic, {
     root: config.releasesDir,
-    prefix: '/downloads/',
+    prefix: `/${legacyPrefix}/`,
     decorateReply: false,
     index: false,
     setHeaders(reply, filePath) {
@@ -80,12 +93,5 @@ export async function siteRoutes(app: FastifyInstance) {
         reply.header('Content-Disposition', `attachment; filename="${base}"`);
       }
     },
-  });
-
-  await app.register(fastifyStatic, {
-    root: config.publicDir,
-    prefix: '/',
-    decorateReply: false,
-    index: false,
   });
 }

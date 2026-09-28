@@ -28,7 +28,7 @@ $tagName = $release.tag_name
 $srcDir = Join-Path $installRoot "src\$tagName"
 
 if ((Test-Path $srcDir) -and -not $Update) {
-    Write-Host "Уже есть $srcDir — используйте -Update для пересборки" -ForegroundColor Yellow
+    Write-Host "Исходники уже в $srcDir — пересборка без повторного скачивания (-Update для нового zipball)" -ForegroundColor Yellow
 } else {
     $zip = Download-ReleaseZipball $release $workDir
     if (Test-Path $srcDir) { Remove-Item -Recurse -Force $srcDir }

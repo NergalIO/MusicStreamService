@@ -9,7 +9,7 @@ function Get-MssInstallRoot {
 
 function Get-GithubRepo {
     if ($env:MSS_GITHUB_REPO) { return $env:MSS_GITHUB_REPO.Trim() }
-    return "mss/MusicStreamService"
+    return "NergalIO/MusicStreamService"
 }
 
 function Invoke-GithubApi([string]$Path) {
