@@ -64,6 +64,7 @@
       "resources/**/*"
     ],
     "icon": "resources/icon.png",
+    "afterSign": "scripts/vmp-win.cjs",
     "win": {
       "target": "nsis",
       "icon": "resources/icon.ico"

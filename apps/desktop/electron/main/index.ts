@@ -29,7 +29,7 @@ function loadDotenvFiles(): void {
 dotenv.config({ path: path.resolve(__dirname, '../../../../.env') });
 dotenv.config({ path: path.resolve(__dirname, '../../../.env') });
 
-import { initLogging } from './logger.js';
+import { initLogging, log } from './logger.js';
 import { getAppSettings, launchedHidden, registerAppSettingsIpc } from './app-settings.js';
 import { initConnectors } from './connectors.js';
 import { initCrashReporter, registerCrashIpc } from './crash-reporter.js';
@@ -182,8 +182,13 @@ function registerAppIpc(): void {
 async function ensureWidevine(): Promise<void> {
   try {
     await components.whenReady([components.WIDEVINE_CDM_ID]);
+    const status = components.status()[components.WIDEVINE_CDM_ID];
+    const sig = `${process.execPath}.sig`;
+    log.info(
+      `Widevine CDM ${status?.version ?? 'unknown'} (${status?.status ?? 'n/a'}), VMP ${fs.existsSync(sig) ? 'signature present' : 'signature MISSING'} (${path.basename(sig)})`,
+    );
   } catch (err) {
-    console.error('Widevine CDM не установился — веб-плеер Spotify может не запуститься', err);
+    log.error('Widevine CDM не установился — веб-плеер Spotify может не запуститься', err);
   }
 }
 
