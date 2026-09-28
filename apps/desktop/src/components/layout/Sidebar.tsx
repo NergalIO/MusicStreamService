@@ -305,7 +305,6 @@ export function Sidebar() {
             <Item to={SPOTIFY_HOME} end icon={Home} label="Слушать сейчас" />
             <Item to={libraryPath('spotify', 'likes')} icon={Heart} label="Мне нравится" />
             <Item to={libraryPath('spotify', 'playlists')} icon={ListMusic} label="Все плейлисты" />
-            <Item to={searchPath('spotify')} icon={Search} label="Поиск" />
             <PlaylistSubsection id="spotifyPlaylists" scope="spotify" />
           </CollapsibleSection>
         </nav>

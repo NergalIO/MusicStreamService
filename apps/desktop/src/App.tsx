@@ -118,7 +118,7 @@ function AppRoutes() {
           <Route path="/media/search" element={<SearchPage scope="media" />} />
           <Route path="/mss/search" element={<Navigate to="/media/search" replace />} />
           <Route path="/yandex/search" element={<Navigate to="/media/search" replace />} />
-          <Route path="/spotify/search" element={<SearchPage scope="spotify" />} />
+          <Route path="/spotify/search" element={<Navigate to="/media/search" replace />} />
           <Route path="/search" element={<Navigate to="/media/search" replace />} />
           <Route path="/media/library" element={<Navigate to="/media/library/likes" replace />} />
           <Route path="/media/library/:tab" element={<LibraryPage scope="media" />} />
