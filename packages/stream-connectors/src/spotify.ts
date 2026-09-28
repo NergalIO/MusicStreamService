@@ -12,8 +12,9 @@ import type { StreamConnector, TokenVault } from './types.js';
 
 const VAULT_KEY = 'spotify_tokens';
 /** Меньше запросов к API — в Dev Mode общая квота на аккаунт разработчика. */
-const MAX_ARTIST_ALBUMS = 12;
-const MAX_PLAYLISTS = 100;
+const MAX_ARTIST_TRACKS_FETCH = 50;
+const MAX_ARTIST_ALBUMS_FOR_TRACKS = 4;
+const MAX_PLAYLISTS = 50;
 /** Dev Mode (Feb 2026+): GET /search limit max 10 — больше даёт 400 Invalid limit. */
 const SPOTIFY_SEARCH_PAGE_MAX = 10;
 /** Dev Mode: GET /artists/{id}/albums limit max 10 на части инстансов. */
@@ -431,7 +432,7 @@ export function createSpotifyConnector(opts: SpotifyConnectorOptions): StreamCon
       }));
     },
     async getArtistTracks(artistId: string, limit: number, artistNameHint?: string): Promise<UnifiedTrack[]> {
-      const cap = clampLimit(limit, 200);
+      const cap = clampLimit(Math.min(limit, MAX_ARTIST_TRACKS_FETCH), MAX_ARTIST_TRACKS_FETCH);
       const byId = new Map<string, UnifiedTrack>();
       const seenTitles = new Set<string>();
       const failures: string[] = [];
@@ -460,42 +461,33 @@ export function createSpotifyConnector(opts: SpotifyConnectorOptions): StreamCon
 
       if (artistName) {
         const escaped = artistName.replace(/"/g, '');
-        const queries = [`artist:"${escaped}"`, `artist:${escaped}`, escaped];
-        for (const q of queries) {
-          if (byId.size >= cap) break;
-          try {
-            const found = await searchTrackItems(q, cap);
-            for (const t of found) {
-              const nameMatch =
-                trackMatchesArtist(t) ||
-                (artistName != null &&
-                  t.artists.some((a) => a.name.toLowerCase() === artistName.toLowerCase()));
-              if (nameMatch) add(mapSpotifyTrack(t));
-            }
-            if (byId.size) break;
-          } catch (e) {
-            noteFailure(e);
+        try {
+          const found = await searchTrackItems(`artist:"${escaped}"`, cap);
+          for (const t of found) {
+            const nameMatch =
+              trackMatchesArtist(t) ||
+              t.artists.some((a) => a.name.toLowerCase() === artistName.toLowerCase());
+            if (nameMatch) add(mapSpotifyTrack(t));
           }
+        } catch (e) {
+          noteFailure(e);
         }
       }
 
+      const needAlbumFallback = byId.size < Math.min(cap, 12);
       try {
-        const albums: SpotifyAlbum[] = [];
-        for (let offset = 0; albums.length < MAX_ARTIST_ALBUMS; offset += SPOTIFY_ARTIST_ALBUMS_PAGE_MAX) {
-          const page = await spotifyGet<{ items: SpotifyAlbum[]; next: string | null }>(
-            `/artists/${artistId}/albums`,
-            {
-              include_groups: 'album,single,appears_on,compilation',
-              limit: String(SPOTIFY_ARTIST_ALBUMS_PAGE_MAX),
-              offset: String(offset),
-              market: 'from_token',
-            },
-          );
-          albums.push(...page.items);
-          if (!page.next) break;
+        if (!needAlbumFallback) {
+          return [...byId.values()].slice(0, cap);
         }
+        const page = await spotifyGet<{ items: SpotifyAlbum[] }>(`/artists/${artistId}/albums`, {
+          include_groups: 'album,single',
+          limit: String(SPOTIFY_ARTIST_ALBUMS_PAGE_MAX),
+          offset: '0',
+          market: 'from_token',
+        });
+        const albums = page.items ?? [];
 
-        for (const album of albums.slice(0, MAX_ARTIST_ALBUMS)) {
+        for (const album of albums.slice(0, MAX_ARTIST_ALBUMS_FOR_TRACKS)) {
           if (byId.size >= cap) break;
           try {
             const page = await spotifyGet<{ items: SpotifyAlbumTrack[] }>(`/albums/${album.id}/tracks`, {
@@ -534,15 +526,6 @@ export function createSpotifyConnector(opts: SpotifyConnectorOptions): StreamCon
         if (top.items?.length) return top.items.map((t) => mapSpotifyTrack(t));
       } catch {
         /* нет scope user-top-read или пустая история */
-      }
-      try {
-        const rec = await spotifyGet<{ tracks: SpotifyTrack[] }>('/recommendations', {
-          limit: limitParam(cap),
-          seed_genres: 'pop,hip-hop,electronic',
-        });
-        if (rec.tracks?.length) return rec.tracks.map((t) => mapSpotifyTrack(t));
-      } catch {
-        /* recommendations недоступны в части режимов */
       }
       const saved = await spotifyGet<{ items: { track: SpotifyTrack | null }[] }>('/me/tracks', {
         limit: limitParam(Math.min(cap, 50)),
@@ -632,14 +615,7 @@ export function createSpotifyConnector(opts: SpotifyConnectorOptions): StreamCon
     },
     async resolvePlayback(track: UnifiedTrack): Promise<PlaybackHandle> {
       if (!loadTokens()?.refresh_token) throw new Error('Spotify не подключён');
-      let previewUrl: string | undefined;
-      try {
-        const meta = await spotifyGet<SpotifyTrack>(`/tracks/${track.id}`, { market: 'from_token' });
-        previewUrl = meta.preview_url ?? undefined;
-      } catch {
-        /* квота Dev Mode — полный трек через SDK без превью-запаса */
-      }
-      return { kind: 'spotifySdk', trackUri: `spotify:track:${track.id}`, previewUrl };
+      return { kind: 'spotifySdk', trackUri: `spotify:track:${track.id}` };
     },
   };
 }

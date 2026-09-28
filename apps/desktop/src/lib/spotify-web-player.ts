@@ -208,24 +208,22 @@ class SpotifyWebPlayer {
     }
   }
 
-  private async waitForDeviceId(_player: SpotifyPlayerInstance): Promise<void> {
+  /** Ждём device_id из события SDK `ready` (без опроса Web API). */
+  private async waitForDeviceId(): Promise<void> {
     if (this.deviceId) return;
     const deadline = Date.now() + DEVICE_WAIT_MS;
-
     while (!this.deviceId && Date.now() < deadline) {
+      await sleep(150);
+    }
+    if (!this.deviceId) {
       try {
         const token = await spotifyToken();
         const id = await discoverDeviceId(token);
-        if (id) {
-          this.deviceId = id;
-          break;
-        }
+        if (id) this.deviceId = id;
       } catch {
-        /* retry */
+        /* один запасной запрос */
       }
-      await sleep(400);
     }
-
     if (!this.deviceId) {
       throw new Error(
         'Spotify не зарегистрировал плеер. Нужен Premium и права streaming, user-read-email, user-read-private. Переподключите Spotify в Настройках и перезапустите приложение.',
@@ -287,7 +285,7 @@ class SpotifyWebPlayer {
             );
           }
           this.player = player;
-          await this.waitForDeviceId(player);
+          await this.waitForDeviceId();
         } catch (e) {
           this.initPromise = null;
           this.player = null;
