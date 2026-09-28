@@ -3,6 +3,7 @@ import cors from '@fastify/cors';
 import jwt from '@fastify/jwt';
 import multipart from '@fastify/multipart';
 import sensible from '@fastify/sensible';
+import type { FastifyInstance } from 'fastify';
 import type { ZodError } from 'zod';
 import { config } from './config.js';
 import { ensureBuckets } from './lib/storage.js';
@@ -40,25 +41,25 @@ app.setErrorHandler((err: Error, _req, reply) => {
   return reply.send(err);
 });
 
-const registerApi = async () => {
-  app.get('/health', async () => ({ ok: true, basePath: config.basePath || '/' }));
+const registerApi = async (scoped: FastifyInstance) => {
+  scoped.get('/health', async () => ({ ok: true, basePath: config.basePath || '/' }));
 
-  await app.register(authRoutes);
-  await app.register(trackRoutes);
-  await app.register(relayRoutes);
-  await app.register(wsPresenceRoutes);
-  await app.register(artistRoutes);
-  await app.register(likeRoutes);
-  await app.register(playlistRoutes);
-  await app.register(subscriptionRoutes);
-  await app.register(statsRoutes);
-  await app.register(siteRoutes);
+  await scoped.register(authRoutes);
+  await scoped.register(trackRoutes);
+  await scoped.register(relayRoutes);
+  await scoped.register(wsPresenceRoutes);
+  await scoped.register(artistRoutes);
+  await scoped.register(likeRoutes);
+  await scoped.register(playlistRoutes);
+  await scoped.register(subscriptionRoutes);
+  await scoped.register(statsRoutes);
+  await scoped.register(siteRoutes);
 };
 
 if (config.basePath) {
   await app.register(registerApi, { prefix: config.basePath });
 } else {
-  await registerApi();
+  await registerApi(app);
 }
 
 try {
