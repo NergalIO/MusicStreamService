@@ -1,0 +1,11 @@
+# Локальная разработка на хосте (pnpm dev): Postgres/Redis на 127.0.0.1
+#
+#   docker compose -f docker-compose.yml -f docker-compose.host-ports.yml up -d
+#
+services:
+  postgres:
+    ports:
+      - '127.0.0.1:5432:5432'
+  redis:
+    ports:
+      - '127.0.0.1:6379:6379'

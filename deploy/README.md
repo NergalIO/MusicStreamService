@@ -56,7 +56,7 @@ cd /opt/MusicStreamService && chmod +x scripts/update-docker-vps.sh && ./scripts
 | [`Dockerfile`](../Dockerfile) | Образ API/worker (ffmpeg внутри) |
 | [`docker-compose.app.yml`](../docker-compose.app.yml) | migrate, api, worker, volumes |
 
-Postgres/Redis при полном стеке слушают **127.0.0.1** (см. override в `docker-compose.app.yml`).
+Postgres/Redis в production Docker **не пробрасываются на хост** (только внутренняя сеть compose) — нет конфликта с Marzban и другими сервисами на 6379/5432.
 
 ---
 

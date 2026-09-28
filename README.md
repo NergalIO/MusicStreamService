@@ -20,7 +20,7 @@
 
 ```bash
 cp .env.example .env
-docker compose up -d
+docker compose -f docker-compose.yml -f docker-compose.host-ports.yml up -d
 pnpm install
 pnpm --filter @mss/shared build
 pnpm --filter @mss/mss-format build
@@ -77,7 +77,7 @@ pnpm --filter @mss/desktop dist
 По умолчанию **`STORAGE_BACKEND=local`**: треки лежат в `./data/object-store`. Для разработки достаточно:
 
 ```bash
-docker compose up -d    # только postgres + redis
+docker compose -f docker-compose.yml -f docker-compose.host-ports.yml up -d    # postgres + redis на localhost
 ```
 
 Образы **MinIO** на Docker Hub часто удалены или тянутся очень долго (застревание на большом слое после мелких — типично для медленной сети). **MinIO не нужен**, если в `.env` указано `STORAGE_BACKEND=local`.
