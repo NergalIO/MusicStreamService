@@ -85,7 +85,7 @@ function spotifyApiErrorMessage(status: number, raw: string, _path: string): str
   const detail = `${apiMessage} ${apiReason} ${raw}`;
   if (status === 401) return 'Сессия Spotify истекла — отключите и подключите снова в настройках';
   if (status === 403) {
-    if (/top-tracks|top tracks/i.test(`${path} ${detail}`)) {
+    if (/top-tracks|top tracks/i.test(`${_path} ${detail}`)) {
       return (
         'Spotify убрал GET /artists/{id}/top-tracks в Development Mode (2026). Приложение использует поиск и альбомы; обновите desktop до последней версии.'
       );
