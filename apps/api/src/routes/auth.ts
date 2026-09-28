@@ -3,7 +3,7 @@ import bcrypt from 'bcryptjs';
 import { eq } from 'drizzle-orm';
 import type { FastifyInstance } from 'fastify';
 import { loginSchema, registerSchema, resendVerificationSchema, verifyEmailSchema } from '@mss/shared';
-import { config, smtpConfigured } from '../config.js';
+import { config, emailVerificationRequired, smtpConfigured } from '../config.js';
 import { db } from '../db/client.js';
 import { refreshTokens, users } from '../db/schema.js';
 import { issueAndSendVerificationCode, verifyEmailCode } from '../services/email-verification.js';
@@ -35,18 +35,26 @@ export async function authRoutes(app: FastifyInstance) {
     const body = registerSchema.parse(req.body);
     const existing = await db.select().from(users).where(eq(users.email, body.email)).limit(1);
     if (existing.length) return reply.conflict('Email taken');
-    if (config.nodeEnv === 'production' && !smtpConfigured()) {
+    if (emailVerificationRequired() && config.nodeEnv === 'production' && !smtpConfigured()) {
       return reply.code(503).send({
         error: 'Service Unavailable',
         message: 'SMTP не настроен на сервере — регистрация временно недоступна',
       });
     }
     const passwordHash = await bcrypt.hash(body.password, 10);
+    const verifiedNow = !emailVerificationRequired();
     const [user] = await db
       .insert(users)
-      .values({ email: body.email, passwordHash, emailVerifiedAt: null })
+      .values({
+        email: body.email,
+        passwordHash,
+        emailVerifiedAt: verifiedNow ? new Date() : null,
+      })
       .returning();
     await assignPlan(user.id, 'free', 3650, 'register');
+    if (verifiedNow) {
+      return createSession(app, user);
+    }
     try {
       await issueAndSendVerificationCode(user.id, user.email);
     } catch (e) {
@@ -88,6 +96,9 @@ export async function authRoutes(app: FastifyInstance) {
     if (user.emailVerifiedAt) {
       return reply.badRequest('Email already verified');
     }
+    if (!emailVerificationRequired()) {
+      return reply.badRequest('Подтверждение email отключено на сервере');
+    }
     if (config.nodeEnv === 'production' && !smtpConfigured()) {
       return reply.code(503).send({
         error: 'Service Unavailable',
@@ -111,7 +122,7 @@ export async function authRoutes(app: FastifyInstance) {
     if (!user || !(await bcrypt.compare(body.password, user.passwordHash))) {
       return reply.unauthorized('Invalid credentials');
     }
-    if (!user.emailVerifiedAt) {
+    if (emailVerificationRequired() && !user.emailVerifiedAt) {
       return reply.code(403).send({
         error: 'Forbidden',
         code: 'EMAIL_NOT_VERIFIED',
@@ -133,7 +144,7 @@ export async function authRoutes(app: FastifyInstance) {
     if (!row || row.expiresAt < new Date()) return reply.unauthorized();
     const [user] = await db.select().from(users).where(eq(users.id, row.userId)).limit(1);
     if (!user) return reply.unauthorized();
-    if (!user.emailVerifiedAt) return reply.unauthorized();
+    if (emailVerificationRequired() && !user.emailVerifiedAt) return reply.unauthorized();
     const accessToken = app.jwt.sign({ sub: user.id, role: user.role }, { expiresIn: '15m' });
     return { accessToken };
   });

@@ -96,8 +96,14 @@ export const config = {
     from: process.env.SMTP_FROM?.trim() ?? 'MusicStreamService <noreply@localhost>',
   },
   emailVerificationTtlMin: Number(process.env.EMAIL_VERIFICATION_TTL_MIN ?? 15),
+  /** false — регистрация и вход без OTP (SMTP не обязателен). */
+  emailVerificationRequired: process.env.EMAIL_VERIFICATION_REQUIRED !== 'false',
 };
 
 export function smtpConfigured(): boolean {
   return Boolean(config.smtp.host);
+}
+
+export function emailVerificationRequired(): boolean {
+  return config.emailVerificationRequired;
 }

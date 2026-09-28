@@ -112,6 +112,7 @@ nano .env
 | `STORAGE_BACKEND` | `local` | Файлы в `LOCAL_STORAGE_PATH` |
 | `GITHUB_REPO` | `your-org/MusicStreamService` | Лендинг → GitHub Releases |
 | `SMTP_HOST`, `SMTP_USER`, `SMTP_PASS`, `SMTP_FROM` | ваш SMTP | OTP при регистрации (без SMTP в production регистрация недоступна) |
+| `EMAIL_VERIFICATION_REQUIRED` | `true` | `false` — регистрация/вход без кода на почту (SMTP не обязателен) |
 | `EMAIL_VERIFICATION_TTL_MIN` | `15` | Срок действия кода (минуты) |
 
 После обновления API с верификацией почты выполните миграции (`migrate` в compose или `pnpm db:migrate`). Существующие пользователи помечаются подтверждёнными автоматически.
