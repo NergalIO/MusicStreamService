@@ -42,6 +42,8 @@ export interface TrackDto {
   coverUrl: string | null;
   contentHash?: string | null;
   availability?: TrackAvailability;
+  /** Текущий пользователь держит трек — можно играть с локального файла. */
+  userHolds?: boolean;
 }
 
 export interface PlaylistDto {

@@ -16,7 +16,7 @@ import { config } from '../config.js';
 import { db } from '../db/client.js';
 import { playlistTracks, playlists, tracks } from '../db/schema.js';
 import { deleteObject, getObjectFull, putObject } from '../lib/storage.js';
-import { toTrackDtoWithAvailability } from './tracks.js';
+import { computeAvailability, heldTrackIdsForUser, toTrackDto, toTrackDtoWithAvailability } from './tracks.js';
 
 const COVER_TYPES: Record<string, string> = {
   'image/jpeg': 'jpg',
@@ -244,10 +244,18 @@ export async function playlistRoutes(app: FastifyInstance) {
       .where(eq(playlistTracks.playlistId, id))
       .orderBy(asc(playlistTracks.position), asc(playlistTracks.addedAt));
 
+    const localIds = rows.map((r) => r.track?.id).filter((id): id is string => !!id);
+    const heldIds = await heldTrackIdsForUser(req.userId!, localIds);
+
     const items: PlaylistEntryDto[] = [];
     for (const { entry, track } of rows) {
       if (track) {
-        items.push({ ...(await toTrackDtoWithAvailability(track)), entryId: entry.id, position: entry.position } as PlaylistEntryDto);
+        const avail = await computeAvailability(track);
+        items.push({
+          ...toTrackDto(track, avail, { userHolds: heldIds.has(track.id) }),
+          entryId: entry.id,
+          position: entry.position,
+        } as PlaylistEntryDto);
       } else if (entry.externalSource && entry.externalId && entry.snapshot) {
         items.push({
           entryId: entry.id,

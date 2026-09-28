@@ -13,10 +13,13 @@ import type { StreamConnector, TokenVault } from './types.js';
 const VAULT_KEY = 'spotify_tokens';
 const MAX_ARTIST_ALBUMS = 40;
 const MAX_PLAYLISTS = 100;
+/** Dev Mode (Feb 2026+): GET /search limit max 10 — больше даёт 400 Invalid limit. */
+const SPOTIFY_SEARCH_PAGE_MAX = 10;
+/** Dev Mode: GET /artists/{id}/albums limit max 10 на части инстансов. */
+const SPOTIFY_ARTIST_ALBUMS_PAGE_MAX = 10;
 const SPOTIFY_SCOPES =
   'user-read-email streaming user-modify-playback-state user-read-playback-state user-library-read playlist-read-private playlist-read-collaborative user-top-read';
 
-/** Spotify Web API: limit 1–50 (часть эндпоинтов — до 100, но playlist items — 50). */
 function clampLimit(limit: number, max = 50): number {
   const n = Number(limit);
   if (!Number.isFinite(n) || n < 1) return Math.min(50, max);
@@ -82,6 +85,11 @@ function spotifyApiErrorMessage(status: number, raw: string, _path: string): str
   const detail = `${apiMessage} ${apiReason} ${raw}`;
   if (status === 401) return 'Сессия Spotify истекла — отключите и подключите снова в настройках';
   if (status === 403) {
+    if (/top-tracks|top tracks/i.test(`${path} ${detail}`)) {
+      return (
+        'Spotify убрал GET /artists/{id}/top-tracks в Development Mode (2026). Приложение использует поиск и альбомы; обновите desktop до последней версии.'
+      );
+    }
     if (/premium subscription required|active premium/i.test(detail)) {
       return (
         'Spotify блокирует Web API для приложений в Development Mode: у аккаунта-владельца приложения в developer.spotify.com/dashboard должен быть активный Spotify Premium. ' +
@@ -100,6 +108,9 @@ function spotifyApiErrorMessage(status: number, raw: string, _path: string): str
       'Spotify вернул 403 Forbidden. Проверьте Premium у владельца приложения в Dashboard, allowlist в User Management и scopes при подключении.' +
       (apiReason ? ` (${apiReason})` : apiMessage && apiMessage !== 'Forbidden' ? ` (${apiMessage})` : '')
     );
+  }
+  if (status === 400 && /invalid limit/i.test(detail)) {
+    return `Spotify: некорректный limit (Dev Mode: search ≤ ${SPOTIFY_SEARCH_PAGE_MAX}). Обновите приложение.`;
   }
   return apiReason || apiMessage || raw || `Spotify API ${status}`;
 }
@@ -199,6 +210,42 @@ export function createSpotifyConnector(opts: SpotifyConnectorOptions): StreamCon
       throw new Error(spotifyApiErrorMessage(res.status, err, path));
     }
     return (await res.json()) as T;
+  }
+
+  async function searchTrackItems(q: string, want: number): Promise<SpotifyTrack[]> {
+    const cap = clampLimit(want, 50);
+    const out: SpotifyTrack[] = [];
+    for (let offset = 0; out.length < cap; offset += SPOTIFY_SEARCH_PAGE_MAX) {
+      const pageLimit = Math.min(SPOTIFY_SEARCH_PAGE_MAX, cap - out.length);
+      const data = await spotifyGet<{ tracks: { items: (SpotifyTrack | null)[] } }>('/search', {
+        q,
+        type: 'track',
+        limit: limitParam(pageLimit, SPOTIFY_SEARCH_PAGE_MAX),
+        offset: String(offset),
+      });
+      const batch = (data.tracks?.items ?? []).filter((t): t is SpotifyTrack => !!t?.id);
+      out.push(...batch);
+      if (batch.length < pageLimit) break;
+    }
+    return out;
+  }
+
+  async function searchArtistItems(q: string, want: number): Promise<SpotifyArtist[]> {
+    const cap = clampLimit(want, 50);
+    const out: SpotifyArtist[] = [];
+    for (let offset = 0; out.length < cap; offset += SPOTIFY_SEARCH_PAGE_MAX) {
+      const pageLimit = Math.min(SPOTIFY_SEARCH_PAGE_MAX, cap - out.length);
+      const data = await spotifyGet<{ artists: { items: SpotifyArtist[] } }>('/search', {
+        q,
+        type: 'artist',
+        limit: limitParam(pageLimit, SPOTIFY_SEARCH_PAGE_MAX),
+        offset: String(offset),
+      });
+      const batch = data.artists?.items ?? [];
+      out.push(...batch);
+      if (batch.length < pageLimit) break;
+    }
+    return out;
   }
 
   return {
@@ -320,20 +367,12 @@ export function createSpotifyConnector(opts: SpotifyConnectorOptions): StreamCon
       }
     },
     async search(query: string, limit: number): Promise<UnifiedTrack[]> {
-      const data = await spotifyGet<{ tracks: { items: SpotifyTrack[] } }>('/search', {
-        q: query,
-        type: 'track',
-        limit: limitParam(limit),
-      });
-      return (data.tracks.items ?? []).filter(Boolean).map((t) => mapSpotifyTrack(t));
+      const items = await searchTrackItems(query, limit);
+      return items.map((t) => mapSpotifyTrack(t));
     },
     async searchArtists(query: string, limit: number): Promise<UnifiedArtist[]> {
-      const data = await spotifyGet<{ artists: { items: SpotifyArtist[] } }>('/search', {
-        q: query,
-        type: 'artist',
-        limit: limitParam(limit),
-      });
-      return (data.artists.items ?? []).map((a) => ({
+      const items = await searchArtistItems(query, limit);
+      return items.map((a) => ({
         source: 'spotify' as const,
         id: a.id,
         name: a.name,
@@ -353,22 +392,37 @@ export function createSpotifyConnector(opts: SpotifyConnectorOptions): StreamCon
         seenTitles.add(titleKey);
       };
 
+      let artistName: string | null = null;
       try {
-        const top = await spotifyGet<{ tracks: SpotifyTrack[] }>(
-          `/artists/${artistId}/top-tracks`,
-          { market: 'from_token' },
-        );
-        top?.tracks.forEach((t) => add(mapSpotifyTrack(t)));
-      } catch (e) {
-        if (!byId.size) throw e;
+        const artist = await spotifyGet<SpotifyArtist>(`/artists/${artistId}`);
+        artistName = artist?.name ?? null;
+      } catch {
+        /* GET /artists/{id} может быть недоступен — попробуем только по id в альбомах */
+      }
+
+      if (artistName) {
+        try {
+          const q = `artist:"${artistName.replace(/"/g, '')}"`;
+          const found = await searchTrackItems(q, cap);
+          found
+            .filter((t) => t.artists.some((a) => a.id === artistId))
+            .forEach((t) => add(mapSpotifyTrack(t)));
+        } catch {
+          /* search fallback */
+        }
       }
 
       try {
         const albums: SpotifyAlbum[] = [];
-        for (let offset = 0; albums.length < MAX_ARTIST_ALBUMS; offset += 50) {
+        for (let offset = 0; albums.length < MAX_ARTIST_ALBUMS; offset += SPOTIFY_ARTIST_ALBUMS_PAGE_MAX) {
           const page = await spotifyGet<{ items: SpotifyAlbum[]; next: string | null }>(
             `/artists/${artistId}/albums`,
-            { include_groups: 'album,single', limit: '50', offset: String(offset), market: 'from_token' },
+            {
+              include_groups: 'album,single',
+              limit: String(SPOTIFY_ARTIST_ALBUMS_PAGE_MAX),
+              offset: String(offset),
+              market: 'from_token',
+            },
           );
           if (!page) break;
           albums.push(...page.items);
@@ -397,21 +451,13 @@ export function createSpotifyConnector(opts: SpotifyConnectorOptions): StreamCon
           }
         }
       } catch {
-        /* популярные треки уже могли загрузиться */
+        /* альбомы необязательны, если search уже дал треки */
       }
 
       if (!byId.size) {
-        const artist = await spotifyGet<SpotifyArtist>(`/artists/${artistId}`);
-        if (artist) {
-          const found = await spotifyGet<{ tracks: { items: SpotifyTrack[] } }>('/search', {
-            q: `artist:"${artist.name}"`,
-            type: 'track',
-            limit: '50',
-          });
-          found?.tracks.items
-            .filter((t) => t.artists.some((a) => a.id === artistId))
-            .forEach((t) => add(mapSpotifyTrack(t)));
-        }
+        throw new Error(
+          'Не удалось загрузить треки исполнителя из Spotify. Проверьте allowlist, Premium у владельца приложения и переподключите аккаунт.',
+        );
       }
 
       return [...byId.values()].slice(0, cap);
@@ -427,11 +473,20 @@ export function createSpotifyConnector(opts: SpotifyConnectorOptions): StreamCon
       } catch {
         /* нет scope user-top-read или пустая история */
       }
-      const rec = await spotifyGet<{ tracks: SpotifyTrack[] }>('/recommendations', {
-        limit: limitParam(cap),
-        seed_genres: 'pop,hip-hop,electronic',
+      try {
+        const rec = await spotifyGet<{ tracks: SpotifyTrack[] }>('/recommendations', {
+          limit: limitParam(cap),
+          seed_genres: 'pop,hip-hop,electronic',
+        });
+        if (rec.tracks?.length) return rec.tracks.map((t) => mapSpotifyTrack(t));
+      } catch {
+        /* recommendations недоступны в части режимов */
+      }
+      const saved = await spotifyGet<{ items: { track: SpotifyTrack | null }[] }>('/me/tracks', {
+        limit: limitParam(Math.min(cap, 50)),
+        market: 'from_token',
       });
-      return (rec.tracks ?? []).map((t) => mapSpotifyTrack(t));
+      return (saved.items ?? []).map((row) => row.track).filter((t): t is SpotifyTrack => !!t?.id).map((t) => mapSpotifyTrack(t));
     },
     async listPlaylists(): Promise<UnifiedPlaylist[]> {
       const out: UnifiedPlaylist[] = [];

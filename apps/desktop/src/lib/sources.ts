@@ -33,6 +33,7 @@ export interface LocalTrackDto {
   coverUrl?: string | null;
   availability?: TrackAvailability;
   streamUrl?: string | null;
+  userHolds?: boolean;
 }
 
 const LOCAL_STATUS_REASON: Record<string, string> = {
@@ -51,9 +52,13 @@ export function mapLocalTrack(
   t: LocalTrackDto,
   opts?: { ownsLocal?: boolean },
 ): UnifiedTrack & { streamUrl?: string; status: string } {
-  const availability = t.availability ?? (t.status === 'ready' ? 'cached' : 'unavailable');
+  const ownsLocal = !!opts?.ownsLocal || !!t.userHolds;
+  let availability = t.availability ?? (t.status === 'ready' ? 'cached' : 'unavailable');
+  if (ownsLocal && availability === 'unavailable' && (t.status === 'registered' || t.status === 'cached')) {
+    availability = 'cached';
+  }
   const playable =
-    !!opts?.ownsLocal ||
+    ownsLocal ||
     availability === 'cached' ||
     availability === 'online' ||
     t.status === 'ready';

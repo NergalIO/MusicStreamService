@@ -78,12 +78,14 @@ export function registerConnectorIpc(): void {
   ipcMain.handle('connectors:artistTracks', async (_e, id: string, artistId: string, limit: number) => {
     const c = connectorRegistry.get(id);
     if (!c?.getArtistTracks || c.getAuthStatus() === 'disconnected') return [];
-    return c.getArtistTracks(artistId, limit);
+    const safeLimit = Number.isFinite(limit) && limit > 0 ? limit : 50;
+    return c.getArtistTracks(artistId, safeLimit);
   });
   ipcMain.handle('connectors:homeTracks', async (_e, id: string, limit: number) => {
     const c = connectorRegistry.get(id);
     if (!c?.getHomeTracks || c.getAuthStatus() === 'disconnected') return [];
-    return c.getHomeTracks(limit);
+    const safeLimit = Number.isFinite(limit) && limit > 0 ? limit : 30;
+    return c.getHomeTracks(safeLimit);
   });
   ipcMain.handle(
     'connectors:resolvePlayback',

@@ -46,7 +46,7 @@ export function tagsFromFilename(filename: string): { title: string; artist: str
 
 export type TrackRow = typeof tracks.$inferSelect;
 
-export function toTrackDto(t: TrackRow, availability?: TrackAvailability) {
+export function toTrackDto(t: TrackRow, availability?: TrackAvailability, opts?: { userHolds?: boolean }) {
   const avail =
     availability ??
     (hasStreamableBytes(t) ? 'cached' : t.status === 'registered' || t.status === 'cached' ? 'unavailable' : 'unavailable');
@@ -62,6 +62,7 @@ export function toTrackDto(t: TrackRow, availability?: TrackAvailability) {
     codec: t.codec,
     contentHash: t.contentHash,
     availability: avail,
+    ...(opts?.userHolds ? { userHolds: true as const } : {}),
     coverUrl: t.coverStorageKey
       ? `${config.publicUrl}/covers/${t.id}?v=${encodeURIComponent(t.coverStorageKey.split('/').pop()!.replace(/\.[^.]+$/, ''))}`
       : null,
@@ -84,6 +85,22 @@ async function userOwnsTrack(userId: string, trackId: string): Promise<boolean> 
   return t?.uploadedBy === userId;
 }
 
+export async function heldTrackIdsForUser(userId: string, trackIds: string[]): Promise<Set<string>> {
+  const held = new Set<string>();
+  if (!trackIds.length) return held;
+  const fromHoldings = await db
+    .select({ trackId: trackHoldings.trackId })
+    .from(trackHoldings)
+    .where(and(eq(trackHoldings.userId, userId), inArray(trackHoldings.trackId, trackIds)));
+  for (const row of fromHoldings) held.add(row.trackId);
+  const fromUploads = await db
+    .select({ id: tracks.id })
+    .from(tracks)
+    .where(and(eq(tracks.uploadedBy, userId), inArray(tracks.id, trackIds)));
+  for (const row of fromUploads) held.add(row.id);
+  return held;
+}
+
 function catalogWhere(q: string) {
   const statusFilter = inArray(tracks.status, [...CATALOG_STATUSES]);
   const trimmed = q.trim();
@@ -100,6 +117,7 @@ function catalogWhere(q: string) {
 
 export async function trackRoutes(app: FastifyInstance) {
   app.get('/tracks', async (req) => {
+    await app.authenticateOptional(req);
     const query = req.query as { query?: string; limit?: string; offset?: string };
     const limit = Math.min(Number(query.limit ?? 50), 100);
     const offset = Number(query.offset ?? 0);
@@ -110,7 +128,13 @@ export async function trackRoutes(app: FastifyInstance) {
       .orderBy(desc(tracks.createdAt))
       .limit(limit)
       .offset(offset);
-    const items = await Promise.all(rows.map((r) => toTrackDtoWithAvailability(r)));
+    const heldIds = req.userId ? await heldTrackIdsForUser(req.userId, rows.map((r) => r.id)) : new Set<string>();
+    const items = await Promise.all(
+      rows.map(async (r) => {
+        const avail = await computeAvailability(r);
+        return toTrackDto(r, avail, { userHolds: heldIds.has(r.id) });
+      }),
+    );
     return { items };
   });
 
@@ -138,10 +162,13 @@ export async function trackRoutes(app: FastifyInstance) {
   });
 
   app.get('/tracks/:id', async (req, reply) => {
+    await app.authenticateOptional(req);
     const { id } = req.params as { id: string };
     const [t] = await db.select().from(tracks).where(eq(tracks.id, id)).limit(1);
     if (!t) return reply.notFound();
-    return toTrackDtoWithAvailability(t);
+    const avail = await computeAvailability(t);
+    const userHolds = req.userId ? (await heldTrackIdsForUser(req.userId, [id])).has(id) : false;
+    return toTrackDto(t, avail, { userHolds });
   });
 
   app.post('/tracks/register', async (req, reply) => {
