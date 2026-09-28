@@ -7,6 +7,10 @@ export class ConnectorRegistry {
     this.connectors.set(connector.id, connector);
   }
 
+  unregister(id: string): void {
+    this.connectors.delete(id);
+  }
+
   get(id: string): StreamConnector | undefined {
     return this.connectors.get(id);
   }

@@ -14,7 +14,18 @@ const VAULT_KEY = 'spotify_tokens';
 const MAX_ARTIST_ALBUMS = 40;
 const MAX_PLAYLISTS = 100;
 const SPOTIFY_SCOPES =
-  'user-read-email streaming user-modify-playback-state user-read-playback-state user-library-read playlist-read-private playlist-read-collaborative';
+  'user-read-email streaming user-modify-playback-state user-read-playback-state user-library-read playlist-read-private playlist-read-collaborative user-top-read';
+
+/** Spotify Web API: limit 1–50 (часть эндпоинтов — до 100, но playlist items — 50). */
+function clampLimit(limit: number, max = 50): number {
+  const n = Number(limit);
+  if (!Number.isFinite(n) || n < 1) return Math.min(50, max);
+  return Math.min(Math.floor(n), max);
+}
+
+function limitParam(limit: number, max = 50): string {
+  return String(clampLimit(limit, max));
+}
 
 interface SpotifyAlbum {
   id: string;
@@ -312,7 +323,7 @@ export function createSpotifyConnector(opts: SpotifyConnectorOptions): StreamCon
       const data = await spotifyGet<{ tracks: { items: SpotifyTrack[] } }>('/search', {
         q: query,
         type: 'track',
-        limit: String(Math.min(limit, 50)),
+        limit: limitParam(limit),
       });
       return (data.tracks.items ?? []).filter(Boolean).map((t) => mapSpotifyTrack(t));
     },
@@ -320,7 +331,7 @@ export function createSpotifyConnector(opts: SpotifyConnectorOptions): StreamCon
       const data = await spotifyGet<{ artists: { items: SpotifyArtist[] } }>('/search', {
         q: query,
         type: 'artist',
-        limit: String(Math.min(limit, 50)),
+        limit: limitParam(limit),
       });
       return (data.artists.items ?? []).map((a) => ({
         source: 'spotify' as const,
@@ -332,6 +343,7 @@ export function createSpotifyConnector(opts: SpotifyConnectorOptions): StreamCon
       }));
     },
     async getArtistTracks(artistId: string, limit: number): Promise<UnifiedTrack[]> {
+      const cap = clampLimit(limit, 200);
       const byId = new Map<string, UnifiedTrack>();
       const seenTitles = new Set<string>();
       const add = (t: UnifiedTrack) => {
@@ -341,43 +353,51 @@ export function createSpotifyConnector(opts: SpotifyConnectorOptions): StreamCon
         seenTitles.add(titleKey);
       };
 
-      const top = await spotifyGet<{ tracks: SpotifyTrack[] }>(
-        `/artists/${artistId}/top-tracks`,
-        { market: 'from_token' },
-      );
-      top?.tracks.forEach((t) => add(mapSpotifyTrack(t)));
-
-      const albums: SpotifyAlbum[] = [];
-      for (let offset = 0; albums.length < MAX_ARTIST_ALBUMS; offset += 50) {
-        const page = await spotifyGet<{ items: SpotifyAlbum[]; next: string | null }>(
-          `/artists/${artistId}/albums`,
-          { include_groups: 'album,single', limit: '50', offset: String(offset), market: 'from_token' },
+      try {
+        const top = await spotifyGet<{ tracks: SpotifyTrack[] }>(
+          `/artists/${artistId}/top-tracks`,
+          { market: 'from_token' },
         );
-        if (!page) break;
-        albums.push(...page.items);
-        if (!page.next) break;
+        top?.tracks.forEach((t) => add(mapSpotifyTrack(t)));
+      } catch (e) {
+        if (!byId.size) throw e;
       }
 
-      const chunks: SpotifyAlbum[][] = [];
-      for (let i = 0; i < Math.min(albums.length, MAX_ARTIST_ALBUMS); i += 5) {
-        chunks.push(albums.slice(i, i + 5));
-      }
-      for (const chunk of chunks) {
-        if (byId.size >= limit) break;
-        const results = await Promise.all(
-          chunk.map((album) =>
-            spotifyGet<{ items: SpotifyAlbumTrack[] }>(`/albums/${album.id}/tracks`, {
-              limit: '50',
-              market: 'from_token',
-            }).then((r) => ({ album, items: r?.items ?? [] })),
-          ),
-        );
-        for (const { album, items } of results) {
-          for (const t of items) {
-            if (!t.artists.some((a) => a.id === artistId)) continue;
-            add(mapSpotifyTrack({ ...t, album }));
+      try {
+        const albums: SpotifyAlbum[] = [];
+        for (let offset = 0; albums.length < MAX_ARTIST_ALBUMS; offset += 50) {
+          const page = await spotifyGet<{ items: SpotifyAlbum[]; next: string | null }>(
+            `/artists/${artistId}/albums`,
+            { include_groups: 'album,single', limit: '50', offset: String(offset), market: 'from_token' },
+          );
+          if (!page) break;
+          albums.push(...page.items);
+          if (!page.next) break;
+        }
+
+        const chunks: SpotifyAlbum[][] = [];
+        for (let i = 0; i < Math.min(albums.length, MAX_ARTIST_ALBUMS); i += 5) {
+          chunks.push(albums.slice(i, i + 5));
+        }
+        for (const chunk of chunks) {
+          if (byId.size >= cap) break;
+          const results = await Promise.all(
+            chunk.map((album) =>
+              spotifyGet<{ items: SpotifyAlbumTrack[] }>(`/albums/${album.id}/tracks`, {
+                limit: '50',
+                market: 'from_token',
+              }).then((r) => ({ album, items: r?.items ?? [] })),
+            ),
+          );
+          for (const { album, items } of results) {
+            for (const t of items) {
+              if (!t.artists.some((a) => a.id === artistId)) continue;
+              add(mapSpotifyTrack({ ...t, album }));
+            }
           }
         }
+      } catch {
+        /* популярные треки уже могли загрузиться */
       }
 
       if (!byId.size) {
@@ -394,7 +414,24 @@ export function createSpotifyConnector(opts: SpotifyConnectorOptions): StreamCon
         }
       }
 
-      return [...byId.values()].slice(0, limit);
+      return [...byId.values()].slice(0, cap);
+    },
+    async getHomeTracks(limit: number): Promise<UnifiedTrack[]> {
+      const cap = clampLimit(limit, 50);
+      try {
+        const top = await spotifyGet<{ items: SpotifyTrack[] }>('/me/top/tracks', {
+          limit: limitParam(cap),
+          time_range: 'short_term',
+        });
+        if (top.items?.length) return top.items.map((t) => mapSpotifyTrack(t));
+      } catch {
+        /* нет scope user-top-read или пустая история */
+      }
+      const rec = await spotifyGet<{ tracks: SpotifyTrack[] }>('/recommendations', {
+        limit: limitParam(cap),
+        seed_genres: 'pop,hip-hop,electronic',
+      });
+      return (rec.tracks ?? []).map((t) => mapSpotifyTrack(t));
     },
     async listPlaylists(): Promise<UnifiedPlaylist[]> {
       const out: UnifiedPlaylist[] = [];
@@ -428,16 +465,22 @@ export function createSpotifyConnector(opts: SpotifyConnectorOptions): StreamCon
         images: meta.images,
       };
       const tracks: UnifiedTrack[] = [];
-      for (let offset = 0; ; offset += 100) {
-        const page = await spotifyGet<{ items: { item: SpotifyTrack | null }[]; next: string | null }>(
-          `/playlists/${id}/items`,
-          { limit: '100', offset: String(offset), market: 'from_token' },
-        );
+      const pageSize = 50;
+      for (let offset = 0; ; offset += pageSize) {
+        const page = await spotifyGet<{
+          items: ({ track?: SpotifyTrack | null; item?: SpotifyTrack | null })[];
+          next: string | null;
+        }>(`/playlists/${id}/items`, {
+          limit: String(pageSize),
+          offset: String(offset),
+          market: 'from_token',
+        });
         if (!page) break;
         for (const row of page.items) {
-          if (!row.item?.id) continue;
-          const album = row.item.album?.images?.length ? row.item.album : fallbackAlbum;
-          tracks.push(mapSpotifyTrack({ ...row.item, album }));
+          const raw = row.track ?? row.item;
+          if (!raw?.id) continue;
+          const album = raw.album?.images?.length ? raw.album : fallbackAlbum;
+          tracks.push(mapSpotifyTrack({ ...raw, album }));
         }
         if (!page.next) break;
       }

@@ -31,6 +31,8 @@ export interface StreamConnector {
   listPlaylists?(): Promise<UnifiedPlaylist[]>;
   getPlaylist?(id: string): Promise<PlaylistWithTracks>;
   getSavedTracks?(limit: number): Promise<UnifiedTrack[]>;
+  /** Подборка для «Слушать сейчас» на главной источника. */
+  getHomeTracks?(limit: number): Promise<UnifiedTrack[]>;
   resolvePlayback(track: UnifiedTrack, options?: { quality?: Quality }): Promise<PlaybackHandle>;
   /** Access token for Web Playback SDK (Spotify). */
   getAccessToken?(): Promise<string | null>;

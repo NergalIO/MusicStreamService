@@ -1,5 +1,5 @@
 import { app, BrowserWindow, dialog, ipcMain, shell } from 'electron';
-import { clientSecret } from './client-secrets.js';
+import { clientSecret, clientSecretSource } from './client-secrets.js';
 import fs from 'node:fs';
 import path from 'node:path';
 
@@ -17,8 +17,14 @@ export interface AppSettings {
   discordShowButton: boolean;
   /** Показывать статус на паузе; иначе скрывать. */
   discordShowOnPause: boolean;
-  /** Application ID из Discord Developer Portal (если не задан DISCORD_CLIENT_ID в .env). */
+  /** Application ID из Discord Developer Portal (legacy; предпочтительно userClientSecrets). */
   discordClientId?: string;
+  /** Переопределение Client ID / secret из настроек (приоритет над .env и сборкой). */
+  userClientSecrets?: Partial<
+    Record<'SPOTIFY_CLIENT_ID' | 'DISCORD_CLIENT_ID' | 'YANDEX_CLIENT_ID' | 'YANDEX_CLIENT_SECRET', string>
+  >;
+  /** Свой OAuth Яндекс (иначе встроенный Music Android). */
+  yandexCustomOAuth?: boolean;
   trayHintShown: boolean;
   /** REST API (как API_PUBLIC_URL на сервере), для presence и fallback без bake в сборке */
   apiPublicUrl?: string;
@@ -97,12 +103,23 @@ function systemSettings(): SystemSettings {
   return {
     ...getAppSettings(),
     openAtLogin: openAtLogin(),
-    discordClientIdFromEnv: Boolean(clientSecret('DISCORD_CLIENT_ID')),
+    discordClientIdFromEnv: clientSecretSource('DISCORD_CLIENT_ID') === 'env' || clientSecretSource('DISCORD_CLIENT_ID') === 'baked',
   };
 }
 
 export function registerAppSettingsIpc(): void {
   ipcMain.handle('system:getSettings', () => systemSettings());
+  ipcMain.handle('system:getClientSecrets', async () => {
+    const { clientSecretsView } = await import('./user-client-secrets.js');
+    return clientSecretsView();
+  });
+  ipcMain.handle('system:setClientSecrets', async (_e, patch: Parameters<typeof import('./user-client-secrets.js').setUserClientSecrets>[0]) => {
+    const { setUserClientSecrets } = await import('./user-client-secrets.js');
+    const { refreshConnectorsFromSecrets } = await import('./connectors.js');
+    const view = setUserClientSecrets(patch);
+    refreshConnectorsFromSecrets();
+    return view;
+  });
   ipcMain.handle('system:setSettings', (_e, patch: Partial<SystemSettings>) => {
     const { openAtLogin: login, ...rest } = patch;
     if (login !== undefined) app.setLoginItemSettings({ openAtLogin: login, args: loginItemArgs() });

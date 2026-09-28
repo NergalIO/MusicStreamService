@@ -58,8 +58,9 @@ export function registerConnectorIpc(): void {
   ipcMain.handle('connectors:search', async (_e, id: string, query: string, limit: number) => {
     const c = connectorRegistry.get(id);
     if (!c || c.getAuthStatus() === 'disconnected') return [];
+    const safeLimit = Number.isFinite(limit) && limit > 0 ? limit : 50;
     try {
-      return await c.search(query, limit);
+      return await c.search(query, safeLimit);
     } catch (e) {
       throw e instanceof Error ? e : new Error(String(e));
     }
@@ -67,8 +68,9 @@ export function registerConnectorIpc(): void {
   ipcMain.handle('connectors:searchArtists', async (_e, id: string, query: string, limit: number) => {
     const c = connectorRegistry.get(id);
     if (!c?.searchArtists || c.getAuthStatus() === 'disconnected') return [];
+    const safeLimit = Number.isFinite(limit) && limit > 0 ? limit : 12;
     try {
-      return await c.searchArtists(query, limit);
+      return await c.searchArtists(query, safeLimit);
     } catch (e) {
       throw e instanceof Error ? e : new Error(String(e));
     }
@@ -77,6 +79,11 @@ export function registerConnectorIpc(): void {
     const c = connectorRegistry.get(id);
     if (!c?.getArtistTracks || c.getAuthStatus() === 'disconnected') return [];
     return c.getArtistTracks(artistId, limit);
+  });
+  ipcMain.handle('connectors:homeTracks', async (_e, id: string, limit: number) => {
+    const c = connectorRegistry.get(id);
+    if (!c?.getHomeTracks || c.getAuthStatus() === 'disconnected') return [];
+    return c.getHomeTracks(limit);
   });
   ipcMain.handle(
     'connectors:resolvePlayback',

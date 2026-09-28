@@ -7,6 +7,7 @@ import {
   type YandexConnector,
 } from '@mss/stream-connectors';
 import { clientSecret } from './client-secrets.js';
+import { yandexCustomOAuthEnabled } from './user-client-secrets.js';
 import { tokenVault } from './token-vault.js';
 
 export const connectorRegistry = new ConnectorRegistry();
@@ -23,7 +24,7 @@ function broadcastDeviceCode(prompt: DeviceCodePrompt): void {
   }
 }
 
-export function initConnectors(): void {
+function registerSpotify(): void {
   const spotifyClientId = clientSecret('SPOTIFY_CLIENT_ID');
   if (spotifyClientId) {
     connectorRegistry.register(
@@ -33,12 +34,15 @@ export function initConnectors(): void {
         openExternal: (url) => shell.openExternal(url),
       }),
     );
+  } else {
+    connectorRegistry.unregister('spotify');
   }
+}
 
+function registerYandex(): void {
   const customYandexId = clientSecret('YANDEX_CLIENT_ID').trim();
   const customYandexSecret = clientSecret('YANDEX_CLIENT_SECRET').trim();
-  const useCustomYandexOAuth =
-    process.env.MSS_YANDEX_CUSTOM_OAUTH === '1' || process.env.MSS_YANDEX_CUSTOM_OAUTH === 'true';
+  const useCustomYandexOAuth = yandexCustomOAuthEnabled();
   yandex = createYandexConnector({
     vault: tokenVault,
     openExternal: (url) => shell.openExternal(url),
@@ -48,4 +52,15 @@ export function initConnectors(): void {
       : {}),
   });
   connectorRegistry.register(yandex);
+}
+
+export function initConnectors(): void {
+  registerSpotify();
+  registerYandex();
+}
+
+/** После смены ключей в настройках — пересобрать коннекторы без перезапуска приложения. */
+export function refreshConnectorsFromSecrets(): void {
+  registerSpotify();
+  registerYandex();
 }

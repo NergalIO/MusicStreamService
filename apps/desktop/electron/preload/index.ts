@@ -77,6 +77,19 @@ function subscribe<T>(channel: string, cb: (payload: T) => void): () => void {
 const yandexCall = <T>(method: string, ...args: unknown[]) =>
   ipcRenderer.invoke('yandex:call', method, ...args) as Promise<T>;
 
+export type ClientSecretKey = 'SPOTIFY_CLIENT_ID' | 'DISCORD_CLIENT_ID' | 'YANDEX_CLIENT_ID' | 'YANDEX_CLIENT_SECRET';
+
+export interface ClientSecretFieldView {
+  userValue: string;
+  effectiveSet: boolean;
+  source: 'user' | 'env' | 'baked' | 'none';
+}
+
+export interface ClientSecretsView {
+  fields: Record<ClientSecretKey, ClientSecretFieldView>;
+  yandexCustomOAuth: boolean;
+}
+
 export interface SystemSettings {
   closeToTray: boolean;
   startMinimized: boolean;
@@ -105,6 +118,11 @@ const api = {
     getSettings: () => ipcRenderer.invoke('system:getSettings') as Promise<SystemSettings>,
     setSettings: (patch: Partial<SystemSettings>) =>
       ipcRenderer.invoke('system:setSettings', patch) as Promise<SystemSettings>,
+    getClientSecrets: () => ipcRenderer.invoke('system:getClientSecrets') as Promise<ClientSecretsView>,
+    setClientSecrets: (patch: {
+      secrets?: Partial<Record<ClientSecretKey, string | null>>;
+      yandexCustomOAuth?: boolean;
+    }) => ipcRenderer.invoke('system:setClientSecrets', patch) as Promise<ClientSecretsView>,
     version: () => ipcRenderer.invoke('system:version') as Promise<string>,
     openLogs: () => ipcRenderer.invoke('app:openLogs') as Promise<void>,
     log: (level: LogLevel, parts: string[]) => ipcRenderer.send('log:write', level, parts),
@@ -187,6 +205,8 @@ const api = {
       ipcRenderer.invoke('connectors:searchArtists', id, query, limit) as Promise<UnifiedArtist[]>,
     artistTracks: (id: string, artistId: string, limit: number) =>
       ipcRenderer.invoke('connectors:artistTracks', id, artistId, limit) as Promise<UnifiedTrack[]>,
+    homeTracks: (id: string, limit: number) =>
+      ipcRenderer.invoke('connectors:homeTracks', id, limit) as Promise<UnifiedTrack[]>,
     resolvePlayback: (id: string, track: UnifiedTrack, quality?: Quality) =>
       ipcRenderer.invoke('connectors:resolvePlayback', id, track, quality) as Promise<PlaybackHandle>,
     listPlaylists: (id: string) =>

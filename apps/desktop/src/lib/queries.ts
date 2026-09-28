@@ -1,9 +1,12 @@
 import type { PlaylistDto, UnifiedPlaylist, UnifiedTrack } from '@mss/shared';
 import { useQuery } from '@tanstack/react-query';
+import { useMemo } from 'react';
 import { apiFetch } from '@/lib/api';
 import { useSpotifyConnected, useYandexConnected } from '@/lib/connectors';
+import { statsTrackToUnified, useShelves } from '@/lib/stats';
 import { mapLocalTrack, type LocalTrackDto } from '@/lib/sources';
 import { loadLocalLikedTracks } from '@/store/likes-store';
+import { usePlayerStore } from '@/store/player-store';
 
 export type MssPlaylist = PlaylistDto;
 
@@ -65,6 +68,51 @@ export function useSpotifySavedTracks(limit = 1000) {
     enabled: connected,
     staleTime: 2 * 60_000,
   });
+}
+
+export function useSpotifyListenNow(limit = 30) {
+  const connected = useSpotifyConnected();
+  return useQuery({
+    queryKey: ['spotify', 'listen-now', limit],
+    queryFn: () => window.electronAPI.connectors.homeTracks('spotify', limit),
+    enabled: connected,
+    staleTime: 15 * 60_000,
+  });
+}
+
+/** Подборка для MSS «Слушать сейчас»: частое из статистики, история, забытое, новые загрузки. */
+export function useMssListenNow(limit = 30) {
+  const shelves = useShelves();
+  const local = useLocalTracks(limit);
+  const history = usePlayerStore((s) => s.history);
+
+  const tracks = useMemo(() => {
+    const out: UnifiedTrack[] = [];
+    const seen = new Set<string>();
+    const add = (t: UnifiedTrack) => {
+      if (t.playable === false) return;
+      const key = `${t.source}:${t.id}`;
+      if (seen.has(key)) return;
+      seen.add(key);
+      out.push(t);
+    };
+    for (const t of shelves.data?.frequent ?? []) add(statsTrackToUnified(t));
+    for (const t of history) add(t);
+    for (const t of shelves.data?.forgotten ?? []) add(statsTrackToUnified(t));
+    for (const t of local.data ?? []) add(t);
+    return out.slice(0, limit);
+  }, [shelves.data, history, local.data, limit]);
+
+  return {
+    tracks,
+    isLoading: shelves.isLoading && local.isLoading && !tracks.length,
+    isError: Boolean(shelves.isError && local.isError && !tracks.length),
+    error: shelves.error ?? local.error,
+    refetch: () => {
+      void shelves.refetch();
+      void local.refetch();
+    },
+  };
 }
 
 export function useYandexFeed() {

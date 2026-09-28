@@ -17,15 +17,18 @@ import { albumMenu, artistMenu, playlistMenu } from '@/lib/card-menus';
 import { statsArtistGroup, statsTrackToUnified, useShelves } from '@/lib/stats';
 import { albumLink, playlistPath } from '@/lib/links';
 import { playCollection, startWave, togglePlay } from '@/lib/player-actions';
-import { libraryPath, YANDEX_HOME } from '@/lib/service-routes';
+import { libraryPath, MSS_HOME, SPOTIFY_HOME, YANDEX_HOME } from '@/lib/service-routes';
 import {
   useLocalTracks,
+  useMssListenNow,
+  useSpotifyListenNow,
   useSpotifyPlaylists,
   useSpotifySavedTracks,
   useYandexChart,
   useYandexFeed,
   useYandexPlaylists,
 } from '@/lib/queries';
+import type { QueueItem } from '@/store/player-store';
 import { usePlaybackStore } from '@/store/playback-store';
 import { usePlayerStore, type PlayContext } from '@/store/player-store';
 
@@ -220,12 +223,54 @@ function ChartGrid({ tracks, context }: { tracks: UnifiedTrack[]; context: PlayC
 }
 
 export function MssHomePage() {
+  const listenNow = useMssListenNow(30);
   const local = useLocalTracks(20);
   const localContext: PlayContext = { type: 'library', title: 'Новое в MSS', path: libraryPath('mss', 'uploads') };
+  const listenContext: PlayContext = { type: 'other', title: 'Слушать сейчас', path: MSS_HOME };
 
   return (
     <div className="space-y-10">
       <h1 className="text-3xl font-bold tracking-tight">{greeting()}</h1>
+
+      {listenNow.isError && (
+        <ErrorState
+          className="py-8"
+          title="Не удалось загрузить подборку"
+          error={listenNow.error}
+          onRetry={() => listenNow.refetch()}
+        />
+      )}
+
+      {!listenNow.isError && (
+        <>
+          {listenNow.isLoading ? (
+            <div className="h-32 animate-pulse rounded-2xl bg-foreground/[0.06]" />
+          ) : (
+            <ListenNowHero
+              tracks={listenNow.tracks}
+              homePath={MSS_HOME}
+              accent="brand"
+              idleSubtitle="То, что вы слушаете чаще всего, и свежие треки из библиотеки"
+              trackInMix={(current) =>
+                !!current && listenNow.tracks.some((t) => t.source === current.source && t.id === current.id)
+              }
+            />
+          )}
+          <Shelf title="Слушать сейчас" subtitle="Частое, недавнее и новое в MSS">
+            {listenNow.isLoading ? (
+              <TrackListSkeleton rows={8} />
+            ) : (
+              <TrackList
+                tracks={listenNow.tracks}
+                context={listenContext}
+                showSource
+                emptyText="Включите несколько треков — подборка соберётся из вашей статистики"
+              />
+            )}
+          </Shelf>
+        </>
+      )}
+
       <RecentShelf />
       <PersonalShelves yandex={false} />
       <Shelf title="Новое в MSS" subtitle="Последние загрузки во внутреннюю библиотеку">
@@ -320,17 +365,112 @@ function ConnectSpotifyCard() {
   );
 }
 
+function ListenNowHero({
+  tracks,
+  homePath,
+  accent,
+  idleSubtitle,
+  trackInMix,
+}: {
+  tracks: UnifiedTrack[];
+  homePath: string;
+  accent: 'brand' | 'spotify';
+  idleSubtitle: string;
+  trackInMix: (current: QueueItem | null) => boolean;
+}) {
+  const current = usePlayerStore((s) => s.current);
+  const playing = usePlaybackStore((s) => s.playing);
+  const context: PlayContext = { type: 'other', title: 'Слушать сейчас', path: homePath };
+  const active = trackInMix(current);
+  const gradient =
+    accent === 'spotify'
+      ? 'from-emerald-500/35 via-emerald-500/10'
+      : 'from-primary/40 via-primary/15';
+  const glow = accent === 'spotify' ? 'bg-emerald-500/30' : 'bg-primary/40';
+
+  return (
+    <div className={`relative overflow-hidden rounded-2xl border border-foreground/[0.06] bg-gradient-to-br ${gradient} to-card p-7`}>
+      <div className={`pointer-events-none absolute -right-16 -top-24 h-72 w-72 rounded-full ${glow} blur-3xl motion-reduce:blur-none`} />
+      <div className="relative flex items-center gap-6">
+        <button
+          type="button"
+          onClick={() => (active ? togglePlay() : tracks.length && playCollection(tracks, context, false))}
+          disabled={!tracks.length}
+          className="flex h-16 w-16 shrink-0 items-center justify-center rounded-full bg-foreground text-background shadow-xl transition-transform hover:scale-105 disabled:opacity-40"
+          aria-label="Слушать сейчас"
+        >
+          {active && playing ? <Pause size={26} fill="currentColor" /> : <Play size={26} fill="currentColor" className="ml-1" />}
+        </button>
+        <div className="min-w-0 flex-1">
+          <div className="text-xs font-semibold uppercase tracking-wider text-foreground/70">Слушать сейчас</div>
+          <div className="mt-1 truncate text-2xl font-bold tracking-tight">
+            {active && current
+              ? `${current.title} — ${current.artist}`
+              : tracks.length
+                ? idleSubtitle
+                : 'Загружаем подборку…'}
+          </div>
+        </div>
+      </div>
+    </div>
+  );
+}
+
 export function SpotifyHomePage() {
   const spotify = useSpotifyConnected();
+  const listenNow = useSpotifyListenNow(30);
   const playlists = useSpotifyPlaylists();
   const saved = useSpotifySavedTracks(20);
   const savedContext: PlayContext = { type: 'likes', title: 'Сохранённые треки', path: libraryPath('spotify', 'likes') };
+  const listenContext: PlayContext = { type: 'other', title: 'Слушать сейчас', path: SPOTIFY_HOME };
 
   return (
     <div className="space-y-10">
       <h1 className="text-3xl font-bold tracking-tight">Spotify</h1>
 
       {spotify ? null : <ConnectSpotifyCard />}
+
+      {spotify && listenNow.isError && (
+        <ErrorState
+          className="py-8"
+          title="Не удалось загрузить подборку Spotify"
+          error={listenNow.error}
+          action={<SpotifyReconnectButton error={listenNow.error} />}
+          onRetry={() => void listenNow.refetch()}
+        />
+      )}
+
+      {spotify && !listenNow.isError && (listenNow.isLoading || (listenNow.data?.length ?? 0) > 0) && (
+        <>
+          {listenNow.isLoading ? (
+            <div className="h-32 animate-pulse rounded-2xl bg-foreground/[0.06]" />
+          ) : (
+            <ListenNowHero
+              tracks={listenNow.data ?? []}
+              homePath={SPOTIFY_HOME}
+              accent="spotify"
+              idleSubtitle="Подборка из ваших трендов и рекомендаций Spotify"
+              trackInMix={(current) =>
+                !!current &&
+                current.source === 'spotify' &&
+                (listenNow.data ?? []).some((t) => t.id === current.id)
+              }
+            />
+          )}
+          <Shelf title="Слушать сейчас" subtitle="Топ за месяц и рекомендации Spotify">
+            {listenNow.isLoading ? (
+              <TrackListSkeleton rows={8} />
+            ) : (
+              <TrackList
+                tracks={listenNow.data ?? []}
+                context={listenContext}
+                showSource={false}
+                emptyText="Подборка пуста"
+              />
+            )}
+          </Shelf>
+        </>
+      )}
 
       {spotify && (
         <Shelf title="Ваши плейлисты" moreTo={libraryPath('spotify', 'playlists')}>

@@ -1,8 +1,8 @@
 import type { Quality } from '@mss/shared';
-import type { SystemSettings } from '../../electron/preload/index';
+import type { ClientSecretKey, ClientSecretsView, SystemSettings } from '../../electron/preload/index';
 import { useQueryClient } from '@tanstack/react-query';
 import { Crown, FolderOpen, Loader2, LogOut } from 'lucide-react';
-import { useEffect, useState, type ReactNode } from 'react';
+import { Fragment, useEffect, useState, type ReactNode } from 'react';
 import { useNavigate } from 'react-router-dom';
 import { AppLogo } from '@/components/layout/AppLogo';
 import { OutputDeviceSelect } from '@/components/player/sound-controls';
@@ -148,6 +148,135 @@ export function useSystemSettings() {
   return [settings, update] as const;
 }
 
+const CLIENT_SECRET_META: Record<
+  ClientSecretKey,
+  { label: string; placeholder: string; hint: string }
+> = {
+  SPOTIFY_CLIENT_ID: {
+    label: 'Spotify Client ID',
+    placeholder: 'Из developer.spotify.com/dashboard',
+    hint: 'Нужен для поиска, плейлистов и Web Playback. После смены переподключите Spotify в «Сервисы».',
+  },
+  DISCORD_CLIENT_ID: {
+    label: 'Discord Application ID',
+    placeholder: 'Числовой ID приложения в Discord Developer Portal',
+    hint: 'Rich Presence и кнопка «Открыть трек». Можно оставить пустым, если ID уже в сборке или .env.',
+  },
+  YANDEX_CLIENT_ID: {
+    label: 'Яндекс OAuth Client ID',
+    placeholder: 'Только при своём OAuth-приложении',
+    hint: 'По умолчанию используется встроенный клиент Music Android (рекомендуется для Плюса).',
+  },
+  YANDEX_CLIENT_SECRET: {
+    label: 'Яндекс OAuth Client Secret',
+    placeholder: 'Пароль приложения oauth.yandex.ru',
+    hint: 'Используется вместе с Client ID, если включён «Свой OAuth Яндекс».',
+  },
+};
+
+const SECRET_SOURCE_LABEL: Record<ClientSecretsView['fields'][ClientSecretKey]['source'], string> = {
+  user: 'Задано вручную',
+  env: 'Из .env',
+  baked: 'Из сборки',
+  none: 'Не задано',
+};
+
+function ClientSecretsSection() {
+  const queryClient = useQueryClient();
+  const [view, setView] = useState<ClientSecretsView | null>(null);
+  const [draft, setDraft] = useState<Partial<Record<ClientSecretKey, string>>>({});
+  const [yandexCustom, setYandexCustom] = useState(false);
+  const [saving, setSaving] = useState(false);
+
+  useEffect(() => {
+    void window.electronAPI?.system.getClientSecrets().then((v) => {
+      setView(v);
+      setYandexCustom(v.yandexCustomOAuth);
+      const d: Partial<Record<ClientSecretKey, string>> = {};
+      for (const key of Object.keys(v.fields) as ClientSecretKey[]) {
+        d[key] = v.fields[key].userValue;
+      }
+      setDraft(d);
+    });
+  }, []);
+
+  if (!window.electronAPI || !view) return null;
+
+  const save = async () => {
+    setSaving(true);
+    try {
+      const secrets: Partial<Record<ClientSecretKey, string | null>> = {};
+      for (const key of Object.keys(CLIENT_SECRET_META) as ClientSecretKey[]) {
+        const value = draft[key]?.trim() ?? '';
+        const hadUser = Boolean(view.fields[key].userValue);
+        if (value) secrets[key] = value;
+        else if (hadUser) secrets[key] = null;
+      }
+      const next = await window.electronAPI.system.setClientSecrets({
+        secrets,
+        yandexCustomOAuth: yandexCustom,
+      });
+      setView(next);
+      await queryClient.invalidateQueries({ queryKey: ['connectors'] });
+      toast.success('Ключи сохранены. При смене Spotify или Яндекс OAuth переподключите сервисы выше.');
+    } catch (e) {
+      toast.error(e instanceof Error ? e.message : 'Не удалось сохранить ключи');
+    } finally {
+      setSaving(false);
+    }
+  };
+
+  return (
+    <Section
+      title="Ключи API"
+      footer="Значения хранятся только на этом компьютере (app-settings.json). Ручной ввод имеет приоритет над .env и ключами из установщика. Секреты не отправляются на сервер MSS."
+    >
+      {(Object.keys(CLIENT_SECRET_META) as ClientSecretKey[]).map((key) => {
+        const meta = CLIENT_SECRET_META[key];
+        const field = view.fields[key];
+        if (key.startsWith('YANDEX_') && !yandexCustom) return null;
+        return (
+          <Fragment key={key}>
+          <Row
+            title={
+              <span className="inline-flex flex-wrap items-center gap-2">
+                {meta.label}
+                <span className="rounded-full bg-foreground/10 px-2 py-0.5 text-[10px] font-medium text-muted">
+                  {SECRET_SOURCE_LABEL[field.source]}
+                  {field.effectiveSet && field.source !== 'user' ? ' · активен' : ''}
+                </span>
+              </span>
+            }
+            subtitle={meta.hint}
+          >
+            <Input
+              className="max-w-md font-mono text-xs"
+              type="password"
+              autoComplete="off"
+              placeholder={field.effectiveSet && !draft[key] ? 'Задано (введите новое, чтобы заменить)' : meta.placeholder}
+              value={draft[key] ?? ''}
+              onChange={(e) => setDraft((d) => ({ ...d, [key]: e.target.value }))}
+            />
+          </Row>
+          </Fragment>
+        );
+      })}
+      <Row
+        title="Свой OAuth Яндекс"
+        subtitle="Включайте только если создали приложение на oauth.yandex.ru. Иначе Плюс и полные треки могут не работать."
+      >
+        <Switch checked={yandexCustom} onChange={setYandexCustom} label="Свой OAuth Яндекс" />
+      </Row>
+      <Row title="Сохранить ключи">
+        <Button size="sm" disabled={saving} onClick={() => void save()}>
+          {saving && <Loader2 size={14} className="animate-spin" />}
+          Сохранить
+        </Button>
+      </Row>
+    </Section>
+  );
+}
+
 function SystemSection() {
   const [system, update] = useSystemSettings();
   if (!window.electronAPI || !system) return null;
@@ -191,11 +320,20 @@ function SystemSection() {
           label="Глобальные клавиши"
         />
       </Row>
-      <Row
-        title="Discord Rich Presence"
-        subtitle="Статус «Слушает MusicStream» с обложкой и прогрессом. Нужен DISCORD_CLIENT_ID в .env"
-      >
-        <Switch checked={system.discordPresence} onChange={(v) => update({ discordPresence: v })} label="Discord Rich Presence" />
+    </Section>
+  );
+}
+
+function DiscordSection() {
+  const [system, update] = useSystemSettings();
+  if (!window.electronAPI || !system) return null;
+  return (
+    <Section
+      title="Discord"
+      footer="Application ID задаётся в разделе «Ключи API». В Discord Developer Portal включите Rich Presence и загрузите ассеты play/pause при необходимости."
+    >
+      <Row title="Rich Presence" subtitle="Статус «Слушает MusicStream» с обложкой и прогрессом">
+        <Switch checked={system.discordPresence} onChange={(v) => update({ discordPresence: v })} label="Rich Presence" />
       </Row>
       <Row title="Обложка трека" subtitle="Большая картинка в статусе; для локальных треков — логотип MSS">
         <Switch
@@ -426,8 +564,12 @@ export function SettingsPage() {
         {connectors.map((c) => (
           <ConnectorRow key={c.id} connector={c} />
         ))}
-        {!connectors.length && <Row title="Нет доступных сервисов" subtitle="Проверьте .env и перезапустите приложение" />}
+        {!connectors.length && (
+          <Row title="Нет доступных сервисов" subtitle="Укажите ключи в разделе «Ключи API» ниже или в .env" />
+        )}
       </Section>
+
+      <ClientSecretsSection />
 
       <AppearanceSection />
 
@@ -468,6 +610,8 @@ export function SettingsPage() {
       <DownloadsSection />
 
       <SystemSection />
+
+      <DiscordSection />
 
       <Section
         title="Горячие клавиши"
