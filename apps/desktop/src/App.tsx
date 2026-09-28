@@ -27,6 +27,7 @@ import { SettingsPage } from '@/pages/SettingsPage';
 import { SimilarPage } from '@/pages/SimilarPage';
 import { StatsPage } from '@/pages/StatsPage';
 import { SubscriptionPage } from '@/pages/SubscriptionPage';
+import { LobbyPage } from '@/pages/LobbyPage';
 import { WavePage } from '@/pages/WavePage';
 import { WrappedPage } from '@/pages/WrappedPage';
 
@@ -141,6 +142,8 @@ function AppRoutes() {
           <Route path="/similar/:source/:id" element={<SimilarPage />} />
           <Route path="/subscription" element={<SubscriptionPage />} />
           <Route path="/settings" element={<SettingsPage />} />
+          <Route path="/lobby" element={<LobbyPage />} />
+          <Route path="/lobby/:id" element={<LobbyPage />} />
           <Route path="*" element={<Navigate to="/mss" replace />} />
         </Route>
       </Routes>

@@ -19,21 +19,27 @@ const SPOTIFY_SEARCH_PAGE_MAX = 10;
 /** Dev Mode: GET /artists/{id}/albums limit max 10 на части инстансов. */
 const SPOTIFY_ARTIST_ALBUMS_PAGE_MAX = 10;
 const SPOTIFY_SCOPES =
-  'user-read-email streaming user-modify-playback-state user-read-playback-state user-library-read playlist-read-private playlist-read-collaborative user-top-read';
+  'user-read-email user-read-private streaming user-modify-playback-state user-read-playback-state user-library-read playlist-read-private playlist-read-collaborative user-top-read';
 
-/** Web Playback SDK требует scope `streaming` в access token. */
+/**
+ * SDK проверяет виртуальный scope `web-playback` и отвечает Invalid token scopes,
+ * если нет любого из этих трёх — даже когда `streaming` уже выдан.
+ */
+const WEB_PLAYBACK_SCOPES = ['streaming', 'user-read-email', 'user-read-private'] as const;
+
 export const SPOTIFY_MISSING_STREAMING_MSG =
-  'В токене Spotify нет права streaming (Invalid token scopes). ' +
-  'Настройки MSS → отключите Spotify → на https://open.spotify.com/account/apps удалите это приложение → подключите Spotify снова и подтвердите все галочки. ' +
+  'Invalid token scopes: для Web Playback нужны streaming, user-read-email и user-read-private. ' +
+  'Настройки MSS → отключите Spotify → на https://open.spotify.com/account/apps удалите это приложение → подключите Spotify снова и подтвердите все разрешения. ' +
   'Premium нужен на том аккаунте, которым вы слушаете, не только у владельца приложения в Dashboard.';
 
-function hasStreamingScope(scope?: string): boolean {
+function hasWebPlaybackScopes(scope?: string): boolean {
   if (!scope) return false;
-  return scope.split(/\s+/).includes('streaming');
+  const granted = new Set(scope.split(/\s+/).filter(Boolean));
+  return WEB_PLAYBACK_SCOPES.every((name) => granted.has(name));
 }
 
 function assertStreamingScope(scope: string | undefined, clearVault: () => void): void {
-  if (hasStreamingScope(scope)) return;
+  if (hasWebPlaybackScopes(scope)) return;
   clearVault();
   throw new Error(SPOTIFY_MISSING_STREAMING_MSG);
 }

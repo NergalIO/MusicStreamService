@@ -9,8 +9,8 @@ const DEVICE_WAIT_MS = 25_000;
 function mapSpotifySdkError(raw: string): string {
   if (/invalid token scopes?/i.test(raw)) {
     return (
-      'Invalid token scopes: в токене нет streaming. Отключите Spotify в Настройках MSS, удалите приложение на ' +
-      'open.spotify.com/account/apps и подключите снова с подтверждением всех разрешений.'
+      'Invalid token scopes: для Web Playback нужны streaming, user-read-email и user-read-private. ' +
+      'Отключите Spotify в Настройках MSS, удалите приложение на open.spotify.com/account/apps и подключите снова, подтвердив все разрешения.'
     );
   }
   return raw;
@@ -223,7 +223,7 @@ class SpotifyWebPlayer {
 
     if (!this.deviceId) {
       throw new Error(
-        'Spotify не зарегистрировал плеер. Нужен Premium, scope streaming и переподключение Spotify в Настройках. Перезапустите приложение после обновления.',
+        'Spotify не зарегистрировал плеер. Нужен Premium и права streaming, user-read-email, user-read-private. Переподключите Spotify в Настройках и перезапустите приложение.',
       );
     }
   }
@@ -265,7 +265,7 @@ class SpotifyWebPlayer {
           if (sdkError) throw new Error(String(sdkError));
           if (!connected) {
             throw new Error(
-              'Spotify Web Playback не подключился. Нужен Premium и повторный вход в Spotify в Настройках (scope streaming).',
+              'Spotify Web Playback не подключился. Нужен Premium и повторный вход в Spotify в Настройках (streaming, user-read-email, user-read-private).',
             );
           }
           this.player = player;

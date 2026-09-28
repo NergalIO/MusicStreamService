@@ -423,6 +423,14 @@ export class AudioEngine {
     return b.length ? b.end(b.length - 1) : 0;
   }
 
+  /** Tap master output for lobby broadcast (parallel to speakers). */
+  createBroadcastStream(): MediaStream {
+    const ctx = this.ensureContext();
+    const dest = ctx.createMediaStreamDestination();
+    this.master!.connect(dest);
+    return dest.stream;
+  }
+
   dispose(): void {
     this.stop();
     this.modules.forEach((m) => m.dispose());

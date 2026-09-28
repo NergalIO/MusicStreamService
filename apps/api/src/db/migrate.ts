@@ -177,6 +177,38 @@ CREATE TABLE IF NOT EXISTS email_verification_codes (
   created_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
 );
 CREATE INDEX IF NOT EXISTS email_verification_codes_user_idx ON email_verification_codes (user_id);
+
+CREATE TABLE IF NOT EXISTS listening_lobbies (
+  id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+  invite_code VARCHAR(12) NOT NULL UNIQUE,
+  host_user_id UUID NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+  title VARCHAR(200) NOT NULL DEFAULT 'Listening party',
+  max_members INTEGER NOT NULL DEFAULT 8,
+  is_public BOOLEAN NOT NULL DEFAULT FALSE,
+  created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+  ended_at TIMESTAMPTZ
+);
+CREATE INDEX IF NOT EXISTS listening_lobbies_host_idx ON listening_lobbies (host_user_id);
+
+CREATE TABLE IF NOT EXISTS listening_lobby_members (
+  lobby_id UUID NOT NULL REFERENCES listening_lobbies(id) ON DELETE CASCADE,
+  user_id UUID NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+  role VARCHAR(10) NOT NULL,
+  display_name VARCHAR(100),
+  joined_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+  PRIMARY KEY (lobby_id, user_id)
+);
+
+CREATE TABLE IF NOT EXISTS listening_lobby_queue (
+  id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+  lobby_id UUID NOT NULL REFERENCES listening_lobbies(id) ON DELETE CASCADE,
+  position INTEGER NOT NULL DEFAULT 0,
+  track JSONB NOT NULL,
+  suggested_by UUID REFERENCES users(id) ON DELETE SET NULL,
+  status VARCHAR(20) NOT NULL DEFAULT 'queued',
+  created_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
+);
+CREATE INDEX IF NOT EXISTS listening_lobby_queue_lobby_idx ON listening_lobby_queue (lobby_id, position);
 `;
 
 async function main() {

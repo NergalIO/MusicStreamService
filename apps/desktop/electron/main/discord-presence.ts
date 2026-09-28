@@ -1,8 +1,35 @@
 import { Client, StatusDisplayType, type SetActivity } from '@xhayper/discord-rpc';
 import { BrowserWindow } from 'electron';
 import { getAppSettings, onAppSettingsChange, resolveDiscordClientId } from './app-settings.js';
+import { handleDeepLink } from './deep-links.js';
 import { log } from './logger.js';
 import { getLastPlayerState, getLastProgress, onPlayerProgress, onPlayerState } from './media.js';
+
+export interface LobbyPresenceContext {
+  active: boolean;
+  lobbyId: string | null;
+  inviteCode: string | null;
+  title: string | null;
+  memberCount: number;
+  maxMembers: number;
+  role: 'host' | 'guest' | null;
+}
+
+let lobbyPresence: LobbyPresenceContext | null = null;
+
+export function setLobbyPresenceContext(ctx: LobbyPresenceContext): void {
+  lobbyPresence = ctx.active && ctx.inviteCode ? ctx : null;
+  lastKey = '';
+  void publish(true);
+}
+
+function lobbyJoinUrl(code: string): string {
+  const base =
+    getAppSettings().apiPublicUrl?.trim() ||
+    process.env.API_PUBLIC_URL?.trim() ||
+    'http://127.0.0.1:3001';
+  return `${base.replace(/\/$/, '')}/join/${encodeURIComponent(code)}`;
+}
 
 /** ActivityType.Listening — статус «Слушает», не «Играет». */
 const ACTIVITY_LISTENING = 2;
@@ -62,12 +89,40 @@ function activityKey(): string {
     settings.discordShowButton,
     settings.discordShowOnPause,
     Math.floor((p?.position ?? 0) / 15),
+    lobbyPresence?.inviteCode,
+    lobbyPresence?.memberCount,
   ].join('\0');
 }
 
 function buildActivity(): SetActivity | null {
   const s = getLastPlayerState();
   const settings = getAppSettings();
+  if (lobbyPresence?.inviteCode) {
+    const activity: SetActivity = {
+      name: APP_NAME,
+      type: ACTIVITY_LISTENING,
+      details: clip(lobbyPresence.title || 'Listening party', 128),
+      state: clip(`В лобби · ${lobbyPresence.memberCount}/${lobbyPresence.maxMembers}`, 128),
+      statusDisplayType: StatusDisplayType.STATE,
+      instance: true,
+      partyId: lobbyPresence.lobbyId ?? undefined,
+      partySize: lobbyPresence.memberCount,
+      partyMax: lobbyPresence.maxMembers,
+      secrets: { join: lobbyPresence.inviteCode },
+      largeImageKey: 'logo',
+      largeImageText: APP_NAME,
+    };
+    if (settings.discordShowButton) {
+      activity.buttons = [{ label: clip('Присоединиться', 32), url: lobbyJoinUrl(lobbyPresence.inviteCode) }];
+    }
+    if (s.hasTrack) {
+      activity.details = clip(s.title || activity.details || 'Трек', 128);
+      activity.state = clip(`${s.artist} · лобби ${lobbyPresence.memberCount}/${lobbyPresence.maxMembers}`, 128);
+      Object.assign(activity, largeImage(s));
+    }
+    return activity;
+  }
+
   if (!s.hasTrack) return null;
   if (!s.playing && !settings.discordShowOnPause) return null;
 
@@ -133,6 +188,9 @@ async function connect(): Promise<void> {
     next.on('disconnected', () => {
       client = null;
       lastKey = '';
+    });
+    next.on('activityJoin', ({ secret }: { secret: string }) => {
+      if (secret?.trim()) handleDeepLink(`mss://lobby/${encodeURIComponent(secret.trim())}`);
     });
     await next.login();
     client = next;

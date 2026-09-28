@@ -39,7 +39,7 @@ class SpotifyConnector @Inject constructor(
     private val clientId = BuildConfig.SPOTIFY_CLIENT_ID
     private val redirectUri = "mss://spotify/callback"
     private val scopes =
-        "user-read-email streaming user-read-playback-state user-library-read playlist-read-private playlist-read-collaborative"
+        "user-read-email user-read-private streaming user-modify-playback-state user-read-playback-state user-library-read playlist-read-private playlist-read-collaborative"
 
     private var pendingVerifier: String? = null
     private var pendingState: String? = null

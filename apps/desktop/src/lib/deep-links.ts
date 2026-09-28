@@ -39,6 +39,10 @@ export function parseMssLink(url: string): { path: string; play?: { source: stri
       return { path: parts[0] === 'wrapped' ? '/stats/wrapped' : '/stats' };
     case 'settings':
       return { path: '/settings' };
+    case 'lobby': {
+      const code = parts[0] ?? parsed.pathname.replace(/^\//, '');
+      return code ? { path: `/lobby?code=${encodeURIComponent(code)}` } : { path: '/lobby' };
+    }
     case 'similar':
       return parts.length >= 2 ? { path: `/similar/${parts[0]}/${encodeURIComponent(parts[1])}${parsed.search}` } : null;
     default:

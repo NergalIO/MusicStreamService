@@ -196,3 +196,58 @@ export const trackLikes = pgTable(
   },
   (t) => [primaryKey({ columns: [t.userId, t.trackId] })],
 );
+
+export type LobbyQueueStatus = 'suggested' | 'queued' | 'playing' | 'played' | 'rejected';
+
+export interface LobbyTrackSnapshot {
+  source: 'local' | 'spotify' | 'yandex';
+  id: string;
+  title: string;
+  artist: string;
+  album?: string;
+  albumId?: string;
+  durationMs?: number;
+  coverUrl?: string;
+  playable?: boolean;
+}
+
+export const listeningLobbies = pgTable('listening_lobbies', {
+  id: uuid('id').primaryKey().defaultRandom(),
+  inviteCode: varchar('invite_code', { length: 12 }).notNull().unique(),
+  hostUserId: uuid('host_user_id')
+    .notNull()
+    .references(() => users.id, { onDelete: 'cascade' }),
+  title: varchar('title', { length: 200 }).notNull().default('Listening party'),
+  maxMembers: integer('max_members').notNull().default(8),
+  isPublic: boolean('is_public').notNull().default(false),
+  createdAt: timestamp('created_at', { withTimezone: true }).defaultNow().notNull(),
+  endedAt: timestamp('ended_at', { withTimezone: true }),
+});
+
+export const listeningLobbyMembers = pgTable(
+  'listening_lobby_members',
+  {
+    lobbyId: uuid('lobby_id')
+      .notNull()
+      .references(() => listeningLobbies.id, { onDelete: 'cascade' }),
+    userId: uuid('user_id')
+      .notNull()
+      .references(() => users.id, { onDelete: 'cascade' }),
+    role: varchar('role', { length: 10 }).notNull(),
+    displayName: varchar('display_name', { length: 100 }),
+    joinedAt: timestamp('joined_at', { withTimezone: true }).defaultNow().notNull(),
+  },
+  (t) => [primaryKey({ columns: [t.lobbyId, t.userId] })],
+);
+
+export const listeningLobbyQueue = pgTable('listening_lobby_queue', {
+  id: uuid('id').primaryKey().defaultRandom(),
+  lobbyId: uuid('lobby_id')
+    .notNull()
+    .references(() => listeningLobbies.id, { onDelete: 'cascade' }),
+  position: integer('position').notNull().default(0),
+  track: jsonb('track').$type<LobbyTrackSnapshot>().notNull(),
+  suggestedBy: uuid('suggested_by').references(() => users.id, { onDelete: 'set null' }),
+  status: varchar('status', { length: 20 }).notNull().default('queued'),
+  createdAt: timestamp('created_at', { withTimezone: true }).defaultNow().notNull(),
+});

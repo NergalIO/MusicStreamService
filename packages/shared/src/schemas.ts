@@ -123,3 +123,33 @@ export const adminSubscriptionSchema = z.object({
   planCode: z.enum(['free', 'premium']),
   days: z.number().int().min(1).max(3650),
 });
+
+export const createLobbySchema = z.object({
+  title: z.string().trim().min(1).max(200).optional(),
+  maxMembers: z.number().int().min(2).max(32).optional(),
+  isPublic: z.boolean().optional(),
+});
+
+export const joinLobbySchema = z.object({
+  inviteCode: z.string().trim().min(4).max(12),
+});
+
+export const lobbySuggestSchema = z.object({
+  track: z.object({
+    source: z.enum(['local', 'spotify', 'yandex']),
+    id: z.string().min(1).max(100),
+    title: z.string().min(1).max(500),
+    artist: z.string().max(500),
+    album: z.string().max(500).optional(),
+    albumId: z.string().max(100).optional(),
+    durationMs: z.number().int().min(0).optional(),
+    coverUrl: z.string().max(1000).optional(),
+    playable: z.boolean().optional(),
+  }),
+});
+
+export const lobbyPlaybackSchema = z.object({
+  action: z.enum(['play', 'pause', 'skip', 'seek']),
+  track: lobbySuggestSchema.shape.track.optional(),
+  positionMs: z.number().int().min(0).optional(),
+});

@@ -290,6 +290,7 @@ export function Sidebar() {
             <Item to={libraryPath('mss', 'playlists')} icon={ListMusic} label="Все плейлисты" />
             <Item to={libraryPath('mss', 'uploads')} icon={Upload} label="Мои треки" />
             <Item to={libraryPath('mss', 'downloads')} icon={CircleArrowDown} label="Скачанные" />
+            <Item to="/lobby" icon={Radio} label="Listening party" />
             <PlaylistSubsection id="mssPlaylists" scope="mss" />
           </CollapsibleSection>
 

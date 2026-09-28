@@ -266,6 +266,41 @@ const api = {
     onMiniOpenChange: (cb: (open: boolean) => void) => subscribe('mini:open', cb),
   },
   platform: process.platform,
+  lobby: {
+    setPresence: (ctx: {
+      active: boolean;
+      lobbyId: string | null;
+      inviteCode: string | null;
+      title: string | null;
+      memberCount: number;
+      maxMembers: number;
+      role: 'host' | 'guest' | null;
+    }) => ipcRenderer.invoke('lobby:setPresence', ctx),
+    captureWindowAudio: async (): Promise<MediaStream | null> => {
+      const meta = (await ipcRenderer.invoke('lobby:captureWindowAudio')) as {
+        sourceId: string;
+        chromeMediaSource: 'desktop';
+      } | null;
+      if (!meta) return null;
+      return navigator.mediaDevices.getUserMedia({
+        audio: {
+          mandatory: {
+            chromeMediaSource: meta.chromeMediaSource,
+            chromeMediaSourceId: meta.sourceId,
+          },
+        },
+        video: {
+          mandatory: {
+            chromeMediaSource: meta.chromeMediaSource,
+            chromeMediaSourceId: meta.sourceId,
+            maxWidth: 1,
+            maxHeight: 1,
+            maxFrameRate: 1,
+          },
+        },
+      } as MediaStreamConstraints);
+    },
+  },
   window: {
     toggleMini: () => ipcRenderer.send('window:toggleMini'),
     closeMini: () => ipcRenderer.send('window:closeMini'),

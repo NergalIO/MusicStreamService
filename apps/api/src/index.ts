@@ -15,8 +15,10 @@ import { playlistRoutes } from './routes/playlists.js';
 import { statsRoutes } from './routes/stats.js';
 import { subscriptionRoutes } from './routes/subscription.js';
 import { trackRoutes } from './routes/tracks.js';
+import { lobbyRoutes } from './routes/lobbies.js';
 import { relayRoutes } from './routes/relay.js';
 import { siteRoutes } from './routes/site.js';
+import { wsLobbyRoutes } from './ws/lobby.js';
 import { wsPresenceRoutes } from './ws/presence.js';
 
 const app = Fastify({
@@ -51,7 +53,9 @@ const registerApi = async (scoped: FastifyInstance) => {
   await scoped.register(authRoutes);
   await scoped.register(trackRoutes);
   await scoped.register(relayRoutes);
+  await scoped.register(lobbyRoutes);
   await scoped.register(wsPresenceRoutes);
+  await scoped.register(wsLobbyRoutes);
   await scoped.register(artistRoutes);
   await scoped.register(likeRoutes);
   await scoped.register(playlistRoutes);

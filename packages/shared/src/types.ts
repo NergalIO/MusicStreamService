@@ -297,3 +297,54 @@ export interface DownloadProgress {
   received: number;
   total: number;
 }
+
+export type LobbyMemberRole = 'host' | 'guest';
+export type LobbyQueueStatus = 'suggested' | 'queued' | 'playing' | 'played' | 'rejected';
+
+export interface LobbyPlaybackState {
+  track: UnifiedTrack | null;
+  paused: boolean;
+  positionMs: number;
+  updatedAt: string;
+}
+
+export interface LobbyMemberDto {
+  userId: string;
+  role: LobbyMemberRole;
+  displayName: string | null;
+  joinedAt: string;
+}
+
+export interface LobbyQueueItemDto {
+  id: string;
+  position: number;
+  track: UnifiedTrack;
+  suggestedBy: string | null;
+  status: LobbyQueueStatus;
+  createdAt: string;
+}
+
+export interface LobbyDto {
+  id: string;
+  inviteCode: string;
+  title: string;
+  maxMembers: number;
+  isPublic: boolean;
+  hostUserId: string;
+  createdAt: string;
+  endedAt: string | null;
+  members: LobbyMemberDto[];
+  queue: LobbyQueueItemDto[];
+  playback: LobbyPlaybackState;
+}
+
+export type LobbyWsEvent =
+  | { type: 'lobby_state'; lobby: LobbyDto }
+  | { type: 'member_join'; member: LobbyMemberDto }
+  | { type: 'member_leave'; userId: string }
+  | { type: 'queue_updated'; queue: LobbyQueueItemDto[] }
+  | { type: 'playback'; playback: LobbyPlaybackState }
+  | { type: 'suggestion_new'; item: LobbyQueueItemDto }
+  | { type: 'lobby_closed' }
+  | { type: 'pong' }
+  | { type: 'error'; message: string };

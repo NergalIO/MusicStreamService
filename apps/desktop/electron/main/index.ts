@@ -48,6 +48,7 @@ import {
   saveOffline,
 } from './offline-store.js';
 import { initLocalTracks, registerLocalTracksIpc } from './local-tracks-ipc.js';
+import { registerLobbyIpc } from './lobby-ipc.js';
 import { registerRelayBridge } from './relay-bridge.js';
 import { ensureRendererServer, rendererPageUrl } from './renderer-server.js';
 import { fileStreamUrl, handleStreamProtocol, registerStreamScheme } from './stream-protocol.js';
@@ -205,6 +206,7 @@ app.whenReady().then(async () => {
 
   registerAppIpc();
   registerLocalTracksIpc();
+  registerLobbyIpc();
   registerConnectorIpc();
   registerDownloadsIpc();
   registerWindowControls();

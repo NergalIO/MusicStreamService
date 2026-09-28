@@ -21,6 +21,8 @@ import { getSpotifyWebPlayer, isSpotifyPlaybackActive } from '@/lib/spotify-web-
 import { useLikesStore } from '@/store/likes-store';
 import { usePlaybackStore } from '@/store/playback-store';
 import { upcomingTracks, usePlayerStore, type QueueItem } from '@/store/player-store';
+import { syncLobbyPause, syncLobbyPlay } from '@/lib/lobby-host-sync';
+import { isLobbyGuest } from '@/store/lobby-store';
 import { normalizationGainDb, useSettingsStore } from '@/store/settings-store';
 
 const PRELOAD_BEFORE_END = 30;
@@ -176,6 +178,10 @@ function publishSnapshot(): void {
 async function startCurrent(playId: number): Promise<void> {
   const { current, transition, startAt } = usePlayerStore.getState();
   if (!current) return;
+  if (isLobbyGuest()) {
+    usePlaybackStore.setState({ loading: false, playing: false });
+    return;
+  }
   const engine = getAudioEngine();
   const { quality, crossfade } = useSettingsStore.getState();
   usePlayerStore.setState({ startAt: 0, resumeAt: startAt });
@@ -234,6 +240,7 @@ async function startCurrent(playId: number): Promise<void> {
     }
     if (usePlayerStore.getState().playId !== playId) return;
     consecutiveErrors = 0;
+    void syncLobbyPlay(current, Math.round(startAt * 1000));
     usePlayerStore.getState().pushHistory(current);
     notifyTrack(current);
     const { radio } = usePlayerStore.getState();
@@ -264,6 +271,7 @@ function handlePlaybackFailure(message: string, autoAdvance: boolean): void {
 }
 
 async function preloadNext(): Promise<void> {
+  if (isLobbyGuest()) return;
   const state = usePlayerStore.getState();
   const next = state.repeat === 'one' ? state.current : upcomingTracks(state)[0];
   if (!next || !next.playable) return;

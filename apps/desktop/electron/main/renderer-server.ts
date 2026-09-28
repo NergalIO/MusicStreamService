@@ -18,6 +18,13 @@ const MIME: Record<string, string> = {
   '.woff': 'font/woff',
 };
 
+/**
+ * Постоянный origin интерфейса. localStorage (настройки, онбординг, сессия)
+ * привязан к `http://127.0.0.1:<порт>`: случайный порт при каждом старте
+ * открывает приложение как в первый раз.
+ */
+const RENDERER_PORT = 47821;
+
 let baseUrl: string | null = null;
 
 function rendererRoot(): string {
@@ -53,7 +60,20 @@ export async function ensureRendererServer(): Promise<string> {
     }
   });
 
-  await new Promise<void>((resolve) => server.listen(0, '127.0.0.1', () => resolve()));
+  await new Promise<void>((resolve, reject) => {
+    const onError = (err: NodeJS.ErrnoException) => {
+      if (err.code === 'EADDRINUSE') {
+        reject(new Error(`Порт интерфейса ${RENDERER_PORT} занят — настройки привязаны к http://127.0.0.1:${RENDERER_PORT}`));
+        return;
+      }
+      reject(err);
+    };
+    server.once('error', onError);
+    server.listen(RENDERER_PORT, '127.0.0.1', () => {
+      server.off('error', onError);
+      resolve();
+    });
+  });
   const port = (server.address() as AddressInfo).port;
   baseUrl = `http://127.0.0.1:${port}`;
   return baseUrl;

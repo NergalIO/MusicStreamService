@@ -87,6 +87,9 @@ export const config = {
   relayCacheTtlHours: Number(process.env.RELAY_CACHE_TTL_HOURS ?? 48),
   relayWaitMs: Number(process.env.RELAY_WAIT_MS ?? 120_000),
   presenceTtlSec: Number(process.env.PRESENCE_TTL_SEC ?? 90),
+  lobbyMaxMembers: Number(process.env.LOBBY_MAX_MEMBERS ?? 8),
+  lobbyIdleTtlMin: Number(process.env.LOBBY_IDLE_TTL_MIN ?? 120),
+  lobbySuggestPerHour: Number(process.env.LOBBY_SUGGEST_PER_HOUR ?? 30),
   smtp: {
     host: process.env.SMTP_HOST?.trim() ?? '',
     port: Number(process.env.SMTP_PORT ?? 587),

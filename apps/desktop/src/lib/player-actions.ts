@@ -1,7 +1,9 @@
 import type { UnifiedTrack, WaveSettings } from '@mss/shared';
 import { toast } from 'sonner';
 import { getAudioEngine } from '@/hooks/useAudioEngine';
+import { syncLobbyPause } from '@/lib/lobby-host-sync';
 import { getSpotifyWebPlayer, isSpotifyPlaybackActive } from '@/lib/spotify-web-player';
+import { isLobbyHost } from '@/store/lobby-store';
 import { undoableToast } from '@/lib/undo';
 import { useLikesStore } from '@/store/likes-store';
 import { upcomingTracks, usePlayerStore, type PlayContext } from '@/store/player-store';
@@ -81,7 +83,10 @@ export function togglePlay(): void {
   if (isSpotifyPlaybackActive()) {
     const sp = getSpotifyWebPlayer();
     if (sp.paused) void sp.resume().catch((e) => toast.error(ipcMessage(e)));
-    else sp.pause();
+    else {
+      sp.pause();
+      if (isLobbyHost()) void syncLobbyPause(Math.round(sp.getCurrentTime() * 1000));
+    }
     return;
   }
   if (!engine.currentUrl) {
@@ -89,7 +94,10 @@ export function togglePlay(): void {
     return;
   }
   if (engine.paused) void engine.resumePlayback().catch((e) => toast.error(ipcMessage(e)));
-  else engine.pause();
+  else {
+    engine.pause();
+    if (isLobbyHost()) void syncLobbyPause(Math.round(engine.getCurrentTime() * 1000));
+  }
 }
 
 export function seekTo(seconds: number): void {
