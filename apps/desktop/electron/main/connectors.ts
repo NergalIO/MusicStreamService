@@ -55,6 +55,10 @@ function waitForLogin(prompt: LoginPrompt, signal?: AbortSignal): Promise<LoginR
   });
 }
 
+function pushLoginPrompt(prompt: LoginPrompt): void {
+  broadcast('connectors:loginPrompt', prompt);
+}
+
 export function resolveLoginReply(reply: LoginReply): void {
   pendingLogin?.resolve(reply);
 }
@@ -82,7 +86,8 @@ function registerVk(): void {
   connectorRegistry.register(
     createVkConnector({
       vault: tokenVault,
-      onLoginPrompt: (prompt) => waitForLogin(prompt),
+      onLoginPrompt: (prompt, signal) => waitForLogin(prompt, signal),
+      onLoginPromptUpdate: pushLoginPrompt,
     }),
   );
 }

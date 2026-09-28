@@ -237,17 +237,25 @@ export interface DeviceCodePrompt {
   expiresIn: number;
 }
 
+export type LoginMethod = 'qr' | 'sms' | 'password';
+
+export type LoginPromptStep = 'qr' | 'sms' | 'credentials' | 'code' | 'captcha';
+
 export interface LoginPrompt {
   source: SourceId;
-  step: 'credentials' | 'code' | 'captcha';
+  step: LoginPromptStep;
+  method?: LoginMethod;
   captchaImg?: string;
   phoneMask?: string;
   error?: string;
+  qrUrl?: string;
+  qrStatus?: 'pending' | 'scanned' | 'expired';
 }
 
 export interface LoginReply {
   source: SourceId;
   cancelled?: boolean;
+  method?: LoginMethod;
   username?: string;
   password?: string;
   code?: string;
