@@ -164,7 +164,7 @@ location /MusicStreamService/ {
 
 ## 8. GitHub Releases (клиенты)
 
-1. Secret `API_PUBLIC_URL` в GitHub Actions (Windows CI).
+1. Secrets в GitHub Actions (Windows CI): `API_PUBLIC_URL`, `SPOTIFY_CLIENT_ID`, `YANDEX_CLIENT_ID`, `YANDEX_CLIENT_SECRET`, `DISCORD_CLIENT_ID` (те же ключи, что в корневом `.env` для dev).
 2. `git tag v0.1.0 && git push origin v0.1.0`
 3. `GITHUB_REPO` в `.env` на VPS.
 

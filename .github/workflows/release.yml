@@ -11,6 +11,12 @@ permissions:
 jobs:
   windows-exe:
     runs-on: windows-latest
+    env:
+      API_PUBLIC_URL: ${{ secrets.API_PUBLIC_URL }}
+      SPOTIFY_CLIENT_ID: ${{ secrets.SPOTIFY_CLIENT_ID }}
+      YANDEX_CLIENT_ID: ${{ secrets.YANDEX_CLIENT_ID }}
+      YANDEX_CLIENT_SECRET: ${{ secrets.YANDEX_CLIENT_SECRET }}
+      DISCORD_CLIENT_ID: ${{ secrets.DISCORD_CLIENT_ID }}
     steps:
       - uses: actions/checkout@v4
       - uses: pnpm/action-setup@v4
@@ -27,7 +33,6 @@ jobs:
         env:
           GITHUB_ACTIONS: 'true'
           CSC_IDENTITY_AUTO_DISCOVERY: 'false'
-          API_PUBLIC_URL: ${{ secrets.API_PUBLIC_URL }}
           RELEASE_WINDOWS_FILE: MusicStreamService-setup.exe
         run: node scripts/pack-win.cjs
       - uses: actions/upload-artifact@v4

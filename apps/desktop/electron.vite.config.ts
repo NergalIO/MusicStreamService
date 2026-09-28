@@ -13,8 +13,21 @@ const publicBasePath = (env.PUBLIC_BASE_PATH ?? '').replace(/\/$/, '');
 const apiTarget = env.API_DEV_TARGET ?? 'http://127.0.0.1:3001';
 const apiPublicUrl = (env.API_PUBLIC_URL ?? '').replace(/\/$/, '');
 
+/** В release CI подставляется из GitHub Secrets; локально — из корневого .env */
+function clientBuildEnv(): Record<string, string> {
+  return {
+    SPOTIFY_CLIENT_ID: env.SPOTIFY_CLIENT_ID ?? '',
+    YANDEX_CLIENT_ID: env.YANDEX_CLIENT_ID ?? env.YANDEX_MUSIC_CLIENT_ID ?? '',
+    YANDEX_CLIENT_SECRET: env.YANDEX_CLIENT_SECRET ?? env.YANDEX_MUSIC_CLIENT_SECRET ?? '',
+    DISCORD_CLIENT_ID: env.DISCORD_CLIENT_ID ?? '',
+  };
+}
+
 export default defineConfig({
   main: {
+    define: {
+      __MSS_CLIENT_BUILD_ENV__: JSON.stringify(clientBuildEnv()),
+    },
     plugins: [externalizeDepsPlugin()],
     build: {
       rollupOptions: {

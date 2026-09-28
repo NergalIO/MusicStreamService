@@ -1,4 +1,5 @@
 import { app, BrowserWindow, dialog, ipcMain, shell } from 'electron';
+import { clientSecret } from './client-secrets.js';
 import fs from 'node:fs';
 import path from 'node:path';
 
@@ -50,7 +51,7 @@ function file(): string {
 }
 
 export function resolveDiscordClientId(): string {
-  const env = process.env.DISCORD_CLIENT_ID?.trim();
+  const env = clientSecret('DISCORD_CLIENT_ID');
   if (env) return env;
   return getAppSettings().discordClientId?.trim() ?? '';
 }
@@ -96,7 +97,7 @@ function systemSettings(): SystemSettings {
   return {
     ...getAppSettings(),
     openAtLogin: openAtLogin(),
-    discordClientIdFromEnv: Boolean(process.env.DISCORD_CLIENT_ID?.trim()),
+    discordClientIdFromEnv: Boolean(clientSecret('DISCORD_CLIENT_ID')),
   };
 }
 

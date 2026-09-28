@@ -6,6 +6,7 @@ import {
   createYandexConnector,
   type YandexConnector,
 } from '@mss/stream-connectors';
+import { clientSecret } from './client-secrets.js';
 import { tokenVault } from './token-vault.js';
 
 export const connectorRegistry = new ConnectorRegistry();
@@ -23,7 +24,7 @@ function broadcastDeviceCode(prompt: DeviceCodePrompt): void {
 }
 
 export function initConnectors(): void {
-  const spotifyClientId = process.env.SPOTIFY_CLIENT_ID ?? '';
+  const spotifyClientId = clientSecret('SPOTIFY_CLIENT_ID');
   if (spotifyClientId) {
     connectorRegistry.register(
       createSpotifyConnector({
@@ -38,8 +39,8 @@ export function initConnectors(): void {
     vault: tokenVault,
     openExternal: (url) => shell.openExternal(url),
     onDeviceCode: broadcastDeviceCode,
-    clientId: process.env.YANDEX_MUSIC_CLIENT_ID,
-    clientSecret: process.env.YANDEX_MUSIC_CLIENT_SECRET,
+    clientId: clientSecret('YANDEX_CLIENT_ID'),
+    clientSecret: clientSecret('YANDEX_CLIENT_SECRET'),
   });
   connectorRegistry.register(yandex);
 }
