@@ -29,11 +29,13 @@ export function VkLoginDialog() {
   useEffect(() => {
     setCode('');
     setCaptchaKey('');
-    setBusy(false);
     if (prompt?.step === 'credentials' || prompt?.step === 'sms') {
       setPassword('');
     }
   }, [prompt?.step, prompt?.captchaImg, prompt?.error, prompt?.qrUrl]);
+
+  // Ответ VK приходит новым prompt (ошибка / следующий шаг) или закрытием окна при успехе.
+  useEffect(() => setBusy(false), [prompt]);
 
   const open = connecting === 'vk';
   const method = prompt?.method ?? 'qr';
@@ -51,7 +53,7 @@ export function VkLoginDialog() {
         captchaKey: captchaKey.trim() || undefined,
         forceSms: extra?.forceSms,
       });
-    } finally {
+    } catch {
       setBusy(false);
     }
   };

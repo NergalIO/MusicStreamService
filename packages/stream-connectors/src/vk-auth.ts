@@ -48,8 +48,9 @@ export interface QrSession {
   expiresAt: number;
 }
 
+/** 0 — ждём, 1 — QR открыт на телефоне, 5 — телефон показал код, его нужно ввести здесь. */
 export type QrCheck =
-  | { status: 0 | 1; expiresAt?: number }
+  | { status: 0 | 1 | 5; expiresAt?: number }
   | { status: 2; token: VkTokenResponse }
   | { status: 3; declined: true }
   | { status: 4; expired: true };
@@ -511,10 +512,35 @@ export function normalizeQrConfirmCode(input: string): string {
   return input.replace(/\D/g, '');
 }
 
+/**
+ * Код с телефона (статус 5) VK ID принимает через `auth.validateAuthCode`, а не через checkAuthCode:
+ * 0 — принят, 1 — неверный, 2 — сессия QR истекла. После принятия вход завершается в checkAuthCode.
+ */
 export async function confirmQr(session: QrSession, code: string, signal?: AbortSignal): Promise<QrCheck> {
   const digits = normalizeQrConfirmCode(code);
   if (digits.length < 4) throw new VkAuthError('Введите код из приложения VK');
-  return checkQr(session, signal, { hash: digits, code: digits, confirm_code: digits });
+  const json = await apiMethod(
+    'auth.validateAuthCode',
+    {
+      anonymous_token: session.anonymToken,
+      access_token: session.anonymToken,
+      auth_hash: session.authHash,
+      validation_code: digits,
+      v: AUTH_API_VERSION,
+    },
+    undefined,
+    signal,
+  );
+  const r = json.response;
+  const status = isRecord(r) && typeof r.status === 'number' ? r.status : 0;
+  if (status === 1) throw new VkAuthError('Неверный код из приложения VK');
+  if (status === 2) return { status: 4, expired: true };
+  for (let i = 0; i < 20; i++) {
+    const check = await checkQr(session, signal);
+    if (check.status === 2 || check.status === 3 || check.status === 4) return check;
+    await sleep(500);
+  }
+  throw new VkAuthError('Код принят, но VK не подтвердил вход. Нажмите «Разрешить» в приложении VK');
 }
 
 async function postLoginAct(
@@ -647,7 +673,7 @@ export async function checkQr(
     return { status: 2, token };
   }
   return {
-    status: r.status === 1 ? 1 : 0,
+    status: r.status === 1 || r.status === 5 ? r.status : 0,
     expiresAt: unixOrDurationToMs(typeof r.expires_in === 'number' ? r.expires_in : undefined, 5 * 60_000),
   };
 }

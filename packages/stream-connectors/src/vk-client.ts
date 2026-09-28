@@ -478,7 +478,7 @@ export class VkClient {
         throw e;
       }
       if (signal.aborted) return null;
-      if (check.status === 1) onStatus('scanned', session);
+      if (check.status === 1 || check.status === 5) onStatus('scanned', session);
       if (check.status === 2) return check.token;
       if (check.status === 3) throw new Error('Вход по QR отклонён на телефоне');
       if (check.status === 4) {

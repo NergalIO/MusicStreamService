@@ -139,6 +139,7 @@ const api = {
     exportReport: () => ipcRenderer.invoke('system:exportReport') as Promise<string | null>,
     openCrashes: () => ipcRenderer.invoke('system:openCrashes') as Promise<void>,
     openExternal: (url: string) => ipcRenderer.invoke('system:openExternal', url) as Promise<boolean>,
+    openDonate: () => ipcRenderer.invoke('system:openDonate') as Promise<boolean>,
   },
   spotifySession: {
     show: () => ipcRenderer.invoke('spotify-session:show') as Promise<void>,

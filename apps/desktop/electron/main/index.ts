@@ -31,6 +31,7 @@ dotenv.config({ path: path.resolve(__dirname, '../../../.env') });
 
 import { initLogging, log } from './logger.js';
 import { getAppSettings, launchedHidden, registerAppSettingsIpc } from './app-settings.js';
+import { registerYoomoneyDonateIpc } from './yoomoney-donate.js';
 import { initConnectors } from './connectors.js';
 import { initCrashReporter, registerCrashIpc } from './crash-reporter.js';
 import { attachDeepLinkWindow, extractDeepLink, handleDeepLink, initDeepLinks } from './deep-links.js';
@@ -91,6 +92,18 @@ function getDeviceId(): string {
   return deviceId;
 }
 
+function isRendererOrigin(url: string): boolean {
+  try {
+    const next = new URL(url);
+    if (next.hostname === '127.0.0.1' || next.hostname === 'localhost') return true;
+    const renderer = process.env.ELECTRON_RENDERER_URL;
+    if (renderer && next.origin === new URL(renderer).origin) return true;
+  } catch {
+    return false;
+  }
+  return false;
+}
+
 function createRendererWindow(
   options: Electron.BrowserWindowConstructorOptions,
   query?: Record<string, string>,
@@ -107,8 +120,14 @@ function createRendererWindow(
     },
   });
   win.webContents.setWindowOpenHandler(({ url }) => {
-    if (/^https?:/i.test(url)) shell.openExternal(url);
+    if (/^https?:/i.test(url)) void shell.openExternal(url);
     return { action: 'deny' };
+  });
+  win.webContents.on('will-navigate', (event, url) => {
+    if (isRendererOrigin(url)) return;
+    if (!/^https?:/i.test(url)) return;
+    event.preventDefault();
+    void shell.openExternal(url);
   });
   const search = query ? `?${new URLSearchParams(query)}` : '';
   if (process.env.ELECTRON_RENDERER_URL) {
@@ -233,6 +252,7 @@ app.whenReady().then(async () => {
   registerDownloadsIpc();
   registerWindowControls();
   registerAppSettingsIpc();
+  registerYoomoneyDonateIpc();
   registerCrashIpc();
 
   mainWindow = createMainWindow(launchedHidden());

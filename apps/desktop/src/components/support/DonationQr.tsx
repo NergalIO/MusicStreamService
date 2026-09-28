@@ -1,13 +1,23 @@
 import { Heart } from 'lucide-react';
+import { useState } from 'react';
+import { toast } from 'sonner';
 import { Button } from '@/components/ui/button';
 import { cn } from '@/lib/utils';
 
-const YOOMONEY_DONATE_URL =
-  'https://yoomoney.ru/quickpay/fundraise/widget?billNumber=1KJ0576C9CG.260928';
-
 export function DonationQr({ className }: { className?: string }) {
-  const openDonate = () => {
-    void window.electronAPI?.system.openExternal(YOOMONEY_DONATE_URL);
+  const [busy, setBusy] = useState(false);
+
+  const openDonate = async () => {
+    if (busy) return;
+    setBusy(true);
+    try {
+      await window.electronAPI.system.openDonate();
+    } catch (e) {
+      const message = e instanceof Error ? e.message : String(e);
+      toast.error(message.replace(/^Error invoking remote method '[^']+': (Error: )?/u, '') || 'Не удалось открыть ЮMoney');
+    } finally {
+      setBusy(false);
+    }
   };
 
   return (
@@ -24,7 +34,8 @@ export function DonationQr({ className }: { className?: string }) {
           type="button"
           variant="default"
           size="lg"
-          onClick={openDonate}
+          disabled={busy}
+          onClick={() => void openDonate()}
           className={cn(
             'h-12 min-w-[220px] max-w-full rounded-xl border border-primary/30 px-8 font-semibold',
             'shadow-[0_10px_32px_-10px_hsl(var(--primary)/0.55)]',
