@@ -1,25 +1,17 @@
 import { getAudioEngine } from '@/hooks/useAudioEngine';
 import type { LobbyWsClient } from '@/lib/lobby-api';
-import { isSpotifyPlaybackActive } from '@/lib/spotify-web-player';
 import { useLobbyStore } from '@/store/lobby-store';
 
 let recorder: MediaRecorder | null = null;
 let captureStream: MediaStream | null = null;
 let generation = 0;
-let mode: 'spotify' | 'engine' | null = null;
 
-function wantedMode(): 'spotify' | 'engine' {
-  return isSpotifyPlaybackActive() ? 'spotify' : 'engine';
-}
-
-async function resolveCaptureStream(next: 'spotify' | 'engine'): Promise<MediaStream> {
-  if (next === 'spotify') {
-    try {
-      const stream = await window.electronAPI?.lobby?.captureWindowAudio?.();
-      if (stream?.getAudioTracks().length) return stream;
-    } catch {
-      /* окно не отдало звук — пишем выход плеера */
-    }
+async function resolveCaptureStream(): Promise<MediaStream> {
+  try {
+    const stream = await window.electronAPI?.lobby?.captureWindowAudio?.();
+    if (stream?.getAudioTracks().length) return stream;
+  } catch {
+    /* захват окна недоступен — пишем выход Web Audio */
   }
   return getAudioEngine().createBroadcastStream();
 }
@@ -34,19 +26,16 @@ function haltRecorder(): void {
   }
   captureStream?.getTracks().forEach((track) => track.stop());
   captureStream = null;
-  mode = null;
 }
 
 async function openRecorder(ws: LobbyWsClient): Promise<void> {
   const gen = generation;
-  const next = wantedMode();
-  const stream = await resolveCaptureStream(next);
+  const stream = await resolveCaptureStream();
   if (gen !== generation) {
     stream.getTracks().forEach((track) => track.stop());
     return;
   }
   captureStream = stream;
-  mode = next;
   const mime = MediaRecorder.isTypeSupported('audio/webm;codecs=opus')
     ? 'audio/webm;codecs=opus'
     : 'audio/webm';
@@ -72,13 +61,10 @@ export async function startLobbyBroadcast(ws: LobbyWsClient): Promise<void> {
 
 /** Новый заголовок WebM — гости по нему заново открывают плеер. */
 export async function restartLobbyBroadcast(ws: LobbyWsClient): Promise<void> {
-  if (!recorder || recorder.state !== 'recording' || mode !== wantedMode()) {
-    await startLobbyBroadcast(ws);
-  }
+  await startLobbyBroadcast(ws);
 }
 
 export function ensureLobbyBroadcast(ws: LobbyWsClient): void {
-  if (recorder?.state === 'recording' && mode === wantedMode()) return;
   void startLobbyBroadcast(ws).catch(() => undefined);
 }
 

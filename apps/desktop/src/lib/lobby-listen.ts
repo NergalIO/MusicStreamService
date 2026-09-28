@@ -19,9 +19,24 @@ function flushQueue(): void {
   const chunk = queue.shift()!;
   try {
     sourceBuffer.appendBuffer(chunk);
-  } catch {
+  } catch (e) {
     appending = false;
+    if (e instanceof DOMException && (e.name === 'QuotaExceededError' || e.name === 'InvalidStateError')) {
+      startLobbyListen();
+      queue.unshift(chunk);
+      flushQueue();
+    }
   }
+}
+
+function bindSourceBuffer(sb: SourceBuffer): void {
+  sb.addEventListener('updateend', () => {
+    appending = false;
+    flushQueue();
+  });
+  sb.addEventListener('error', () => {
+    startLobbyListen();
+  });
 }
 
 export function startLobbyListen(): void {
@@ -33,11 +48,14 @@ export function startLobbyListen(): void {
     'sourceopen',
     () => {
       if (!mediaSource) return;
-      sourceBuffer = mediaSource.addSourceBuffer('audio/webm; codecs=opus');
-      sourceBuffer.addEventListener('updateend', () => {
-        appending = false;
-        flushQueue();
-      });
+      const sb = mediaSource.addSourceBuffer('audio/webm; codecs=opus');
+      try {
+        sb.mode = 'sequence';
+      } catch {
+        /* ignore */
+      }
+      sourceBuffer = sb;
+      bindSourceBuffer(sb);
       flushQueue();
       void el.play().catch(() => undefined);
     },
@@ -55,6 +73,15 @@ export function appendLobbyAudioChunk(chunk: ArrayBuffer): void {
   queue.push(chunk);
   flushQueue();
   if (audioEl?.paused) void audioEl.play().catch(() => undefined);
+}
+
+export function resumeLobbyListen(): void {
+  if (!audioEl) return;
+  void audioEl.play().catch(() => undefined);
+}
+
+export function isLobbyListenPaused(): boolean {
+  return !audioEl || audioEl.paused;
 }
 
 export function stopLobbyListen(): void {

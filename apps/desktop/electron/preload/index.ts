@@ -279,19 +279,20 @@ const api = {
     captureWindowAudio: async (): Promise<MediaStream | null> => {
       const meta = (await ipcRenderer.invoke('lobby:captureWindowAudio')) as {
         sourceId: string;
-        chromeMediaSource: 'desktop';
+        chromeMediaSource: 'window' | 'screen';
       } | null;
       if (!meta) return null;
+      const chromeMediaSource = meta.chromeMediaSource === 'screen' ? 'desktop' : 'window';
       const stream = await navigator.mediaDevices.getUserMedia({
         audio: {
           mandatory: {
-            chromeMediaSource: meta.chromeMediaSource,
+            chromeMediaSource,
             chromeMediaSourceId: meta.sourceId,
           },
         },
         video: {
           mandatory: {
-            chromeMediaSource: meta.chromeMediaSource,
+            chromeMediaSource,
             chromeMediaSourceId: meta.sourceId,
             maxWidth: 1,
             maxHeight: 1,

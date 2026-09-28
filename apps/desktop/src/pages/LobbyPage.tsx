@@ -1,7 +1,8 @@
 import type { UnifiedTrack } from '@mss/shared';
 import { useMutation } from '@tanstack/react-query';
 import { Copy, DoorOpen, Radio, Users } from 'lucide-react';
-import { useEffect, useState } from 'react';
+import { useEffect, useMemo, useState } from 'react';
+import { TrackList } from '@/components/tracks/TrackList';
 import { useNavigate, useParams, useSearchParams } from 'react-router-dom';
 import { toast } from 'sonner';
 import { Button } from '@/components/ui/button';
@@ -16,6 +17,7 @@ import {
   suggestTrack,
 } from '@/lib/lobby-api';
 import { lobbyPath, readActiveLobbyId } from '@/lib/lobby-route';
+import { isLobbyListenPaused, resumeLobbyListen } from '@/lib/lobby-listen';
 import { connectLobbySession, disconnectLobbySession, leaveCurrentLobby } from '@/lib/lobby-session';
 import { loadSession } from '@/lib/api';
 import { useLobbyStore } from '@/store/lobby-store';
@@ -94,6 +96,34 @@ export function LobbyPage() {
 
   const queue = lobby?.queue.filter((q) => q.status !== 'rejected') ?? [];
   const suggestions = queue.filter((q) => q.status === 'suggested');
+  const queueTracks = useMemo(
+    () =>
+      queue
+        .filter((q) => q.status === 'queued' || q.status === 'playing')
+        .sort((a, b) => a.position - b.position)
+        .map((item) => ({
+          ...item.track,
+          playable: role === 'host' ? (item.track.playable ?? true) : false,
+          unplayableReason: role === 'host' ? item.track.unplayableReason : 'Включает только DJ',
+        })),
+    [queue, role],
+  );
+  const queueContext = useMemo(
+    () =>
+      lobby
+        ? { type: 'playlist' as const, title: 'Очередь лобби', path: `/lobby/${lobby.id}` }
+        : undefined,
+    [lobby],
+  );
+  const [guestNeedsUnmute, setGuestNeedsUnmute] = useState(false);
+  useEffect(() => {
+    if (role !== 'guest' || !live) {
+      setGuestNeedsUnmute(false);
+      return;
+    }
+    const id = window.setInterval(() => setGuestNeedsUnmute(isLobbyListenPaused()), 1500);
+    return () => window.clearInterval(id);
+  }, [role, live]);
 
   if (!lobby && !routeLobbyId) {
     return (
@@ -177,6 +207,12 @@ export function LobbyPage() {
         </ul>
       </section>
 
+      {role === 'guest' && guestNeedsUnmute && live && (
+        <Button variant="secondary" onClick={() => resumeLobbyListen()}>
+          Включить звук эфира
+        </Button>
+      )}
+
       {role === 'guest' && (
         <div className="space-y-2">
           <p className="text-sm text-muted">
@@ -217,19 +253,19 @@ export function LobbyPage() {
 
       <section>
         <h2 className="mb-2 text-sm font-medium">Очередь</h2>
-        {queue.filter((q) => q.status === 'queued' || q.status === 'playing').length === 0 ? (
-          <p className="text-sm text-muted">Очередь пуста. DJ включает треки сверху, как обычно.</p>
+        {role === 'host' ? (
+          <TrackList
+            tracks={queueTracks}
+            context={queueContext}
+            showSource
+            header
+            selectable={false}
+            emptyText="Очередь пуста. DJ включает треки из медиатеки или нажимает здесь."
+          />
+        ) : queueTracks.length === 0 ? (
+          <p className="text-sm text-muted">Очередь пуста.</p>
         ) : (
-          <ul className="space-y-1 text-sm">
-            {queue
-              .filter((q) => q.status === 'queued' || q.status === 'playing')
-              .map((item) => (
-                <li key={item.id} className="truncate rounded-md px-2 py-1">
-                  {item.status === 'playing' ? '▶ ' : ''}
-                  {item.track.title} · {item.track.artist}
-                </li>
-              ))}
-          </ul>
+          <TrackList tracks={queueTracks} context={queueContext} showSource header selectable={false} />
         )}
       </section>
 
