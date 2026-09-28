@@ -149,6 +149,7 @@ const api = {
         durationMs: number | null;
         sizeBytes: number;
         originalFilename: string;
+        coverJpeg?: Uint8Array;
       }>,
     bind: (trackId: string, path: string, contentHash: string) =>
       ipcRenderer.invoke('localTracks:bind', trackId, path, contentHash) as Promise<void>,

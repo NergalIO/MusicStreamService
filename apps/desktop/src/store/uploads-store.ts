@@ -1,6 +1,7 @@
 import { toast } from 'sonner';
 import { create } from 'zustand';
 import { apiFetch, currentAccessToken } from '@/lib/api';
+import { setTrackCover } from '@/lib/mss-library';
 import { formatTrackCount } from '@/lib/format';
 import { queryClient } from '@/lib/query-client';
 import type { LocalTrackDto } from '@/lib/sources';
@@ -66,7 +67,7 @@ async function registerPath(item: UploadItem, filePath: string): Promise<void> {
     contentHash: prepared.contentHash,
     title: prepared.title,
     artist: prepared.artist,
-    album: prepared.album,
+    album: prepared.album ?? undefined,
     durationMs: prepared.durationMs ?? undefined,
     sizeBytes: prepared.sizeBytes,
     originalFilename: prepared.originalFilename,
@@ -78,6 +79,16 @@ async function registerPath(item: UploadItem, filePath: string): Promise<void> {
   });
 
   await api.bind(track.id, prepared.path, prepared.contentHash);
+
+  const cover = prepared.coverJpeg;
+  if (cover?.byteLength && !track.coverUrl) {
+    try {
+      await setTrackCover(track.id, new Blob([cover], { type: 'image/jpeg' }));
+    } catch {
+      /* обложка необязательна */
+    }
+  }
+
   patch(item.id, {
     status: 'ready',
     progress: 1,

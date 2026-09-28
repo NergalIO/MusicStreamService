@@ -3,6 +3,8 @@ import { createReadStream } from 'node:fs';
 import fs from 'node:fs/promises';
 import path from 'node:path';
 import { app, dialog } from 'electron';
+import { parseFile } from 'music-metadata';
+import { embeddedCoverToJpeg } from './cover-from-audio.js';
 
 export interface LocalTrackEntry {
   path: string;
@@ -18,6 +20,8 @@ export interface PreparedLocalFile {
   durationMs: number | null;
   sizeBytes: number;
   originalFilename: string;
+  /** JPEG для загрузки на API, если в файле была embedded-обложка. */
+  coverJpeg?: Buffer;
 }
 
 type Index = Record<string, LocalTrackEntry>;
@@ -62,17 +66,36 @@ export async function prepareLocalFile(filePath: string): Promise<PreparedLocalF
   const resolved = path.resolve(filePath);
   const stat = await fs.stat(resolved);
   const originalFilename = path.basename(resolved);
-  const { title, artist } = tagsFromFilename(originalFilename);
-  const contentHash = await hashFile(resolved);
+  const fromName = tagsFromFilename(originalFilename);
+
+  const [contentHash, meta] = await Promise.all([
+    hashFile(resolved),
+    parseFile(resolved).catch(() => null),
+  ]);
+
+  const title = meta?.common.title?.trim() || fromName.title;
+  const artist =
+    meta?.common.artist?.trim() || meta?.common.artists?.map((a) => a.trim()).filter(Boolean).join(', ') || fromName.artist;
+  const album = meta?.common.album?.trim() || null;
+  const durationMs = meta?.format.duration != null ? Math.round(meta.format.duration * 1000) : null;
+
+  let coverJpeg: Buffer | undefined;
+  const picture = meta?.common.picture?.[0];
+  if (picture?.data?.length) {
+    const jpeg = await embeddedCoverToJpeg(Buffer.from(picture.data));
+    if (jpeg?.length) coverJpeg = jpeg;
+  }
+
   return {
     path: resolved,
     contentHash,
     title,
     artist,
-    album: null,
-    durationMs: null,
+    album,
+    durationMs,
     sizeBytes: stat.size,
     originalFilename,
+    coverJpeg,
   };
 }
 
