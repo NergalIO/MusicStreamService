@@ -7,11 +7,15 @@ import {
   checkQr,
   confirmSms,
   deviceIdFromVault,
+  kateAuthorizeUrl,
+  materializeKateToken,
   normalizeVkPhone,
+  parseKateOAuthRedirect,
   sendPhoneOtp,
   startQrSession,
   startVkIdSession,
   validateAccount,
+  vkOtpAlreadySent,
   VkAuthError,
   type QrSession,
   type VkIdSession,
@@ -23,6 +27,8 @@ export {
   VK_KATE_CLIENT_ID,
   VK_KATE_CLIENT_SECRET,
   VK_KATE_USER_AGENT,
+  kateAuthorizeUrl,
+  parseKateOAuthRedirect,
   type VkTokenResponse,
 } from './vk-auth.js';
 
@@ -88,6 +94,8 @@ export interface VkClientOptions {
   vault: TokenVault;
   onLoginPrompt: (prompt: LoginPrompt, signal?: AbortSignal) => Promise<LoginReply>;
   onLoginPromptUpdate?: (prompt: LoginPrompt) => void;
+  /** Окно Kate OAuth (VK ID), если SMS API отвечает flood/капчей. */
+  openKateOAuth?: (url: string, signal?: AbortSignal) => Promise<string>;
 }
 
 function sleep(ms: number): Promise<void> {
@@ -182,6 +190,93 @@ export class VkClient {
     return undefined;
   }
 
+  private isSmsApiBlocked(err: unknown): boolean {
+    if (err instanceof VkAuthError && (err.code === 9 || err.robotCaptcha)) return true;
+    const message = err instanceof Error ? err.message : String(err);
+    return /слишком много|не робот|flood/i.test(message);
+  }
+
+  private async loginSmsViaOAuth(signal: AbortSignal): Promise<LoginFlowResult | null> {
+    if (!this.opts.openKateOAuth) return null;
+    const redirected = await this.opts.openKateOAuth(kateAuthorizeUrl(), signal);
+    const parsed = parseKateOAuthRedirect(redirected);
+    if (!parsed) throw new VkAuthError('Не удалось получить токен из окна VK');
+    const token = await materializeKateToken(parsed);
+    this.saveTokens(token);
+    return { kind: 'done' };
+  }
+
+  private async loginWithSms(signal: AbortSignal, error?: string): Promise<LoginFlowResult> {
+    if (this.opts.openKateOAuth) return this.loginWithSmsWindow(signal, error);
+    return this.loginWithSmsApi(signal, error);
+  }
+
+  /** SMS через страницу VK ID: прямой auth.validatePhone с десктопа ловит flood control. */
+  private async loginWithSmsWindow(parent: AbortSignal, error?: string): Promise<LoginFlowResult> {
+    const local = new AbortController();
+    const stop = () => local.abort();
+    parent.addEventListener('abort', stop);
+    try {
+      while (!parent.aborted && !local.signal.aborted) {
+        const attempt = new AbortController();
+        const stopAttempt = () => attempt.abort();
+        local.signal.addEventListener('abort', stopAttempt);
+        try {
+          const replyP = this.prompt({ step: 'sms', method: 'sms', error }, attempt.signal)
+            .then((r) => ({ kind: 'reply' as const, r }))
+            .catch((e: unknown) => ({ kind: 'aborted' as const, e }));
+
+          const oauthP = this.loginSmsViaOAuth(attempt.signal)
+            .then((result) => ({ kind: 'oauth' as const, result }))
+            .catch((e: unknown) => ({ kind: 'oauth-err' as const, e }));
+
+          const raced = await Promise.race([replyP, oauthP]);
+          error = undefined;
+
+          if (raced.kind === 'oauth') {
+            if (raced.result) return raced.result;
+            continue;
+          }
+
+          if (raced.kind === 'oauth-err') {
+            const message = raced.e instanceof Error ? raced.e.message : 'Не удалось открыть окно VK';
+            if (parent.aborted || local.signal.aborted) throw new Error('Отменено');
+            this.opts.onLoginPromptUpdate?.({
+              source: 'vk',
+              step: 'sms',
+              method: 'sms',
+              error: /отмен/i.test(message)
+                ? 'Окно закрыто. Нажмите «Продолжить», чтобы открыть снова'
+                : message,
+            });
+            const reply = await replyP;
+            if (reply.kind === 'aborted') {
+              if (parent.aborted || local.signal.aborted) throw new Error('Отменено');
+              continue;
+            }
+            const next = this.switched(reply.r, 'sms');
+            if (next) return { kind: 'switch', method: next };
+            continue;
+          }
+
+          if (raced.kind === 'aborted') {
+            if (parent.aborted || local.signal.aborted) throw new Error('Отменено');
+            continue;
+          }
+          const next = this.switched(raced.r, 'sms');
+          if (next) return { kind: 'switch', method: next };
+        } finally {
+          local.signal.removeEventListener('abort', stopAttempt);
+          attempt.abort();
+        }
+      }
+      throw new Error('Отменено');
+    } finally {
+      parent.removeEventListener('abort', stop);
+      local.abort();
+    }
+  }
+
   private async loginWithQr(
     parent: AbortSignal,
     error?: string,
@@ -195,33 +290,33 @@ export class VkClient {
         const stopAttempt = () => attempt.abort();
         local.signal.addEventListener('abort', stopAttempt);
         try {
-          let session: QrSession;
-          try {
-            session = await startQrSession('MusicStreamService');
-          } catch (e) {
-            const message = e instanceof Error ? e.message : 'Не удалось получить QR-код';
-            const reply = await this.prompt({ step: 'qr', method: 'qr', error: message }, attempt.signal);
-            const next = this.switched(reply, 'qr');
-            if (next) return { kind: 'switch', method: next };
-            continue;
-          }
-
           const replyP = this.prompt(
-            { step: 'qr', method: 'qr', qrUrl: session.authUrl, qrStatus: 'pending', error },
+            { step: 'qr', method: 'qr', qrStatus: 'pending', error },
             attempt.signal,
           )
             .then((r) => ({ kind: 'reply' as const, r }))
             .catch((e: unknown) => ({ kind: 'aborted' as const, e }));
-          const pollP = this.pollQr(session, attempt.signal, (status, nextSession) => {
-            session = nextSession;
+
+          const pollP = (async () => {
+            const session = await startQrSession('MusicStreamService', attempt.signal);
+            if (attempt.signal.aborted) return null;
             this.opts.onLoginPromptUpdate?.({
               source: 'vk',
               step: 'qr',
               method: 'qr',
               qrUrl: session.authUrl,
-              qrStatus: status,
+              qrStatus: 'pending',
             });
-          })
+            return this.pollQr(session, attempt.signal, (status, nextSession) => {
+              this.opts.onLoginPromptUpdate?.({
+                source: 'vk',
+                step: 'qr',
+                method: 'qr',
+                qrUrl: nextSession.authUrl,
+                qrStatus: status,
+              });
+            });
+          })()
             .then((token) => ({ kind: 'token' as const, token }))
             .catch((e: unknown) => ({ kind: 'poll-err' as const, e }));
 
@@ -266,7 +361,7 @@ export class VkClient {
     while (!signal.aborted) {
       let check;
       try {
-        check = await checkQr(session);
+        check = await checkQr(session, signal);
       } catch (e) {
         if (signal.aborted) return null;
         throw e;
@@ -277,7 +372,7 @@ export class VkClient {
       if (check.status === 3) throw new Error('Вход по QR отклонён на телефоне');
       if (check.status === 4) {
         onStatus('expired', session);
-        session = await startQrSession('MusicStreamService');
+        session = await startQrSession('MusicStreamService', signal);
         onStatus('pending', session);
         continue;
       }
@@ -286,7 +381,7 @@ export class VkClient {
     return null;
   }
 
-  private async loginWithSms(
+  private async loginWithSmsApi(
     signal: AbortSignal,
     error?: string,
   ): Promise<LoginFlowResult> {
@@ -303,7 +398,7 @@ export class VkClient {
     let step: Extract<LoginPrompt['step'], 'sms' | 'code' | 'captcha'> = 'sms';
 
     const ensureSession = async () => {
-      session ??= await startVkIdSession(crypto.randomUUID());
+      session ??= await startVkIdSession(crypto.randomUUID(), signal);
       return session;
     };
 
@@ -336,10 +431,12 @@ export class VkClient {
             extra.captcha_sid = captchaSid;
             extra.captcha_key = reply.captchaKey;
           }
-          const result = await validateAccount(vkId, phone, extra);
+          const result = await validateAccount(vkId, phone, extra, signal);
           captchaSid = undefined;
           captchaImg = undefined;
           if (result.kind === 'robot') {
+            const viaWindow = await this.loginSmsViaOAuth(signal);
+            if (viaWindow) return viaWindow;
             return {
               kind: 'switch',
               method: 'qr',
@@ -355,7 +452,9 @@ export class VkClient {
           }
           sid = result.sid;
           phoneMask = result.phoneMask ?? phone;
-          await sendPhoneOtp(vkId, sid, phone, deviceId);
+          if (!vkOtpAlreadySent(result.verification)) {
+            return { kind: 'switch', method: 'password', error: 'Для этого аккаунта VK просит пароль' };
+          }
           step = 'code';
           continue;
         }
@@ -386,15 +485,16 @@ export class VkClient {
         if (message === 'PASSWORD_REQUIRED') {
           return { kind: 'switch', method: 'password', error: 'Для этого аккаунта VK просит пароль' };
         }
-        if (e instanceof VkAuthError && e.robotCaptcha) {
-          return { kind: 'switch', method: 'qr', error: message };
-        }
         if (e instanceof VkAuthError && e.captchaSid) {
           step = 'captcha';
           captchaSid = e.captchaSid;
           captchaImg = e.captchaImg;
           error = 'Введите код с картинки';
           continue;
+        }
+        if (this.isSmsApiBlocked(e)) {
+          const viaWindow = await this.loginSmsViaOAuth(signal);
+          if (viaWindow) return viaWindow;
         }
         error = message;
       }

@@ -57,6 +57,7 @@ export type QrCheck =
 export interface VkIdSession {
   uuid: string;
   anonymousToken: string;
+  authToken: string;
   cookies: Map<string, string>;
 }
 
@@ -98,6 +99,68 @@ export function normalizeVkPhone(input: string): string {
 export function parseVkIdAnonymousToken(html: string): string | null {
   const match = html.match(/"anonymous_token"\s*:\s*"([^"]+)"/);
   return match?.[1] || null;
+}
+
+export function parseVkIdAuthToken(html: string): string | null {
+  const match = html.match(/"auth_token"\s*:\s*"([^"]+)"/);
+  const token = match?.[1];
+  if (!token || token.length < 16) return null;
+  return token;
+}
+
+/** VK уже отправил код, повторный auth.validatePhone ловит flood control. */
+export function vkOtpAlreadySent(verification: string): boolean {
+  return /^(sms|otp|call|callreset|push)/.test(verification);
+}
+
+export function kateAuthorizeUrl(): string {
+  const params = new URLSearchParams({
+    client_id: VK_KATE_CLIENT_ID,
+    scope: KATE_SCOPE_ALL,
+    redirect_uri: 'https://oauth.vk.com/blank.html',
+    display: 'mobile',
+    response_type: 'token',
+    revoke: '1',
+    v: AUTH_API_VERSION,
+  });
+  return `https://oauth.vk.com/authorize?${params.toString()}`;
+}
+
+export function parseKateOAuthRedirect(url: string): {
+  access_token?: string;
+  user_id?: number;
+  silent_token?: string;
+  uuid?: string;
+} | null {
+  let parsed: URL;
+  try {
+    parsed = new URL(url);
+  } catch {
+    return null;
+  }
+  if (!/oauth\.vk\.(com|ru)$/i.test(parsed.hostname) || !parsed.pathname.includes('blank.html')) return null;
+  const hash = new URLSearchParams(parsed.hash.replace(/^#/, ''));
+  const query = parsed.searchParams;
+  const get = (key: string) => hash.get(key) || query.get(key);
+  const payloadRaw = get('payload');
+  if (payloadRaw) {
+    try {
+      const payload = JSON.parse(payloadRaw) as Json;
+      const silent = typeof payload.token === 'string' ? payload.token : undefined;
+      const uuid = typeof payload.uuid === 'string' ? payload.uuid : undefined;
+      const access = typeof payload.access_token === 'string' ? payload.access_token : undefined;
+      const userId = typeof payload.user_id === 'number' ? payload.user_id : undefined;
+      if (silent || access) return { silent_token: silent, uuid, access_token: access, user_id: userId };
+    } catch {
+      /* ignore malformed payload */
+    }
+  }
+  const access = get('access_token') ?? undefined;
+  const silent = get('silent_token') ?? undefined;
+  const userIdRaw = get('user_id');
+  const userId = userIdRaw ? Number(userIdRaw) : undefined;
+  if (!access && !silent) return null;
+  return { access_token: access, silent_token: silent, uuid: get('uuid') ?? undefined, user_id: userId && userId > 0 ? userId : undefined };
 }
 
 export function unixOrDurationToMs(expiresIn: number | undefined, fallbackMs: number): number {
@@ -152,32 +215,83 @@ async function readJson(res: Response): Promise<Json> {
   }
 }
 
+/** Node fetch теряет Set-Cookie на промежуточных 302 — VK ID без remix-cookie сразу даёт flood. */
+async function fetchFollow(url: string, init: RequestInit, cookies?: Map<string, string>, hops = 0): Promise<Response> {
+  if (hops > 8) throw new VkAuthError('Слишком много редиректов VK');
+  const headers = new Headers(init.headers);
+  if (cookies?.size) headers.set('Cookie', cookieHeader(cookies));
+  const res = await fetch(url, { ...init, headers, redirect: 'manual' });
+  if (cookies) absorbCookies(res.headers, cookies);
+  if (res.status >= 300 && res.status < 400) {
+    const loc = res.headers.get('location');
+    if (!loc) return res;
+    await res.arrayBuffer();
+    const next = new URL(loc, url).href;
+    const keepBody = res.status === 307 || res.status === 308;
+    return fetchFollow(
+      next,
+      {
+        method: keepBody ? (init.method ?? 'GET') : 'GET',
+        signal: init.signal,
+        headers: { 'User-Agent': headers.get('User-Agent') || BROWSER_UA },
+        body: keepBody ? init.body : undefined,
+      },
+      cookies,
+      hops + 1,
+    );
+  }
+  return res;
+}
+
 async function formPost(
   url: string,
   body: Record<string, string | undefined>,
-  opts?: { headers?: Record<string, string>; cookies?: Map<string, string> },
+  opts?: { headers?: Record<string, string>; cookies?: Map<string, string>; skipAppHeaders?: boolean; signal?: AbortSignal },
 ): Promise<Json> {
   const params = new URLSearchParams();
   for (const [k, v] of Object.entries(body)) {
-    if (v !== undefined) params.set(k, v);
+    if (v !== undefined && v !== '') params.set(k, v);
   }
   const headers: Record<string, string> = {
-    ...VK_HEADERS,
     'Content-Type': 'application/x-www-form-urlencoded',
+    ...(opts?.skipAppHeaders ? { 'User-Agent': BROWSER_UA } : VK_HEADERS),
     ...opts?.headers,
   };
-  if (opts?.cookies?.size) headers.Cookie = cookieHeader(opts.cookies);
-  const res = await fetch(url, { method: 'POST', headers, body: params });
-  if (opts?.cookies) absorbCookies(res.headers, opts.cookies);
+  const init: RequestInit = { method: 'POST', headers, body: params, signal: opts?.signal };
+  const res = opts?.cookies ? await fetchFollow(url, init, opts.cookies) : await fetch(url, init);
   const json = await readJson(res);
   const err = apiError(json);
   if (err) throw err;
   return json;
 }
 
-async function apiMethod(method: string, body: Record<string, string | undefined>, cookies?: Map<string, string>): Promise<Json> {
+function vkIdRequest(
+  url: string,
+  body: Record<string, string | undefined>,
+  cookies: Map<string, string>,
+  signal?: AbortSignal,
+): Promise<Json> {
+  return formPost(url, body, {
+    cookies,
+    skipAppHeaders: true,
+    signal,
+    headers: {
+      'User-Agent': BROWSER_UA,
+      Origin: 'https://id.vk.com',
+      Referer: 'https://id.vk.com/',
+    },
+  });
+}
+
+async function apiMethod(
+  method: string,
+  body: Record<string, string | undefined>,
+  cookies?: Map<string, string>,
+  signal?: AbortSignal,
+): Promise<Json> {
   const json = await formPost(`${API_URL}/${method}`, body, {
     cookies,
+    signal,
     headers: { 'X-Origin': 'https://vk.com', Origin: 'https://id.vk.com', Referer: 'https://id.vk.com/' },
   });
   if (json.response === undefined) throw new VkAuthError(`Пустой ответ VK (${method})`);
@@ -223,12 +337,17 @@ export async function materializeKateToken(raw: {
   throw new VkAuthError('VK не вернул токен сессии');
 }
 
-export async function getAndroidAnonymToken(): Promise<string> {
-  const json = await apiMethod('auth.getAnonymToken', {
-    client_id: ANDROID_CLIENT_ID,
-    client_secret: ANDROID_CLIENT_SECRET,
-    v: AUTH_API_VERSION,
-  });
+export async function getAndroidAnonymToken(signal?: AbortSignal): Promise<string> {
+  const json = await apiMethod(
+    'auth.getAnonymToken',
+    {
+      client_id: ANDROID_CLIENT_ID,
+      client_secret: ANDROID_CLIENT_SECRET,
+      v: AUTH_API_VERSION,
+    },
+    undefined,
+    signal,
+  );
   const token = isRecord(json.response) ? json.response.token : undefined;
   if (typeof token !== 'string' || !token) throw new VkAuthError('Не удалось получить анонимный токен VK');
   return token;
@@ -247,15 +366,20 @@ export async function getKateLoginAnonymToken(): Promise<string> {
   return token;
 }
 
-export async function startQrSession(deviceName: string): Promise<QrSession> {
-  const anonymToken = await getAndroidAnonymToken();
-  const json = await apiMethod('auth.getAuthCode', {
-    client_id: VK_KATE_CLIENT_ID,
-    scope: KATE_SCOPE_ALL,
-    anonymous_token: anonymToken,
-    device_name: deviceName,
-    v: AUTH_API_VERSION,
-  });
+export async function startQrSession(deviceName: string, signal?: AbortSignal): Promise<QrSession> {
+  const anonymToken = await getAndroidAnonymToken(signal);
+  const json = await apiMethod(
+    'auth.getAuthCode',
+    {
+      client_id: VK_KATE_CLIENT_ID,
+      scope: KATE_SCOPE_ALL,
+      anonymous_token: anonymToken,
+      device_name: deviceName,
+      v: AUTH_API_VERSION,
+    },
+    undefined,
+    signal,
+  );
   const r = json.response;
   if (!isRecord(r) || typeof r.auth_url !== 'string' || typeof r.auth_hash !== 'string') {
     throw new VkAuthError('VK не выдал QR-код');
@@ -269,13 +393,18 @@ export async function startQrSession(deviceName: string): Promise<QrSession> {
   };
 }
 
-export async function checkQr(session: QrSession): Promise<QrCheck> {
-  const json = await apiMethod('auth.checkAuthCode', {
-    anonymous_token: session.anonymToken,
-    auth_hash: session.authHash,
-    web_auth: '1',
-    v: AUTH_API_VERSION,
-  });
+export async function checkQr(session: QrSession, signal?: AbortSignal): Promise<QrCheck> {
+  const json = await apiMethod(
+    'auth.checkAuthCode',
+    {
+      anonymous_token: session.anonymToken,
+      auth_hash: session.authHash,
+      web_auth: '1',
+      v: AUTH_API_VERSION,
+    },
+    undefined,
+    signal,
+  );
   const r = json.response;
   if (!isRecord(r) || typeof r.status !== 'number') throw new VkAuthError('Некорректный статус QR');
   if (r.status === 3) return { status: 3, declined: true };
@@ -299,7 +428,7 @@ export async function checkQr(session: QrSession): Promise<QrCheck> {
   };
 }
 
-export async function startVkIdSession(uuid: string): Promise<VkIdSession> {
+export async function startVkIdSession(uuid: string, signal?: AbortSignal): Promise<VkIdSession> {
   const cookies = new Map<string, string>();
   const url = new URL(ID_AUTH_URL);
   url.searchParams.set('app_id', VK_KATE_CLIENT_ID);
@@ -307,14 +436,31 @@ export async function startVkIdSession(uuid: string): Promise<VkIdSession> {
   url.searchParams.set('v', '1.46.0');
   url.searchParams.set('redirect_uri', 'https://oauth.vk.com/blank.html');
   url.searchParams.set('uuid', uuid);
-  const res = await fetch(url, {
-    headers: { 'User-Agent': BROWSER_UA, Referer: 'https://vk.com/' },
-  });
-  absorbCookies(res.headers, cookies);
+  const res = await fetchFollow(
+    url.toString(),
+    { signal, headers: { 'User-Agent': BROWSER_UA, Referer: 'https://vk.com/', Origin: 'https://vk.com' } },
+    cookies,
+  );
   const html = await res.text();
   const anonymousToken = parseVkIdAnonymousToken(html);
   if (!anonymousToken) throw new VkAuthError('Не удалось начать сессию VK ID');
-  return { uuid, anonymousToken, cookies };
+  let authToken = parseVkIdAuthToken(html) ?? '';
+  if (!authToken) {
+    try {
+      const json = await vkIdRequest(
+        `${LOGIN_URL}?act=connect_internal`,
+        { app_id: VK_KATE_CLIENT_ID, oauth_version: '1', version: '1' },
+        cookies,
+        signal,
+      );
+      const data = isRecord(json.data) ? json.data : json;
+      if (typeof data.access_token === 'string' && data.access_token) authToken = data.access_token;
+      else if (typeof data.auth_token === 'string' && data.auth_token) authToken = data.auth_token;
+    } catch {
+      /* validateAccount идёт с anonymous_token, подставлять его в auth_token нельзя — VK отвечает flood */
+    }
+  }
+  return { uuid, anonymousToken, authToken, cookies };
 }
 
 export function parseValidateAccount(json: Json): ValidateAccountResult {
@@ -345,31 +491,26 @@ export async function validateAccount(
   session: VkIdSession,
   login: string,
   extra: Record<string, string> = {},
+  signal?: AbortSignal,
 ): Promise<ValidateAccountResult> {
   try {
-    const json = await formPost(
+    const json = await vkIdRequest(
       `${API_URL}/auth.validateAccount?v=${AUTH_API_VERSION}&client_id=${VK_KATE_CLIENT_ID}`,
       {
         login,
-        sid: extra.sid ?? '',
+        sid: extra.sid,
         client_id: VK_KATE_CLIENT_ID,
         anonymous_token: session.anonymousToken,
-        auth_token: session.anonymousToken,
-        supported_ways: 'push,email,sms,callreset,password,passkey',
+        auth_token: extra.auth_token || session.authToken || undefined,
+        supported_ways: 'password,passkey,push,email,sms,callreset',
         device_id: extra.device_id,
         uuid: session.uuid,
         captcha_sid: extra.captcha_sid,
         captcha_key: extra.captcha_key,
-        access_token: '',
+        flow_type: 'auth_without_password',
       },
-      {
-        cookies: session.cookies,
-        headers: {
-          'User-Agent': BROWSER_UA,
-          Origin: 'https://id.vk.com',
-          Referer: 'https://id.vk.com/',
-        },
-      },
+      session.cookies,
+      signal,
     );
     return parseValidateAccount(json);
   } catch (e) {
@@ -382,26 +523,19 @@ export async function validateAccount(
 }
 
 export async function sendPhoneOtp(session: VkIdSession, sid: string, phone: string, deviceId: string): Promise<{ sid: string; delay: number }> {
-  const json = await formPost(
+  const json = await vkIdRequest(
     `${API_URL}/auth.validatePhone?v=${AUTH_API_VERSION}&client_id=${VK_KATE_CLIENT_ID}`,
     {
       sid,
       phone,
       client_id: VK_KATE_CLIENT_ID,
       anonymous_token: session.anonymousToken,
+      auth_token: session.authToken || undefined,
       allow_callreset: '1',
       device_id: deviceId,
       uuid: session.uuid,
-      access_token: '',
     },
-    {
-      cookies: session.cookies,
-      headers: {
-        'User-Agent': BROWSER_UA,
-        Origin: 'https://id.vk.com',
-        Referer: 'https://id.vk.com/',
-      },
-    },
+    session.cookies,
   );
   const r = isRecord(json.response) ? json.response : json;
   return {
@@ -433,30 +567,22 @@ export async function confirmSms(
   session: VkIdSession,
   opts: { phone: string; sid: string; code: string; deviceId: string; password?: string },
 ): Promise<VkTokenResponse> {
-  const json = await formPost(
+  const json = await vkIdRequest(
     `${LOGIN_URL}?act=connect_authorize`,
     {
       username: opts.phone,
-      password: opts.password ?? '',
-      auth_token: session.anonymousToken,
+      password: opts.password,
+      auth_token: session.authToken || undefined,
+      anonymous_token: session.anonymousToken,
       sid: opts.sid,
       uuid: session.uuid,
       v: AUTH_API_VERSION,
       device_id: opts.deviceId,
-      service_group: '',
       version: '1',
       app_id: VK_KATE_CLIENT_ID,
       code: opts.code,
-      access_token: '',
     },
-    {
-      cookies: session.cookies,
-      headers: {
-        'User-Agent': BROWSER_UA,
-        Origin: 'https://id.vk.com',
-        Referer: 'https://id.vk.com/',
-      },
-    },
+    session.cookies,
   );
   const parsed = parseConnectAuthorize(json);
   return materializeKateToken({

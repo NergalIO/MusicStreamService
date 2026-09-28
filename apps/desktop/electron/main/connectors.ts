@@ -9,6 +9,7 @@ import {
 import { clientSecret } from './client-secrets.js';
 import { yandexCustomOAuthEnabled } from './user-client-secrets.js';
 import { tokenVault } from './token-vault.js';
+import { openKateOAuthWindow } from './vk-oauth.js';
 
 export const connectorRegistry = new ConnectorRegistry();
 let yandex: YandexConnector | null = null;
@@ -88,6 +89,7 @@ function registerVk(): void {
       vault: tokenVault,
       onLoginPrompt: (prompt, signal) => waitForLogin(prompt, signal),
       onLoginPromptUpdate: pushLoginPrompt,
+      openKateOAuth: (url, signal) => openKateOAuthWindow(url, signal),
     }),
   );
 }

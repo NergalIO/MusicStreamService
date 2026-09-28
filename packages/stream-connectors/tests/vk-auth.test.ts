@@ -1,10 +1,14 @@
 import { describe, expect, it } from 'vitest';
 import {
+  kateAuthorizeUrl,
   normalizeVkPhone,
   parseConnectAuthorize,
+  parseKateOAuthRedirect,
   parseValidateAccount,
   parseVkIdAnonymousToken,
+  parseVkIdAuthToken,
   unixOrDurationToMs,
+  vkOtpAlreadySent,
 } from '../src/vk-auth.js';
 
 describe('normalizeVkPhone', () => {
@@ -70,6 +74,48 @@ describe('parseValidateAccount', () => {
       },
     });
     expect(r.kind).toBe('robot');
+  });
+});
+
+describe('parseVkIdAuthToken', () => {
+  it('ignores unrelated keys', () => {
+    expect(parseVkIdAuthToken('{"mini_apps_sdk_get_auth_token":{"enabled":true}}')).toBeNull();
+  });
+
+  it('reads a real auth_token', () => {
+    expect(parseVkIdAuthToken('{"auth_token":"vk1.a.abcdefghijklmnopqrstuvwxyz"}')).toBe('vk1.a.abcdefghijklmnopqrstuvwxyz');
+  });
+});
+
+describe('vkOtpAlreadySent', () => {
+  it('detects sms and call methods', () => {
+    expect(vkOtpAlreadySent('sms')).toBe(true);
+    expect(vkOtpAlreadySent('otp')).toBe(true);
+    expect(vkOtpAlreadySent('callreset')).toBe(true);
+    expect(vkOtpAlreadySent('password')).toBe(false);
+  });
+});
+
+describe('parseKateOAuthRedirect', () => {
+  it('reads access token from hash', () => {
+    const r = parseKateOAuthRedirect('https://oauth.vk.com/blank.html#access_token=tok&user_id=42');
+    expect(r).toMatchObject({ access_token: 'tok', user_id: 42 });
+  });
+
+  it('reads silent token payload', () => {
+    const payload = encodeURIComponent(JSON.stringify({ token: 'st', uuid: 'u1', type: 'silent_token' }));
+    const r = parseKateOAuthRedirect(`https://oauth.vk.com/blank.html#payload=${payload}`);
+    expect(r).toMatchObject({ silent_token: 'st', uuid: 'u1' });
+  });
+
+  it('builds kate authorize url', () => {
+    expect(kateAuthorizeUrl()).toContain('client_id=2685278');
+    expect(kateAuthorizeUrl()).toContain('display=mobile');
+  });
+
+  it('reads token from oauth.vk.ru', () => {
+    const r = parseKateOAuthRedirect('https://oauth.vk.ru/blank.html#access_token=tok&user_id=7');
+    expect(r).toMatchObject({ access_token: 'tok', user_id: 7 });
   });
 });
 

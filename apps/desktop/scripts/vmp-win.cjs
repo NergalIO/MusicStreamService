@@ -9,18 +9,31 @@ const path = require('path');
  * а файл остаётся electron.exe.sig. Без валидной подписи лицензия отклоняется:
  * «трек недоступен», звук обрывается примерно через 10 секунд.
  *
- * Сначала пробуем production-подпись EVS (castlabs). Если аккаунта нет —
- * возвращаем исходные байты electron.exe и кладём подпись рядом с итоговым именем.
+ * Сначала пробуем production-подпись EVS (castlabs). Development-сертификат
+ * Spotify не принимает: лицензия отклоняется, звук обрывается. Если аккаунта
+ * EVS нет, возвращаем исходные байты electron.exe, чтобы подпись хотя бы
+ * совпадала с файлом — этого недостаточно для полного воспроизведения.
  */
-function tryEvsSign(appOutDir) {
-  const python = process.env.EVS_PYTHON || 'python';
-  const imported = spawnSync(python, ['-c', 'import castlabs_evs'], { stdio: 'ignore' });
-  if (imported.status !== 0) return false;
-  console.log('VMP: подписываем пакет через castlabs EVS');
-  const signed = spawnSync(python, ['-m', 'castlabs_evs.vmp', 'sign-pkg', '--no-ask', appOutDir], {
+function evsPython() {
+  return process.env.EVS_PYTHON || 'python';
+}
+
+function evsAvailable() {
+  return spawnSync(evsPython(), ['-c', 'import castlabs_evs'], { stdio: 'ignore' }).status === 0;
+}
+
+/** `-n` — глобальный флаг, до подкоманды. Иначе клиент отвечает unrecognized arguments. */
+function evsSign(appOutDir) {
+  console.log('VMP: подписываем пакет через castlabs EVS (после иконки и версии exe)');
+  const signed = spawnSync(evsPython(), ['-m', 'castlabs_evs.vmp', '-n', 'sign-pkg', appOutDir], {
     stdio: 'inherit',
   });
-  return signed.status === 0;
+  if (signed.status !== 0) {
+    throw new Error(
+      'VMP: castlabs EVS не подписал пакет. Локально: py -3 -m castlabs_evs.account reauth. ' +
+        'В GitHub Actions: секреты EVS_ACCOUNT_NAME и EVS_PASSWD.',
+    );
+  }
 }
 
 function restoreDevSignature(appOutDir, exeName) {
@@ -42,11 +55,20 @@ function restoreDevSignature(appOutDir, exeName) {
 module.exports = async function afterSign(context) {
   if (context.electronPlatformName !== 'win32') return;
   const exeName = `${context.packager.appInfo.productFilename}.exe`;
-  if (tryEvsSign(context.appOutDir)) {
+  const ci = process.env.GITHUB_ACTIONS === 'true' || process.env.CI === 'true' || process.env.PACK_CI === '1';
+  if (evsAvailable()) {
+    evsSign(context.appOutDir);
     const stale = path.join(context.appOutDir, 'electron.exe.sig');
     if (exeName !== 'electron.exe' && fs.existsSync(stale)) fs.rmSync(stale);
     return;
   }
-  console.warn('VMP: EVS недоступен, возвращаем development-подпись castlabs (иконка exe будет стандартной)');
+  if (ci) {
+    throw new Error(
+      'VMP: в CI нет castlabs-evs. Workflow должен установить пакет и задать секреты EVS_ACCOUNT_NAME и EVS_PASSWD.',
+    );
+  }
+  console.warn(
+    'VMP: EVS недоступен. Development-подпись не откроет полный Spotify — нужен аккаунт https://github.com/castlabs/electron-releases/wiki/EVS',
+  );
   restoreDevSignature(context.appOutDir, exeName);
 };

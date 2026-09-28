@@ -145,19 +145,10 @@ export function VkLoginDialog() {
               )}
 
               {method === 'sms' && step === 'sms' && (
-                <>
-                  <p className="text-sm leading-relaxed text-muted">
-                    Пришлём код на номер, привязанный к странице VK. Пароль не нужен.
-                  </p>
-                  <Input
-                    autoFocus
-                    inputMode="tel"
-                    autoComplete="tel"
-                    placeholder="+7 999 123-45-67"
-                    value={username}
-                    onChange={(e) => setUsername(e.target.value)}
-                  />
-                </>
+                <p className="text-sm leading-relaxed text-muted">
+                  VK блокирует прямую отправку SMS из приложений. Откроется окно VK — введите там номер телефона
+                  и код из SMS.
+                </p>
               )}
 
               {step === 'code' && (
@@ -198,7 +189,7 @@ export function VkLoginDialog() {
                 )}
                 <Button type="submit" disabled={busy}>
                   {busy && <Loader2 size={14} className="animate-spin" />}
-                  {step === 'sms' || step === 'credentials' ? 'Продолжить' : 'Войти'}
+                  {step === 'sms' ? 'Открыть окно VK' : step === 'credentials' ? 'Продолжить' : 'Войти'}
                 </Button>
               </div>
             </form>
