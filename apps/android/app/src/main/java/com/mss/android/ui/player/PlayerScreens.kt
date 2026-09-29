@@ -4,6 +4,7 @@ import android.media.audiofx.Visualizer
 import android.os.Handler
 import android.os.Looper
 import android.os.SystemClock
+import androidx.compose.animation.Crossfade
 import androidx.compose.animation.core.FastOutSlowInEasing
 import androidx.compose.animation.core.animateFloatAsState
 import androidx.compose.animation.core.tween
@@ -71,6 +72,7 @@ import androidx.compose.ui.Alignment
 import androidx.compose.ui.graphics.graphicsLayer
 import androidx.compose.ui.graphics.lerp
 import androidx.compose.ui.draw.alpha
+import androidx.compose.ui.draw.blur
 import androidx.compose.ui.draw.rotate
 import androidx.compose.ui.geometry.Offset
 import androidx.compose.ui.input.nestedscroll.NestedScrollConnection
@@ -235,12 +237,16 @@ private fun SpotifyDeviceDialog(vm: MssViewModel, onClose: () -> Unit) {
 }
 
 @Composable
-fun MiniPlayer(vm: MssViewModel, onOpen: () -> Unit) {
+fun MiniPlayer(vm: MssViewModel, onOpen: () -> Unit, below: @Composable () -> Unit = {}) {
     val settings by vm.playbackSettings.collectAsState()
     val state by vm.playerState.collectAsState()
     val liked by vm.likedIds.collectAsState()
-    val track = state.current ?: return
     val scheme = MaterialTheme.colorScheme
+    val track = state.current
+    if (track == null) {
+        Box(Modifier.fillMaxWidth().background(scheme.surfaceContainer)) { below() }
+        return
+    }
     val progress = if (state.durationMs == 0L) 0f else (state.positionMs / state.durationMs.toFloat()).coerceIn(0f, 1f)
     val isLiked = track.id in liked
     AccentPanelBackground(accent = settings.accent, coverUrl = track.coverUrl, modifier = Modifier.fillMaxWidth()) {
@@ -298,6 +304,7 @@ fun MiniPlayer(vm: MssViewModel, onOpen: () -> Unit) {
                     Icon(Icons.Default.SkipNext, "Следующий", tint = scheme.onSurface.copy(alpha = 0.85f))
                 }
             }
+            below()
         }
     }
 }
@@ -373,7 +380,20 @@ private fun NowPlayingBody(
                     }
                 }
                 item {
-                    Cover(track.coverUrl, Modifier.fillMaxWidth().height(cover), corner = 16.dp)
+                    CoverStage(track.coverUrl, tab, Modifier.fillMaxWidth().height(cover)) { shown ->
+                        when (shown) {
+                            0 -> LazyColumn(
+                                state = rememberLazyListState(initialFirstVisibleItemIndex = state.index.coerceAtLeast(0)),
+                                modifier = Modifier.fillMaxSize(),
+                                contentPadding = PaddingValues(8.dp),
+                            ) { queueRows(state, liked, vm, canSuggest) }
+                            1 -> LyricsPane(vm, lyrics, state.positionMs, Modifier.fillMaxSize())
+                            2 -> LazyColumn(
+                                modifier = Modifier.fillMaxSize(),
+                                contentPadding = PaddingValues(8.dp),
+                            ) { similarRows(similar, liked, state, vm, canSuggest) }
+                        }
+                    }
                 }
                 item {
                     TrackHeading(
@@ -402,13 +422,6 @@ private fun NowPlayingBody(
                     PlayerTabs(tab) { index ->
                         tab = if (tab == index) null else index
                     }
-                }
-                when (tab) {
-                    0 -> queueRows(state, liked, vm, canSuggest)
-                    1 -> item {
-                        LyricsPane(vm, lyrics, state.positionMs, Modifier.fillMaxWidth().height(320.dp))
-                    }
-                    2 -> similarRows(similar, liked, state, vm, canSuggest)
                 }
                 item {
                     NowPlayingEntityCard(
@@ -440,6 +453,27 @@ private fun NowPlayingBody(
                 }
                 item { PlaybackSettingsCard(vm, settings, state) }
             }
+        }
+    }
+}
+
+/** Обложка; при открытой вкладке она размывается и поверх показывается содержимое вкладки. */
+@Composable
+private fun CoverStage(coverUrl: String?, tab: Int?, modifier: Modifier, content: @Composable (Int) -> Unit) {
+    val dim by animateFloatAsState(if (tab != null) 1f else 0f, tween(320), label = "coverDim")
+    val hsl = rememberCoverHsl(coverUrl)
+    val tint = if (hsl != null) Color.hsl(hsl.first, (hsl.second * 0.6f).coerceAtMost(0.5f), 0.12f) else Color.Black
+    Box(modifier.clip(RoundedCornerShape(16.dp))) {
+        Cover(
+            coverUrl,
+            Modifier
+                .matchParentSize()
+                .then(if (dim > 0f) Modifier.blur((28 * dim).dp) else Modifier),
+            corner = 16.dp,
+        )
+        if (dim > 0f) Box(Modifier.matchParentSize().background(tint.copy(alpha = 0.55f * dim)))
+        Crossfade(tab, animationSpec = tween(320), label = "coverStage") { shown ->
+            if (shown != null) Box(Modifier.fillMaxSize()) { content(shown) }
         }
     }
 }
@@ -583,14 +617,15 @@ private val LyricMove = tween<Float>(durationMillis = 480, easing = FastOutSlowI
 
 /** Ставит строку в центр панели одним плавным сдвигом. */
 private suspend fun androidx.compose.foundation.lazy.LazyListState.centerLyric(index: Int) {
-    val viewHeight = layoutInfo.viewportSize.height
-    if (viewHeight <= 0) return
+    if (layoutInfo.viewportSize.height <= 0) return
+    // Смещения элементов отсчитываются от края верхнего contentPadding, а не от верха viewport.
+    val center = (layoutInfo.viewportStartOffset + layoutInfo.viewportEndOffset) / 2
     if (layoutInfo.visibleItemsInfo.none { it.index == index }) {
         val guess = layoutInfo.visibleItemsInfo.firstOrNull()?.size ?: 72
-        animateScrollToItem(index, scrollOffset = guess / 2 - viewHeight / 2)
+        animateScrollToItem(index, scrollOffset = guess / 2 - center)
     }
     val item = layoutInfo.visibleItemsInfo.find { it.index == index } ?: return
-    val delta = item.offset + item.size / 2 - viewHeight / 2
+    val delta = item.offset + item.size / 2 - center
     if (kotlin.math.abs(delta) > 2) animateScrollBy(delta.toFloat(), LyricMove)
 }
 
@@ -603,17 +638,18 @@ private fun LyricLine(text: String, active: Boolean, synced: Boolean, onClick: (
     } else {
         lerp(scheme.onSurface.copy(alpha = 0.32f), scheme.onSurface, emphasis)
     }
-    val size = if (!synced) 18.sp else lerp(20.sp, 26.sp, emphasis)
+    // Размер шрифта не анимируем: высота строки должна быть постоянной, иначе центрирование уезжает.
     Text(
         text,
         color = color,
         fontWeight = FontWeight.Bold,
-        fontSize = size,
+        fontSize = if (synced) 25.sp else 18.sp,
+        lineHeight = if (synced) 31.sp else 24.sp,
         textAlign = TextAlign.Center,
         modifier = Modifier
             .fillMaxWidth()
             .graphicsLayer {
-                val scale = if (synced) 0.94f + 0.06f * emphasis else 1f
+                val scale = if (synced) 0.8f + 0.2f * emphasis else 1f
                 scaleX = scale
                 scaleY = scale
             }

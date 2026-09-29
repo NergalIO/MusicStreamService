@@ -16,7 +16,7 @@ import androidx.compose.ui.layout.ContentScale
 import coil.compose.AsyncImage
 import com.mss.android.ui.components.coverRequest
 
-/** Фон нижней панели (мини-плеер): градиент акцента или обложки при «Динамическая». */
+/** Фон нижней панели (мини-плеер): размытая обложка в её же цвете; без обложки — градиент акцента. */
 @Composable
 fun AccentPanelBackground(
     accent: String,
@@ -26,13 +26,13 @@ fun AccentPanelBackground(
 ) {
     val dark = isSystemInDarkTheme()
     val scheme = MaterialTheme.colorScheme
-    val coverHsl = if (accent == COVER_ACCENT) rememberCoverHsl(coverUrl) else null
-    val accentColor = mssAccent(accent, dark, coverHsl)
+    val coverHsl = rememberCoverHsl(coverUrl)
+    val accentColor = if (coverHsl != null) mssAccent(COVER_ACCENT, dark, coverHsl) else mssAccent(accent, dark)
     val base = scheme.surfaceContainer
 
     BoxWithConstraints(modifier.background(base)) {
         val widthPx = constraints.maxWidth.toFloat().coerceAtLeast(1f)
-        if (accent == COVER_ACCENT && !coverUrl.isNullOrBlank()) {
+        if (!coverUrl.isNullOrBlank()) {
             AsyncImage(
                 model = coverRequest(LocalContext.current, coverUrl),
                 contentDescription = null,
@@ -59,11 +59,10 @@ fun AccentPanelBackground(
                     .matchParentSize()
                     .background(
                         Brush.verticalGradient(
-                            colors = listOf(
-                                Color.Black.copy(alpha = 0.08f),
-                                base.copy(alpha = 0.75f),
-                                base.copy(alpha = 0.96f),
-                            ),
+                            0f to Color.Black.copy(alpha = 0.06f),
+                            0.35f to base.copy(alpha = 0.45f),
+                            0.7f to base.copy(alpha = 0.82f),
+                            1f to base.copy(alpha = 0.97f),
                         ),
                     ),
             )
@@ -81,7 +80,8 @@ fun AccentPanelBackground(
                             start = Offset.Zero,
                             end = Offset(widthPx, 0f),
                         ),
-                    ),
+                    )
+                    .background(Brush.verticalGradient(0.3f to Color.Transparent, 1f to base)),
             )
         }
         content()

@@ -47,6 +47,7 @@ import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.zIndex
 import androidx.compose.ui.draw.clip
+import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.platform.LocalView
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
@@ -259,35 +260,36 @@ private fun MainShell(vm: MssViewModel, nav: NavHostController) {
             if (route != Routes.NOW_PLAYING) {
                 Column {
                     LobbyBar(lobby) { nav.navigate(Routes.LOBBY) }
-                    MiniPlayer(vm) { nav.navigate(Routes.NOW_PLAYING) }
-                    NavigationBar(containerColor = scheme.surfaceContainer, tonalElevation = 0.dp) {
-                        listOf(
-                            Triple(Routes.HOME, "Главная", Icons.Default.Home),
-                            Triple(Routes.SEARCH, "Поиск", Icons.Default.Search),
-                            Triple(Routes.LIBRARY, "Медиатека", Icons.Default.LibraryMusic),
-                            Triple(Routes.MORE, "Ещё", Icons.Default.MoreHoriz),
-                        ).forEach { (r, label, icon) ->
-                            val selected = route == r || (r == Routes.LIBRARY && route.startsWith("library"))
-                            NavigationBarItem(
-                                selected = selected,
-                                onClick = {
-                                    nav.navigate(r) {
-                                        popUpTo(nav.graph.findStartDestination().id) { saveState = true }
-                                        launchSingleTop = true
-                                        restoreState = true
-                                    }
-                                },
-                                icon = { Icon(icon, contentDescription = null) },
-                                label = { Text(label, maxLines = 1, overflow = TextOverflow.Ellipsis) },
-                                alwaysShowLabel = true,
-                                colors = NavigationBarItemDefaults.colors(
-                                    selectedIconColor = scheme.primary,
-                                    selectedTextColor = scheme.onSurface,
-                                    unselectedIconColor = scheme.onSurfaceVariant,
-                                    unselectedTextColor = scheme.onSurfaceVariant,
-                                    indicatorColor = scheme.onSurface.copy(alpha = 0.10f),
-                                ),
-                            )
+                    MiniPlayer(vm, onOpen = { nav.navigate(Routes.NOW_PLAYING) }) {
+                        NavigationBar(containerColor = Color.Transparent, tonalElevation = 0.dp) {
+                            listOf(
+                                Triple(Routes.HOME, "Главная", Icons.Default.Home),
+                                Triple(Routes.SEARCH, "Поиск", Icons.Default.Search),
+                                Triple(Routes.LIBRARY, "Медиатека", Icons.Default.LibraryMusic),
+                                Triple(Routes.MORE, "Ещё", Icons.Default.MoreHoriz),
+                            ).forEach { (r, label, icon) ->
+                                val selected = route == r || (r == Routes.LIBRARY && route.startsWith("library"))
+                                NavigationBarItem(
+                                    selected = selected,
+                                    onClick = {
+                                        nav.navigate(r) {
+                                            popUpTo(nav.graph.findStartDestination().id) { saveState = true }
+                                            launchSingleTop = true
+                                            restoreState = true
+                                        }
+                                    },
+                                    icon = { Icon(icon, contentDescription = null) },
+                                    label = { Text(label, maxLines = 1, overflow = TextOverflow.Ellipsis) },
+                                    alwaysShowLabel = true,
+                                    colors = NavigationBarItemDefaults.colors(
+                                        selectedIconColor = scheme.primary,
+                                        selectedTextColor = scheme.onSurface,
+                                        unselectedIconColor = scheme.onSurfaceVariant,
+                                        unselectedTextColor = scheme.onSurfaceVariant,
+                                        indicatorColor = scheme.onSurface.copy(alpha = 0.10f),
+                                    ),
+                                )
+                            }
                         }
                     }
                 }

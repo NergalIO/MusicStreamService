@@ -384,6 +384,11 @@ class SpotifyWebSession @Inject constructor(
                       button = q('[data-testid="control-button-playpause"]');
                     }
                     if (!button) throw new Error('Не удалось открыть трек в веб-плеере Spotify');
+                    $DEVICE_HELPERS
+                    const movedHere = await transferHere();
+                    if (!movedHere) {
+                      throw new Error('Spotify играет на устройстве «' + (remoteFromBar() || 'другом') + '» — выберите это приложение в списке устройств');
+                    }
                     if (!isPauseLabel(button)) button.click();
                     for (let i = 0; i < 40; i++) {
                       await sleep(250);
@@ -411,6 +416,7 @@ class SpotifyWebSession @Inject constructor(
                     ?: throw ConnectorException("Spotify не ответил")
             } finally {
                 playWaiters.remove(id)
+                runCatching { applyDevices(queryDevices("peek", "")) }
             }
         }
     }
@@ -420,7 +426,7 @@ class SpotifyWebSession @Inject constructor(
         if (!pageMutex.tryLock()) return
         try {
             if (_visibleForLogin.value || webView == null) return
-            applyDevices(queryDevices("list", ""))
+            applyDevices(queryDevices("peek", ""))
         } finally {
             pageMutex.unlock()
         }
@@ -664,134 +670,125 @@ class SpotifyWebSession @Inject constructor(
                 .replace("%%ID%%", id)
         }
 
+        /** Общий код панели устройств: «This web browser» — это мы, «Playing on …» в нижней панели — чужое устройство. */
+        private const val DEVICE_HELPERS = """
+          const dSleep = (ms) => new Promise((r) => setTimeout(r, ms));
+          const LOCAL_RE = /this web browser|этот веб-браузер|этот браузер|this computer|этот компьютер|this device|это устройство/i;
+          const PLAYING_RE = /^(?:playing on|listening on|воспроизводится на|воспроизведение на|слушаете на|играет на)\s+/i;
+          const CONNECT_ROW_RE = /^(?:connect to this device|подключиться к этому устройству|подключить это устройство)[.…]?/i;
+          const isLocalName = (n) => LOCAL_RE.test(String(n || ''));
+          const remoteFromBar = () => {
+            const bar = document.querySelector('[data-testid="now-playing-bar"]') || document.querySelector('footer');
+            if (!bar) return null;
+            for (const el of bar.querySelectorAll('button, a, span, div')) {
+              if (el.childElementCount > 4) continue;
+              const t = String(el.innerText || el.textContent || '').replace(/\s+/g, ' ').trim();
+              if (!PLAYING_RE.test(t)) continue;
+              const name = t.replace(PLAYING_RE, '').trim();
+              if (name && !isLocalName(name)) return name;
+            }
+            return null;
+          };
+          const connectBtn = () =>
+            document.querySelector('[data-testid="connect-device-picker"], [data-testid="device-picker-icon-button"], [data-testid="control-button-connect"]')
+            || [...document.querySelectorAll('[data-testid="now-playing-bar"] button, footer button')]
+              .find((b) => /connect|device|устройств/i.test(b.getAttribute('aria-label') || '')) || null;
+          const pickerRows = () => [...document.querySelectorAll('[data-testid="device-picker-row-sidepanel"], [data-testid="device-picker-item"]')];
+          const openPicker = async () => {
+            if (pickerRows().length) return true;
+            const b = connectBtn();
+            if (!b) return false;
+            b.click();
+            for (let i = 0; i < 30 && !pickerRows().length; i++) await dSleep(100);
+            return pickerRows().length > 0;
+          };
+          const closePicker = async () => {
+            if (!pickerRows().length) return;
+            const close = document.querySelector('[data-testid="PanelHeader_CloseButton"] button, [data-testid="PanelHeader_CloseButton"]');
+            if (close) close.click(); else connectBtn()?.click();
+            for (let i = 0; i < 20 && pickerRows().length; i++) await dSleep(100);
+          };
+          const readPicker = () => {
+            const out = [];
+            const seen = new Set();
+            for (const row of pickerRows()) {
+              const titled = row.querySelector('[data-testid="list-row-title"]')?.textContent;
+              const lines = String(titled || row.innerText || '').split('\n').map((s) => s.trim()).filter((s) => s && !CONNECT_ROW_RE.test(s));
+              const name = lines[lines.length - 1] || '';
+              if (!name || name.length > 60) continue;
+              const inList = !!row.closest('ul, [role="list"]');
+              const key = name + (inList ? '|list' : '|current');
+              if (seen.has(key)) continue;
+              seen.add(key);
+              out.push({ name, active: !inList, local: isLocalName(name), el: row.querySelector('[role="button"]') || row });
+            }
+            return out;
+          };
+          const transferHere = async () => {
+            if (!remoteFromBar()) return true;
+            if (!(await openPicker())) return false;
+            const here = readPicker().find((d) => d.local && !d.active);
+            if (here) {
+              here.el.click();
+              for (let i = 0; i < 24 && remoteFromBar(); i++) await dSleep(250);
+            }
+            await closePicker();
+            return !remoteFromBar();
+          };
+        """
+
         private const val DEVICE_SCRIPT = """
           (async () => {
-            const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
             const action = '%%ACTION%%';
             const target = %%TARGET%%;
             const doneId = '%%ID%%';
             const finish = (payload) => MssSpotify.onDeviceResult(doneId, JSON.stringify(payload));
             try {
-              const IDLE = new Set([
-                'connect to a device',
-                'подключиться к устройству',
-                'подключение к устройству',
-                'conectar a un dispositivo',
-                'connecter à un appareil',
-                'mit einem gerät verbinden',
-                'connetti a un dispositivo',
-                'een apparaat verbinden',
-                'połącz z urządzeniem',
-                '连接到设备',
-                '接続先のデバイス',
-              ]);
-              const isIdle = (label) => IDLE.has(String(label || '').trim().toLowerCase());
-              const isLocal = (name) => {
-                const n = String(name || '').toLowerCase();
-                return n.includes('this web browser') || n.includes('этот веб-браузер') || n.includes('web player')
-                  || n.includes('веб-плеер') || n.includes('этот браузер') || n.includes('this computer') || n.includes('этот компьютер');
-              };
-              const listeningName = (text) => {
-                const t = String(text || '').replace(/\s+/g, ' ').trim();
-                const lower = t.toLowerCase();
-                const marks = ['listening on ', 'playing on ', 'слушаете на ', 'воспроизводится на ', 'воспроизведение на ', 'играет на '];
-                for (const mark of marks) {
-                  const i = lower.indexOf(mark);
-                  if (i >= 0) return t.slice(i + mark.length).trim();
-                }
-                return '';
-              };
-              const connectButton = () => {
-                const direct = document.querySelector('[data-testid="connect-device-picker"], [data-testid="device-picker-icon-button"], [data-testid="control-button-connect"]');
-                if (direct) return direct;
-                return [...document.querySelectorAll('button')].find((b) => isIdle(b.getAttribute('aria-label') || '')) || null;
-              };
-              const looksLikeDevice = (name) => {
-                if (!name || name.length > 48) return false;
-                if (isLocal(name) || isIdle(name)) return isLocal(name);
-                if (/english|afrikaans|amharic|azerbaijani|bulgarian|bhojpuri|bengali|bosnian|catalan|czech|danish|greek|spanish|french|german|italian|portuguese|russian|hindi|japanese|korean|chinese/i.test(name)) return false;
-                return true;
-              };
-              const rowActive = (b) => {
-                const cls = typeof b.className === 'string' ? b.className : '';
-                return b.getAttribute('aria-checked') === 'true' || b.getAttribute('aria-selected') === 'true'
-                  || b.getAttribute('aria-pressed') === 'true' || cls.split(/\s+/).includes('active');
-              };
-              const rowName = (b) => String(b.innerText || b.getAttribute('aria-label') || '').split('\n').map((s) => s.trim()).filter(Boolean)[0] || '';
-              const parseRoot = (root) => {
-                const opener = connectButton();
-                const buttons = [...root.querySelectorAll('[data-testid="device-picker-item"], button, [role="menuitemcheckbox"], [role="menuitem"], [role="option"]')];
-                const devices = [];
-                const seen = new Set();
-                for (const b of buttons) {
-                  if (b === opener) continue;
-                  const name = rowName(b);
-                  if (!name || name.length > 80 || isIdle(name) || seen.has(name)) continue;
-                  seen.add(name);
-                  devices.push({ name, active: rowActive(b), local: isLocal(name), el: b });
-                }
-                return devices;
-              };
-              const findMenu = () => {
-                const roots = [...document.querySelectorAll('[data-testid="device-picker"], [data-testid*="device-picker"], [role="menu"], [role="dialog"]')];
-                const parsed = roots.map((root) => ({ root, rows: parseRoot(root).filter((d) => looksLikeDevice(d.name)) }));
-                return (parsed.find((p) => p.rows.some((d) => d.local)) || parsed.find((p) => p.rows.length > 0 && p.rows.length <= 8) || {}).root || null;
-              };
-              const btn = connectButton();
-              if (!btn) {
-                finish({ remoteName: null, devices: [] });
-                return;
-              }
-              const wasOpen = btn.getAttribute('aria-expanded') === 'true';
-              if (!wasOpen) btn.click();
-              let menu = null;
-              for (let i = 0; i < 25; i++) {
-                menu = findMenu();
-                if (menu) break;
-                await sleep(80);
-              }
-              let rows = (menu ? parseRoot(menu) : []).filter((d) => looksLikeDevice(d.name));
-              if (rows.length > 8 && !rows.some((d) => d.local)) rows = [];
-              const closeMenu = async () => {
-                if (!btn) return;
-                if (btn.getAttribute('aria-expanded') === 'true') btn.click();
-                await sleep(40);
-              };
+              $DEVICE_HELPERS
+              const plain = (list) => list.map(({ name, active, local }) => ({ name, active, local }));
               if (action === 'select') {
-                const row = rows.find((d) => d.name === target) || rows.find((d) => target && d.name.includes(target));
+                if (!(await openPicker())) {
+                  finish({ error: 'Кнопка устройств Spotify не найдена' });
+                  return;
+                }
+                const rows = readPicker();
+                const row = rows.find((d) => !d.active && d.name === target)
+                  || rows.find((d) => !d.active && target && d.name.includes(target))
+                  || rows.find((d) => d.name === target);
                 if (!row) {
-                  await closeMenu();
+                  await closePicker();
                   finish({ error: 'Устройство Spotify не найдено' });
                   return;
                 }
-                row.el.click();
-                await sleep(200);
-                if (btn && btn.getAttribute('aria-expanded') === 'true') btn.click();
+                if (!row.active) row.el.click();
+                for (let i = 0; i < 16; i++) {
+                  await dSleep(250);
+                  const r = remoteFromBar();
+                  if (row.local ? !r : r) break;
+                }
+                await closePicker();
+                const remoteName = remoteFromBar();
                 finish({
-                  remoteName: row.local ? null : row.name,
-                  selectedLocal: !!row.local,
-                  devices: rows.map(({ name, active, local }) => ({ name, active: name === row.name, local })),
+                  remoteName,
+                  selectedLocal: row.local && !remoteName,
+                  devices: plain(rows),
                 });
                 return;
               }
-              await closeMenu();
-              let remoteName = null;
-              const activeRemote = rows.find((d) => d.active && !d.local);
-              if (activeRemote) remoteName = activeRemote.name;
-              else if (!rows.some((d) => d.active && d.local)) {
-                const label = (btn && btn.getAttribute('aria-label')) || '';
-                const fromLabel = listeningName(label);
-                if (fromLabel && !isLocal(fromLabel)) remoteName = fromLabel;
-                else if (label && !isIdle(label) && !isLocal(label)) remoteName = label.trim();
+              let remoteName = remoteFromBar();
+              let rows = [];
+              if (action === 'list') {
+                const wasOpen = pickerRows().length > 0;
+                if (await openPicker()) {
+                  rows = readPicker();
+                  if (!wasOpen) await closePicker();
+                }
                 if (!remoteName) {
-                  const bars = [...document.querySelectorAll('[class*="connectBar"], [data-testid*="connect-bar"]')];
-                  for (const bar of bars) {
-                    const name = listeningName(bar.textContent || '');
-                    if (name && !isLocal(name)) { remoteName = name; break; }
-                  }
+                  const current = rows.find((d) => d.active && !d.local);
+                  if (current && rows.some((d) => d.local && !d.active)) remoteName = current.name;
                 }
               }
-              finish({ remoteName, devices: rows.map(({ name, active, local }) => ({ name, active, local })) });
+              finish({ remoteName, devices: plain(rows) });
             } catch (e) {
               finish({ error: String(e && e.message || e) });
             }
