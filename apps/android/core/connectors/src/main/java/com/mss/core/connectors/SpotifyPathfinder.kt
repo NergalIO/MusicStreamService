@@ -50,7 +50,58 @@ class SpotifyPathfinder @Inject constructor(
             },
         )
         val items = data.obj("data")?.obj("searchV2")?.obj("tracksV2")?.arr("items") ?: return emptyList()
-        return items.mapNotNull { mapTrack(it.jsonObject.obj("item")?.obj("data")) }
+        return items.mapNotNull { mapTrack(unwrapTrack(it.jsonObject.obj("item")?.obj("data") ?: it.jsonObject.obj("item"))) }
+    }
+
+    suspend fun searchArtists(query: String, limit: Int): List<UnifiedArtist> {
+        val data = query(
+            "searchArtists",
+            buildJsonObject {
+                put("searchTerm", query)
+                put("offset", 0)
+                put("limit", minOf(limit, 50))
+                put("numberOfTopResults", 5)
+                put("includeAudiobooks", false)
+                put("includePreReleases", false)
+                put("includeAuthors", false)
+            },
+        )
+        val items = data.obj("data")?.obj("searchV2")?.obj("artists")?.arr("items") ?: return emptyList()
+        return items.mapNotNull { row ->
+            val a = row.jsonObject.obj("data") ?: return@mapNotNull null
+            val id = idFromUri(a.str("uri")) ?: return@mapNotNull null
+            val name = a.obj("profile")?.str("name") ?: return@mapNotNull null
+            UnifiedArtist(SourceId.SPOTIFY, id, name, imageUrl = coverOf(a))
+        }
+    }
+
+    suspend fun artistTracks(artistId: String, artistName: String?, limit: Int): List<UnifiedTrack> {
+        val data = query(
+            "queryArtistOverview",
+            buildJsonObject {
+                put("uri", "spotify:artist:$artistId")
+                put("locale", "")
+                put("preReleaseV2", false)
+            },
+        )
+        val top = data.obj("data")?.obj("artistUnion")?.obj("discography")?.obj("topTracks")?.arr("items")
+            ?: JsonArray(emptyList())
+        val byTitle = linkedMapOf<String, UnifiedTrack>()
+        fun add(t: UnifiedTrack) {
+            val key = t.title.lowercase().replace(Regex("""\s*[(\[].*$"""), "").trim()
+            if (key !in byTitle) byTitle[key] = t
+        }
+        top.forEach { row ->
+            mapTrack(unwrapTrack(row.jsonObject.obj("track")))?.let(::add)
+        }
+        val name = artistName ?: data.obj("data")?.obj("artistUnion")?.obj("profile")?.str("name")
+        if (name != null && byTitle.size < limit) {
+            runCatching { searchTracks(name, 50) }.getOrDefault(emptyList()).forEach { t ->
+                if (byTitle.size >= limit) return@forEach
+                if (t.artists?.any { it.id == artistId } == true) add(t)
+            }
+        }
+        return byTitle.values.take(limit)
     }
 
     suspend fun savedTracks(limit: Int): List<UnifiedTrack> {
@@ -67,11 +118,7 @@ class SpotifyPathfinder @Inject constructor(
             val page = data.obj("data")?.obj("me")?.obj("library")?.obj("tracks")
             val items = page?.arr("items") ?: break
             items.forEach { row ->
-                val trackObj = row.jsonObject.obj("track")
-            val uri = trackObj?.str("_uri")
-            val data = trackObj?.obj("data")
-            val merged = if (data != null && uri != null) JsonObject(data + ("uri" to JsonPrimitive(uri))) else data
-            mapTrack(merged)?.let { out += it }
+                mapTrack(unwrapTrack(row.jsonObject.obj("track")))?.let { out += it }
             }
             if (items.size < 50) break
             offset += 50
@@ -127,7 +174,7 @@ class SpotifyPathfinder @Inject constructor(
             cover = bestImage(p.obj("images")?.arr("items")?.firstOrNull()?.jsonObject?.arr("sources")) ?: cover
             val items = p.obj("content")?.arr("items") ?: JsonArray(emptyList())
             items.forEach { row ->
-                mapTrack(row.jsonObject.obj("itemV2")?.obj("data"))?.let { tracks += it }
+                mapTrack(unwrapTrack(row.jsonObject.obj("itemV2")?.obj("data") ?: row.jsonObject.obj("itemV2")))?.let { tracks += it }
             }
             if (items.size < 100) break
         }
@@ -151,7 +198,7 @@ class SpotifyPathfinder @Inject constructor(
             it.jsonObject.obj("profile")?.str("name")
         }?.joinToString().orEmpty()
         val tracks = a.obj("tracksV2")?.arr("items")?.mapNotNull { row ->
-            mapTrack(row.jsonObject.obj("track"))
+            mapTrack(unwrapTrack(row.jsonObject.obj("track")), cover)
         }.orEmpty()
         return AlbumWithTracks(SourceId.SPOTIFY, id, title, artist, coverUrl = cover, trackCount = tracks.size, tracks = tracks)
     }
@@ -255,14 +302,18 @@ class SpotifyPathfinder @Inject constructor(
         throw ConnectorException("Веб-плеер Spotify не знает запрос $name")
     }
 
-    private fun mapTrack(d: JsonObject?): UnifiedTrack? {
+    private fun mapTrack(d: JsonObject?, fallbackCover: String? = null): UnifiedTrack? {
         if (d == null) return null
         val uri = d.str("uri") ?: d.str("_uri") ?: return null
         if (!uri.startsWith("spotify:track:")) return null
         val name = d.str("name") ?: return null
         val artists = d.obj("artists")?.arr("items")?.mapNotNull {
-            val n = it.jsonObject.obj("profile")?.str("name") ?: return@mapNotNull null
-            com.mss.core.model.ArtistRef(idFromUri(it.jsonObject.str("uri")).orEmpty(), n)
+            val obj = it.jsonObject
+            val n = obj.obj("profile")?.str("name") ?: return@mapNotNull null
+            com.mss.core.model.ArtistRef(
+                idFromUri(obj.str("uri") ?: obj.obj("profile")?.str("uri")).orEmpty(),
+                n,
+            )
         }.orEmpty()
         val playable = d.obj("playability")?.get("playable")?.jsonPrimitive?.contentOrNull != "false"
         return UnifiedTrack(
@@ -275,7 +326,7 @@ class SpotifyPathfinder @Inject constructor(
             albumId = idFromUri(d.obj("albumOfTrack")?.str("uri")),
             durationMs = d.obj("duration")?.get("totalMilliseconds")?.jsonPrimitive?.contentOrNull?.toLongOrNull()
                 ?: d.obj("trackDuration")?.get("totalMilliseconds")?.jsonPrimitive?.contentOrNull?.toLongOrNull(),
-            coverUrl = coverOf(d),
+            coverUrl = coverOf(d) ?: SpotifyImageUrls.normalize(fallbackCover),
             playable = playable,
         )
     }
@@ -319,6 +370,17 @@ class SpotifyPathfinder @Inject constructor(
         )
     }
 
+    private fun unwrapTrack(row: JsonObject?): JsonObject? {
+        if (row == null) return null
+        val data = row.obj("data")
+        val uri = row.str("uri") ?: row.str("_uri") ?: data?.str("uri") ?: data?.str("_uri")
+        return when {
+            data != null && uri != null -> JsonObject(data + ("uri" to JsonPrimitive(uri)))
+            data != null -> data
+            else -> row
+        }
+    }
+
     private fun coverOf(d: JsonObject): String? {
         bestImage(d.obj("coverArt")?.arr("sources"))?.let { return it }
         bestImage(d.obj("albumOfTrack")?.obj("coverArt")?.arr("sources"))?.let { return it }
@@ -336,15 +398,7 @@ class SpotifyPathfinder @Inject constructor(
         return ranked.maxByOrNull { it.second }?.first
     }
 
-    private fun imageUrl(raw: String?): String? {
-        val url = raw?.trim().orEmpty()
-        if (url.isEmpty()) return null
-        return when {
-            url.startsWith("//") -> "https:$url"
-            url.startsWith("http://") || url.startsWith("https://") -> url
-            else -> null
-        }
-    }
+    private fun imageUrl(raw: String?): String? = SpotifyImageUrls.normalize(raw)
 
     private fun idFromUri(uri: String?): String? = uri?.substringAfterLast(':')?.takeIf { it.isNotBlank() }
 

@@ -153,7 +153,7 @@ fun HomeScreen(vm: MssViewModel, nav: NavHostController) {
                             }
                             item.album?.let { nav.navigate(Routes.album(it.source.name.lowercase(), it.id)) }
                             item.track?.let { vm.play(listOf(it)) }
-                            item.artist?.let { nav.navigate(Routes.artist(it.name)) }
+                            item.artist?.let { nav.navigate(Routes.artist(it)) }
                             Unit
                         }
                         MediaTile(

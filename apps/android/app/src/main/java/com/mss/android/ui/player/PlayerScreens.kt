@@ -4,6 +4,10 @@ import android.media.audiofx.Visualizer
 import android.os.Handler
 import android.os.Looper
 import android.os.SystemClock
+import androidx.compose.animation.core.FastOutSlowInEasing
+import androidx.compose.animation.core.animateFloatAsState
+import androidx.compose.animation.core.tween
+import androidx.compose.foundation.gestures.animateScrollBy
 import androidx.compose.foundation.background
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.Arrangement
@@ -17,7 +21,11 @@ import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.PaddingValues
 import androidx.compose.foundation.layout.padding
+import androidx.compose.foundation.layout.requiredHeight
+import androidx.compose.foundation.layout.requiredWidth
 import androidx.compose.foundation.layout.size
+import androidx.compose.foundation.layout.width
+import androidx.compose.foundation.layout.wrapContentSize
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.itemsIndexed
 import androidx.compose.foundation.lazy.rememberLazyListState
@@ -60,6 +68,10 @@ import androidx.compose.runtime.rememberCoroutineScope
 import androidx.compose.runtime.snapshotFlow
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
+import androidx.compose.ui.graphics.graphicsLayer
+import androidx.compose.ui.graphics.lerp
+import androidx.compose.ui.draw.alpha
+import androidx.compose.ui.draw.rotate
 import androidx.compose.ui.geometry.Offset
 import androidx.compose.ui.input.nestedscroll.NestedScrollConnection
 import androidx.compose.ui.input.nestedscroll.NestedScrollSource
@@ -78,6 +90,7 @@ import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
+import androidx.compose.ui.unit.lerp
 import androidx.compose.ui.unit.min
 import androidx.compose.ui.unit.sp
 import coil.compose.AsyncImage
@@ -94,6 +107,7 @@ import com.mss.android.ui.theme.MssTheme
 import com.mss.android.ui.theme.isolatedCoverBlur
 import com.mss.android.ui.theme.rememberCoverHsl
 import com.mss.core.connectors.SpotifyDevice
+import com.mss.core.model.EqPresets
 import com.mss.core.model.LobbyDto
 import com.mss.core.model.PlaybackSettings
 import kotlinx.coroutines.launch
@@ -292,7 +306,7 @@ fun MiniPlayer(vm: MssViewModel, onOpen: () -> Unit) {
 fun NowPlayingScreen(
     vm: MssViewModel,
     onBack: () -> Unit = {},
-    onArtist: (String) -> Unit = {},
+    onArtist: (UnifiedTrack) -> Unit = {},
     onAlbum: (String, String) -> Unit = { _, _ -> },
 ) {
     val settings by vm.playbackSettings.collectAsState()
@@ -307,7 +321,7 @@ fun NowPlayingScreen(
 private fun NowPlayingBody(
     vm: MssViewModel,
     onBack: () -> Unit,
-    onArtist: (String) -> Unit,
+    onArtist: (UnifiedTrack) -> Unit,
     onAlbum: (String, String) -> Unit,
 ) {
     val state by vm.playerState.collectAsState()
@@ -367,7 +381,7 @@ private fun NowPlayingBody(
                         track.artist,
                         track.id in liked,
                         { vm.toggleLike(track) },
-                        { onArtist(track.artist) },
+                        { onArtist(track) },
                         Modifier.padding(top = 16.dp),
                     )
                 }
@@ -375,6 +389,15 @@ private fun NowPlayingBody(
                     item { SessionVisualizer(vm.player.audioSessionId()) }
                 }
                 item { NowPlayingControls(vm, state) }
+                item {
+                    SourceAction(track) {
+                        when (track.source) {
+                            SourceId.YANDEX -> vm.startWave(WaveSettings(seed = "track:${track.id}", seedTitle = track.title))
+                            SourceId.SPOTIFY -> vm.startSpotifyRadio(track)
+                            else -> {}
+                        }
+                    }
+                }
                 item {
                     PlayerTabs(tab) { index ->
                         tab = if (tab == index) null else index
@@ -401,7 +424,7 @@ private fun NowPlayingBody(
                         title = track.artist,
                         subtitle = track.album?.takeIf { it.isNotBlank() },
                         coverUrl = track.coverUrl,
-                        onClick = { onArtist(track.artist) },
+                        onClick = { onArtist(track) },
                     )
                 }
                 if (!track.album.isNullOrBlank() || !track.albumId.isNullOrBlank()) {
@@ -417,15 +440,6 @@ private fun NowPlayingBody(
                     }
                 }
                 item { PlaybackSettingsCard(vm, settings, state) }
-                item {
-                    SourceAction(track) {
-                        when (track.source) {
-                            SourceId.YANDEX -> vm.startWave(WaveSettings(seed = "track:${track.id}", seedTitle = track.title))
-                            SourceId.SPOTIFY -> vm.startSpotifyRadio(track)
-                            else -> {}
-                        }
-                    }
-                }
             }
         }
     }
@@ -450,17 +464,15 @@ private fun androidx.compose.foundation.lazy.LazyListScope.queueRows(
         return
     }
     itemsIndexed(queue, key = { i, t -> "q:${t.source}:${t.id}:$i" }) { i, t ->
-        Box(Modifier.padding(horizontal = (-12).dp)) {
-            TrackRow(
-                t,
-                t.id in liked,
-                onPlay = { vm.play(queue, i) },
-                onLike = { vm.toggleLike(t) },
-                onDownload = { vm.download(t) },
-                onSuggest = if (canSuggest) ({ vm.suggestToLobby(t) }) else null,
-                active = i == state.index,
-            )
-        }
+        TrackRow(
+            t,
+            t.id in liked,
+            onPlay = { vm.play(queue, i) },
+            onLike = { vm.toggleLike(t) },
+            onDownload = { vm.download(t) },
+            onSuggest = if (canSuggest) ({ vm.suggestToLobby(t) }) else null,
+            active = i == state.index,
+        )
     }
 }
 
@@ -483,17 +495,15 @@ private fun androidx.compose.foundation.lazy.LazyListScope.similarRows(
         return
     }
     itemsIndexed(similar, key = { i, t -> "s:${t.source}:${t.id}:$i" }) { i, t ->
-        Box(Modifier.padding(horizontal = (-12).dp)) {
-            TrackRow(
-                t,
-                t.id in liked,
-                onPlay = { vm.play(similar, i) },
-                onLike = { vm.toggleLike(t) },
-                onDownload = { vm.download(t) },
-                onSuggest = if (canSuggest) ({ vm.suggestToLobby(t) }) else null,
-                active = state.current?.id == t.id && state.current?.source == t.source,
-            )
-        }
+        TrackRow(
+            t,
+            t.id in liked,
+            onPlay = { vm.play(similar, i) },
+            onLike = { vm.toggleLike(t) },
+            onDownload = { vm.download(t) },
+            onSuggest = if (canSuggest) ({ vm.suggestToLobby(t) }) else null,
+            active = state.current?.id == t.id && state.current?.source == t.source,
+        )
     }
 }
 
@@ -533,40 +543,26 @@ private fun LyricsPane(vm: MssViewModel, lyrics: LyricsUi, positionMs: Long, mod
     }
     LaunchedEffect(active) {
         if (active < 0) return@LaunchedEffect
-        val viewport = snapshotFlow { listState.layoutInfo.viewportSize.height }.first { it > 0 }
+        snapshotFlow { listState.layoutInfo.viewportEndOffset - listState.layoutInfo.viewportStartOffset }.first { it > 0 }
         if (SystemClock.elapsedRealtime() < holdUntil) return@LaunchedEffect
-        val itemSize = listState.layoutInfo.visibleItemsInfo.firstOrNull()?.size ?: 0
-        listState.animateScrollToItem(active, -(viewport / 2 - itemSize / 2))
+        listState.centerLyric(active)
     }
     BoxWithConstraints(modifier) {
         LazyColumn(
             state = listState,
             modifier = Modifier.fillMaxSize().nestedScroll(userScroll).padding(horizontal = 8.dp),
-            contentPadding = PaddingValues(vertical = maxHeight * 0.32f),
+            contentPadding = PaddingValues(vertical = maxHeight / 2),
             horizontalAlignment = Alignment.CenterHorizontally,
         ) {
             itemsIndexed(lines) { i, line ->
-                val current = i == active
+                val current = data.synced && i == active
                 val label = line.text.trim().ifEmpty { if (data.synced) "♪" else "" }
                 if (label.isEmpty()) return@itemsIndexed
-                Text(
+                LyricLine(
                     label,
-                    color = if (!data.synced) scheme.onSurface.copy(alpha = 0.85f)
-                    else if (current) scheme.onSurface
-                    else scheme.onSurface.copy(alpha = 0.35f),
-                    fontWeight = FontWeight.Bold,
-                    fontSize = if (data.synced && current) 26.sp else if (data.synced) 22.sp else 18.sp,
-                    textAlign = TextAlign.Center,
-                    modifier = Modifier
-                        .fillMaxWidth()
-                        .then(
-                            if (data.synced && line.timeMs >= 0) {
-                                Modifier.clickable { vm.player.seekTo(line.timeMs) }
-                            } else {
-                                Modifier
-                            },
-                        )
-                        .padding(vertical = if (line.text.isBlank()) 10.dp else 8.dp),
+                    active = current,
+                    synced = data.synced,
+                    onClick = if (data.synced && line.timeMs >= 0) ({ vm.player.seekTo(line.timeMs) }) else null,
                 )
             }
             data.writers?.takeIf { it.isNotEmpty() }?.let { writers ->
@@ -582,6 +578,49 @@ private fun LyricsPane(vm: MssViewModel, lyrics: LyricsUi, positionMs: Long, mod
             }
         }
     }
+}
+
+private val LyricMove = tween<Float>(durationMillis = 480, easing = FastOutSlowInEasing)
+
+/** Ставит строку в центр панели одним плавным сдвигом. */
+private suspend fun androidx.compose.foundation.lazy.LazyListState.centerLyric(index: Int) {
+    val viewHeight = layoutInfo.viewportSize.height
+    if (viewHeight <= 0) return
+    if (layoutInfo.visibleItemsInfo.none { it.index == index }) {
+        val guess = layoutInfo.visibleItemsInfo.firstOrNull()?.size ?: 72
+        animateScrollToItem(index, scrollOffset = guess / 2 - viewHeight / 2)
+    }
+    val item = layoutInfo.visibleItemsInfo.find { it.index == index } ?: return
+    val delta = item.offset + item.size / 2 - viewHeight / 2
+    if (kotlin.math.abs(delta) > 2) animateScrollBy(delta.toFloat(), LyricMove)
+}
+
+@Composable
+private fun LyricLine(text: String, active: Boolean, synced: Boolean, onClick: (() -> Unit)?) {
+    val emphasis by animateFloatAsState(if (active) 1f else 0f, LyricMove, label = "lyric")
+    val scheme = MaterialTheme.colorScheme
+    val color = if (!synced) {
+        scheme.onSurface.copy(alpha = 0.85f)
+    } else {
+        lerp(scheme.onSurface.copy(alpha = 0.32f), scheme.onSurface, emphasis)
+    }
+    val size = if (!synced) 18.sp else lerp(20.sp, 26.sp, emphasis)
+    Text(
+        text,
+        color = color,
+        fontWeight = FontWeight.Bold,
+        fontSize = size,
+        textAlign = TextAlign.Center,
+        modifier = Modifier
+            .fillMaxWidth()
+            .graphicsLayer {
+                val scale = if (synced) 0.94f + 0.06f * emphasis else 1f
+                scaleX = scale
+                scaleY = scale
+            }
+            .then(if (onClick != null) Modifier.clickable(onClick = onClick) else Modifier)
+            .padding(vertical = 8.dp),
+    )
 }
 
 private fun lyricsMessage(lyrics: LyricsUi): String? {
@@ -643,8 +682,6 @@ private fun NowPlayingEntityCard(
 @Composable
 private fun PlaybackSettingsCard(vm: MssViewModel, settings: PlaybackSettings, state: PlayerUiState) {
     val scheme = MaterialTheme.colorScheme
-    val bands = settings.eqBands.let { if (it.size < 8) it + List(8 - it.size) { 0f } else it }.take(8)
-    val labels = listOf("60", "150", "400", "1k", "2.4k", "6k", "10k", "15k")
     val seconds = settings.crossfadeMs / 1000
     Column(
         Modifier
@@ -683,25 +720,75 @@ private fun PlaybackSettingsCard(vm: MssViewModel, settings: PlaybackSettings, s
             Text("Эквалайзер", style = MaterialTheme.typography.labelLarge)
             Switch(settings.eqEnabled, { vm.savePlayback(settings.copy(eqEnabled = it)) })
         }
-        if (settings.eqEnabled) {
-            bands.forEachIndexed { i, v ->
-                Text("${labels.getOrNull(i)} Гц · ${v.toInt()} dB", style = MaterialTheme.typography.bodySmall, color = scheme.onSurfaceVariant)
-                Slider(
-                    value = v,
-                    onValueChange = { next ->
+        val bands = EqPresets.padded(settings.eqBands)
+        val activePreset = EqPresets.matching(bands)
+        ChipFlow {
+            EqPresets.all.forEach { preset ->
+                MssChip(activePreset?.id == preset.id, preset.label) {
+                    vm.savePlayback(settings.copy(eqEnabled = true, eqBands = preset.bands))
+                }
+            }
+        }
+        Row(
+            Modifier
+                .fillMaxWidth()
+                .alpha(if (settings.eqEnabled) 1f else 0.4f)
+                .padding(top = 4.dp),
+            horizontalArrangement = Arrangement.SpaceBetween,
+        ) {
+            EqPresets.frequencies.forEachIndexed { i, label ->
+                VerticalEqBand(
+                    label = label,
+                    value = bands[i],
+                    onChange = { next ->
                         val copy = bands.toMutableList()
                         copy[i] = next
-                        vm.savePlayback(settings.copy(eqBands = copy))
+                        vm.savePlayback(settings.copy(eqEnabled = true, eqBands = copy))
                     },
-                    valueRange = -12f..12f,
-                    colors = SliderDefaults.colors(
-                        thumbColor = scheme.onSurface,
-                        activeTrackColor = scheme.onSurface,
-                        inactiveTrackColor = scheme.onSurface.copy(alpha = 0.18f),
-                    ),
+                    modifier = Modifier.weight(1f),
                 )
             }
         }
+    }
+}
+
+@Composable
+private fun VerticalEqBand(
+    label: String,
+    value: Float,
+    onChange: (Float) -> Unit,
+    modifier: Modifier = Modifier,
+) {
+    val scheme = MaterialTheme.colorScheme
+    val track = 156.dp
+    Column(modifier, horizontalAlignment = Alignment.CenterHorizontally, verticalArrangement = Arrangement.spacedBy(4.dp)) {
+        Text(
+            "${if (value > 0.5f) "+" else ""}${value.toInt()}",
+            style = MaterialTheme.typography.labelSmall,
+            color = scheme.onSurfaceVariant,
+            maxLines = 1,
+        )
+        Box(
+            Modifier
+                .height(track)
+                .width(36.dp)
+                .wrapContentSize(align = Alignment.Center, unbounded = true),
+            contentAlignment = Alignment.Center,
+        ) {
+            Slider(
+                value = value,
+                onValueChange = onChange,
+                valueRange = -12f..12f,
+                steps = 23,
+                modifier = Modifier.requiredWidth(track).requiredHeight(36.dp).rotate(-90f),
+                colors = SliderDefaults.colors(
+                    thumbColor = scheme.onSurface,
+                    activeTrackColor = scheme.onSurface,
+                    inactiveTrackColor = scheme.onSurface.copy(alpha = 0.18f),
+                ),
+            )
+        }
+        Text(label, style = MaterialTheme.typography.labelSmall, color = scheme.onSurfaceVariant, maxLines = 1)
     }
 }
 

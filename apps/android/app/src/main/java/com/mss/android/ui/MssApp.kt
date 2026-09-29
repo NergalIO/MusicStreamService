@@ -11,8 +11,6 @@ import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.WindowInsets
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
-import androidx.compose.foundation.layout.offset
-import androidx.compose.ui.zIndex
 import androidx.compose.foundation.layout.ime
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.statusBarsPadding
@@ -47,6 +45,7 @@ import androidx.compose.runtime.getValue
 import androidx.compose.runtime.snapshotFlow
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.zIndex
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.platform.LocalView
 import androidx.compose.ui.text.style.TextOverflow
@@ -128,10 +127,15 @@ fun MssApp(
                 vm,
                 visible = spotifyVisible,
                 modifier = Modifier
-                    .zIndex(if (spotifyVisible) 2f else 0f)
-                    .offset(x = if (spotifyVisible) 0.dp else 4000.dp),
+                    .fillMaxSize()
+                    .zIndex(if (spotifyVisible) 2f else 0f),
             )
-            Box(Modifier.fillMaxSize().zIndex(if (spotifyVisible) 0f else 1f)) {
+            Box(
+                Modifier
+                    .fillMaxSize()
+                    .zIndex(if (spotifyVisible) 0f else 1f)
+                    .background(MaterialTheme.colorScheme.background),
+            ) {
                 if (session == null) {
                     LoginScreen()
                 } else {
@@ -178,14 +182,16 @@ private fun SpotifyWebLayer(vm: MssViewModel, visible: Boolean, modifier: Modifi
             },
             update = { frame ->
                 val view = frame.getChildAt(0) as? WebView ?: return@AndroidView
-                view.setLayerType(View.LAYER_TYPE_NONE, null)
+                view.setLayerType(View.LAYER_TYPE_HARDWARE, null)
                 view.importantForAccessibility = View.IMPORTANT_FOR_ACCESSIBILITY_NO
                 view.isFocusable = visible
                 view.isFocusableInTouchMode = visible
-                val shown = if (visible) View.VISIBLE else View.INVISIBLE
-                frame.visibility = shown
-                view.visibility = shown
-                frame.translationX = if (visible) 0f else frame.resources.displayMetrics.widthPixels * 4f
+                view.isClickable = visible
+                frame.visibility = View.VISIBLE
+                view.visibility = View.VISIBLE
+                frame.translationX = 0f
+                view.onResume()
+                view.resumeTimers()
                 if (visible) {
                     view.requestLayout()
                     view.invalidate()
@@ -222,7 +228,7 @@ private fun MainShell(vm: MssViewModel, nav: NavHostController) {
     }
 
     val hideTop = route in setOf(Routes.HOME, Routes.SEARCH, Routes.LIBRARY, Routes.MORE, Routes.NOW_PLAYING) ||
-        route.startsWith("source/")
+        route.startsWith("source/") || route.startsWith("artist/")
     ApplySystemBars(darkBackground = isSystemInDarkTheme() || route == Routes.NOW_PLAYING)
     val scheme = MaterialTheme.colorScheme
 
@@ -354,7 +360,7 @@ private fun MainShell(vm: MssViewModel, nav: NavHostController) {
                     NowPlayingScreen(
                         vm,
                         onBack = { nav.popBackStack() },
-                        onArtist = { nav.navigate(Routes.artist(it)) },
+                        onArtist = { track -> nav.navigate(Routes.artist(track)) },
                         onAlbum = { source, id -> nav.navigate(Routes.album(source, id)) },
                     )
                 }
@@ -381,9 +387,15 @@ private fun MainShell(vm: MssViewModel, nav: NavHostController) {
                     LaunchedEffect(s, id) { vm.openAlbum(s, id) }
                     CatalogList(vm, nav)
                 }
-                composable(Routes.ARTIST, listOf(navArgument("name") { type = NavType.StringType })) { e ->
+                composable(Routes.ARTIST, listOf(
+                    navArgument("source") { type = NavType.StringType },
+                    navArgument("id") { type = NavType.StringType },
+                    navArgument("name") { type = NavType.StringType },
+                )) { e ->
+                    val source = e.arguments?.getString("source") ?: "local"
+                    val id = e.arguments?.getString("id") ?: "-"
                     val name = e.arguments?.getString("name") ?: return@composable
-                    LaunchedEffect(name) { vm.openArtist(name) }
+                    LaunchedEffect(source, id, name) { vm.openArtist(name, source, id) }
                     CatalogList(vm, nav)
                 }
                 composable(Routes.SIMILAR, listOf(

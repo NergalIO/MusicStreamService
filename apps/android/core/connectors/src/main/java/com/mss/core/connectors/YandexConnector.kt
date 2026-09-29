@@ -11,6 +11,7 @@ import com.mss.core.model.PlaylistWithTracks
 import com.mss.core.model.SourceId
 import com.mss.core.model.TrackLyrics
 import com.mss.core.model.UnifiedAlbum
+import com.mss.core.model.UnifiedArtist
 import com.mss.core.model.UnifiedPlaylist
 import com.mss.core.model.UnifiedTrack
 import com.mss.core.model.WaveBatch
@@ -170,6 +171,29 @@ class YandexConnector @Inject constructor(
         )
         val results = data["playlists"]?.jsonObject?.get("results")?.jsonArray ?: return emptyList()
         return results.map { mapYandexPlaylist(it.jsonObject) }.take(limit)
+    }
+
+    suspend fun searchArtists(query: String, limit: Int = 20): List<UnifiedArtist> {
+        val data = apiGet<JsonObject>(
+            "/search?text=${encode(query)}&type=artist&page=0&pageSize=$limit",
+        )
+        val results = data["artists"]?.jsonObject?.get("results")?.jsonArray ?: return emptyList()
+        return results.mapNotNull { mapYandexArtist(it.jsonObject) }.take(limit)
+    }
+
+    suspend fun artistTracks(artistId: String, limit: Int = 50): List<UnifiedTrack> {
+        val popular = runCatching { artistProfile(artistId).popularTracks }.getOrDefault(emptyList())
+        if (popular.size >= limit) return popular.take(limit)
+        val data = runCatching {
+            apiGet<JsonObject>("/artists/${encode(artistId)}/tracks?page=0&page-size=${minOf(limit, 100)}")
+        }.getOrNull()
+        val extra = data?.get("tracks")?.jsonArray?.mapNotNull { el ->
+            val o = el.jsonObject
+            mapYandexTrack(o["track"]?.jsonObject ?: o)
+        }.orEmpty()
+        if (extra.isEmpty()) return popular.take(limit)
+        val seen = popular.map { it.id }.toMutableSet()
+        return (popular + extra.filter { seen.add(it.id) }).take(limit)
     }
 
     suspend fun suggest(part: String): List<String> {

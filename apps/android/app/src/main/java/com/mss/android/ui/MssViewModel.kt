@@ -125,6 +125,7 @@ class MssViewModel @Inject constructor(
         player.onToggleLike = {
             player.state.value.current?.let { toggleLike(it) }
         }
+        player.onError = { _error.value = it }
         viewModelScope.launch {
             combine(
                 player.state.map { it.current?.id }.distinctUntilChanged(),
@@ -228,6 +229,23 @@ class MssViewModel @Inject constructor(
             "artists" -> {
                 _searchArtists.value = when (source) {
                     SourceId.VK -> vk.searchArtists(query, 20)
+                    SourceId.SPOTIFY -> spotify.searchArtists(query, 20)
+                    SourceId.YANDEX -> yandex.searchArtists(query, 20)
+                    SourceId.LOCAL, null -> {
+                        val local = repo.artists(query).map { UnifiedArtist(SourceId.LOCAL, it.name, it.name) }
+                        val extra = buildList {
+                            if (spotify.authStatus() != AuthStatus.DISCONNECTED) {
+                                addAll(runCatching { spotify.searchArtists(query, 12) }.getOrDefault(emptyList()))
+                            }
+                            if (yandex.authStatus() != AuthStatus.DISCONNECTED) {
+                                addAll(runCatching { yandex.searchArtists(query, 12) }.getOrDefault(emptyList()))
+                            }
+                            if (vk.authStatus() != AuthStatus.DISCONNECTED) {
+                                addAll(runCatching { vk.searchArtists(query, 12) }.getOrDefault(emptyList()))
+                            }
+                        }
+                        local + extra
+                    }
                     else -> repo.artists(query).map { UnifiedArtist(SourceId.LOCAL, it.name, it.name) }
                 }
                 _tracks.value = emptyList()
@@ -296,10 +314,47 @@ class MssViewModel @Inject constructor(
         }
     }
 
-    fun openArtist(name: String) = launch {
-        val decoded = java.net.URLDecoder.decode(name, Charsets.UTF_8)
-        _detailTitle.value = decoded
-        _tracks.value = repo.artistTracks(decoded)
+    fun openArtist(name: String, source: String = "local", id: String = "-") = launch {
+        val decodedName = java.net.URLDecoder.decode(name, Charsets.UTF_8)
+        val decodedId = java.net.URLDecoder.decode(id, Charsets.UTF_8).takeIf { it.isNotBlank() && it != "-" }
+        _detailTitle.value = decodedName
+        _tracks.value = emptyList()
+        _tracks.value = loadArtistTracks(sourceFrom(source), decodedName, decodedId)
+    }
+
+    private suspend fun loadArtistTracks(source: SourceId, name: String, id: String?): List<UnifiedTrack> {
+        fun matchName(artists: List<UnifiedArtist>) =
+            artists.firstOrNull { it.name.equals(name, true) } ?: artists.firstOrNull()
+
+        return when (source) {
+            SourceId.SPOTIFY -> {
+                val artistId = id ?: matchName(runCatching { spotify.searchArtists(name, 8) }.getOrDefault(emptyList()))?.id
+                if (artistId.isNullOrBlank()) emptyList()
+                else spotify.artistTracks(artistId, name)
+            }
+            SourceId.YANDEX -> {
+                val artistId = id ?: matchName(runCatching { yandex.searchArtists(name, 8) }.getOrDefault(emptyList()))?.id
+                if (artistId.isNullOrBlank()) yandex.search(name, 40).filter { it.artist.contains(name, true) }
+                else yandex.artistTracks(artistId)
+            }
+            SourceId.VK -> vk.artistTracks(id ?: name, name, 50)
+            else -> {
+                val local = runCatching { repo.artistTracks(name) }.getOrDefault(emptyList())
+                if (local.isNotEmpty()) return local
+                if (spotify.authStatus() != AuthStatus.DISCONNECTED) {
+                    val found = loadArtistTracks(SourceId.SPOTIFY, name, null)
+                    if (found.isNotEmpty()) return found
+                }
+                if (yandex.authStatus() != AuthStatus.DISCONNECTED) {
+                    val found = loadArtistTracks(SourceId.YANDEX, name, null)
+                    if (found.isNotEmpty()) return found
+                }
+                if (vk.authStatus() != AuthStatus.DISCONNECTED) {
+                    return vk.artistTracks(name, name, 50)
+                }
+                emptyList()
+            }
+        }
     }
 
     fun createPlaylist(name: String) = launch {

@@ -34,4 +34,11 @@ class DeepLinkTest {
         assertNotNull(action)
         assertEquals("album/yandex/42", action!!.route)
     }
+
+    @Test
+    fun parseArtist() {
+        val action = parseMssLink("mss://artist/spotify/abc/Tame%20Impala")
+        assertNotNull(action)
+        assertEquals("artist/spotify/abc/Tame+Impala", action!!.route)
+    }
 }

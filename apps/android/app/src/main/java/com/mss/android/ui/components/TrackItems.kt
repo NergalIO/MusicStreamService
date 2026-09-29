@@ -46,7 +46,7 @@ import coil.request.ImageRequest
 import com.mss.core.model.UnifiedTrack
 
 fun coverRequest(context: android.content.Context, url: String?): ImageRequest {
-    val data = url?.trim()?.let { raw -> if (raw.startsWith("//")) "https:$raw" else raw }
+    val data = com.mss.core.connectors.SpotifyImageUrls.normalize(url)
     val builder = ImageRequest.Builder(context).data(data).crossfade(120)
     if (data != null && (data.contains("scdn.co") || data.contains("spotifycdn.com") || data.contains("spotify.com"))) {
         builder

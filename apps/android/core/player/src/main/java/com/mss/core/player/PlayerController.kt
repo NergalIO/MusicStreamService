@@ -138,6 +138,9 @@ class PlayerController @Inject constructor(
     @Volatile
     var onToggleLike: (() -> Unit)? = null
 
+    @Volatile
+    var onError: ((String) -> Unit)? = null
+
     fun setLiked(liked: Boolean) {
         if (_state.value.liked == liked) return
         _state.value = _state.value.copy(liked = liked)
@@ -207,7 +210,13 @@ class PlayerController @Inject constructor(
     }
 
     fun resume() {
-        if (usingSpotify) spotifyWeb.resume() else active.play()
+        if (usingSpotify) {
+            awaitingStart = true
+            spotifyWeb.wake()
+            spotifyWeb.resume()
+        } else {
+            active.play()
+        }
         _state.value = _state.value.copy(playing = true)
     }
 
@@ -288,7 +297,7 @@ class PlayerController @Inject constructor(
         if (track.source != SourceId.SPOTIFY) return
         val pos = _state.value.positionMs
         usingSpotify = true
-        active.pause()
+        silenceExo()
         scope.launch { spotifyWeb.play(track.id, pos) }
     }
 
@@ -298,9 +307,17 @@ class PlayerController @Inject constructor(
         val playing: Boolean
         if (usingSpotify) {
             val d = spotifyWeb.dom.value
-            pos = d.positionMs
-            dur = d.durationMs
-            playing = d.playing
+            val fallbackDur = _state.value.current?.durationMs ?: 0L
+            if (awaitingStart && !d.playing) {
+                pos = d.positionMs.takeIf { it > 0 } ?: _state.value.positionMs
+                dur = d.durationMs.takeIf { it > 0 } ?: fallbackDur
+                playing = true
+            } else {
+                if (d.playing) awaitingStart = false
+                pos = d.positionMs
+                dur = d.durationMs.takeIf { it > 0 } ?: fallbackDur
+                playing = d.playing
+            }
             if (d.ready && dur > 0 && pos >= dur - 900 && playing) onEnded()
         } else {
             pos = active.currentPosition
@@ -359,13 +376,31 @@ class PlayerController @Inject constructor(
             when (resolved) {
                 is ResolvedPlayback.SpotifyWeb -> {
                     usingSpotify = true
-                    active.pause()
-                    spotifyWeb.play(resolved.trackId)
-                    awaitingStart = false
-                    _state.value = _state.value.copy(playing = true)
+                    silenceExo()
+                    spotifyWeb.wake()
+                    runCatching { spotifyWeb.play(resolved.trackId) }
+                        .onSuccess {
+                            if (gen != playGen) return@launch
+                            val d = spotifyWeb.dom.value
+                            if (d.playing) awaitingStart = false
+                            _state.value = _state.value.copy(
+                                playing = true,
+                                durationMs = d.durationMs.takeIf { it > 0 } ?: track.durationMs ?: 0,
+                                positionMs = d.positionMs,
+                            )
+                        }
+                        .onFailure { err ->
+                            if (gen != playGen) return@launch
+                            awaitingStart = false
+                            usingSpotify = false
+                            restoreExoFocus()
+                            _state.value = _state.value.copy(playing = false)
+                            err.message?.let { onError?.invoke(it) }
+                        }
                 }
                 is ResolvedPlayback.Url -> {
                     usingSpotify = false
+                    restoreExoFocus()
                     val settings = preferences.loadPlaybackSettings()
                     val fade = crossfade && settings.crossfadeMs > 0 && track.source != SourceId.SPOTIFY
                     playUrl(track, resolved.url, fade, settings.crossfadeMs)
@@ -518,7 +553,7 @@ class PlayerController @Inject constructor(
                 if (usingSpotify) {
                     spotifyWeb.pollState()
                     spotifyTicks += 1
-                    if (spotifyTicks % 10 == 0 && deviceProbe?.isActive != true) {
+                    if (spotifyTicks % 20 == 0 && deviceProbe?.isActive != true && !awaitingStart && !_state.value.playing) {
                         deviceProbe = scope.launch { spotifyWeb.refreshDevices() }
                     }
                 }
@@ -537,14 +572,32 @@ class PlayerController @Inject constructor(
     }
 
     private fun buildExo(): ExoPlayer {
-        val attrs = AudioAttributes.Builder()
-            .setContentType(C.AUDIO_CONTENT_TYPE_MUSIC)
-            .setUsage(C.USAGE_MEDIA)
-            .build()
         return ExoPlayer.Builder(context).build().apply {
-            setAudioAttributes(attrs, true)
+            setAudioAttributes(musicAttrs(), true)
             playWhenReady = true
         }
+    }
+
+    private fun musicAttrs() = AudioAttributes.Builder()
+        .setContentType(C.AUDIO_CONTENT_TYPE_MUSIC)
+        .setUsage(C.USAGE_MEDIA)
+        .build()
+
+    private fun silenceExo() {
+        val attrs = musicAttrs()
+        listOf(exoA, exoB).forEach { player ->
+            player.playWhenReady = false
+            player.pause()
+            player.stop()
+            player.clearMediaItems()
+            player.setAudioAttributes(attrs, false)
+        }
+    }
+
+    private fun restoreExoFocus() {
+        val attrs = musicAttrs()
+        exoA.setAudioAttributes(attrs, true)
+        exoB.setAudioAttributes(attrs, true)
     }
 
     private fun applySettings(settings: PlaybackSettings) {

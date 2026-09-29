@@ -69,6 +69,8 @@ class SpotifyWebSession @Inject constructor(
     val visibleForLogin: StateFlow<Boolean> = _visibleForLogin
 
     @Volatile private var hashes: Map<String, String> = emptyMap()
+    /** Пока true, живые cookie веб-плеера не считаются новым входом. */
+    @Volatile private var signedOut = false
     private var loginAgent = false
     private val httpIds = AtomicInteger()
     private val httpWaiters = ConcurrentHashMap<String, CompletableDeferred<Pair<Int, String>>>()
@@ -118,7 +120,7 @@ class SpotifyWebSession @Inject constructor(
         view.settings.displayZoomControls = false
         view.settings.userAgentString = DESKTOP_UA
         view.setBackgroundColor(android.graphics.Color.TRANSPARENT)
-        view.setLayerType(WebView.LAYER_TYPE_NONE, null)
+        view.setLayerType(WebView.LAYER_TYPE_HARDWARE, null)
         view.isHorizontalScrollBarEnabled = false
         view.addJavascriptInterface(JsBridge(), "MssSpotify")
         view.webViewClient = object : WebViewClient() {
@@ -129,7 +131,7 @@ class SpotifyWebSession @Inject constructor(
                 val auth = h.entries.find { it.key.equals("authorization", true) }?.value
                 val client = h.entries.find { it.key.equals("client-token", true) }?.value
                 val ver = h.entries.find { it.key.equals("spotify-app-version", true) }?.value
-                if (auth?.startsWith("Bearer ") == true && !client.isNullOrBlank()) {
+                if (!signedOut && auth?.startsWith("Bearer ") == true && !client.isNullOrBlank()) {
                     headers = SpotifyWebHeaders(auth, client, ver.orEmpty())
                     if (!_loggedIn.value) markLoggedIn()
                 }
@@ -137,18 +139,30 @@ class SpotifyWebSession @Inject constructor(
             }
 
             override fun onPageFinished(view: WebView?, url: String?) {
-                if (hasLoginCookies()) markLoggedIn()
+                if (!signedOut && hasLoginCookies()) markLoggedIn()
                 if (loginAgent) eval(FIT_MOBILE)
                 injectHelpers()
                 if (_loggedIn.value && !loginAgent) eval(SCAN_OPERATIONS)
             }
         }
         restorePersistedCookies()
-        if (hasLoginCookies() || hasPersistedSession()) markLoggedIn()
+        if (!signedOut && (hasLoginCookies() || hasPersistedSession())) markLoggedIn()
         view.loadUrl(HOME)
+        wake()
+    }
+
+    /** Chromium глушит HTML5 audio, если WebView на паузе или INVISIBLE. */
+    fun wake() {
+        main.post {
+            val view = webView ?: return@post
+            view.visibility = android.view.View.VISIBLE
+            view.onResume()
+            view.resumeTimers()
+        }
     }
 
     fun showLogin() {
+        signedOut = false
         _visibleForLogin.value = true
         loginAgent = true
         main.post {
@@ -164,6 +178,7 @@ class SpotifyWebSession @Inject constructor(
         _visibleForLogin.value = false
         if (!loginAgent) return
         loginAgent = false
+        wake()
         ensurePlayer()
     }
 
@@ -245,6 +260,7 @@ class SpotifyWebSession @Inject constructor(
     }
 
     fun logout() {
+        signedOut = true
         _visibleForLogin.value = false
         _loggedIn.value = false
         _remoteDevice.value = null
@@ -255,12 +271,14 @@ class SpotifyWebSession @Inject constructor(
         vault.delete(FLAG_KEY)
         main.post {
             clearSpotifyCookies()
-            webView?.settings?.userAgentString = DESKTOP_UA
-            webView?.loadUrl(HOME)
+            val view = webView ?: return@post
+            view.stopLoading()
+            view.loadUrl("about:blank")
         }
     }
 
     private fun markLoggedIn() {
+        if (signedOut) return
         persistCookies()
         if (!_loggedIn.value) _loggedIn.value = true
     }
@@ -296,16 +314,25 @@ class SpotifyWebSession @Inject constructor(
 
     private fun clearSpotifyCookies() {
         val cm = CookieManager.getInstance()
+        val names = linkedSetOf<String>()
         for (url in SpotifyCookies.URLS) {
             cm.getCookie(url)?.split(';')?.forEach { part ->
                 val name = part.substringBefore('=').trim()
-                if (name.isNotBlank()) cm.setCookie(url, "$name=; Max-Age=0; Path=/")
+                if (name.isNotBlank()) names += name
+            }
+        }
+        val expired = "Max-Age=0; Expires=Thu, 01 Jan 1970 00:00:00 GMT; Path=/; Secure"
+        for (url in SpotifyCookies.URLS) {
+            for (name in names) {
+                cm.setCookie(url, "$name=; $expired")
+                cm.setCookie(url, "$name=; $expired; Domain=.spotify.com")
             }
         }
         cm.flush()
     }
 
     suspend fun play(trackId: String, positionMs: Long = 0) {
+        wake()
         pageMutex.withLock {
             val id = httpIds.incrementAndGet().toString()
             val done = CompletableDeferred<Unit>()
@@ -315,25 +342,61 @@ class SpotifyWebSession @Inject constructor(
                 (async () => {
                   try {
                     $HELPERS
-                    const href = '/track/$trackId';
-                    if (!location.pathname.includes('$trackId')) location.href = 'https://open.spotify.com' + href;
+                    const path = '/track/$trackId';
                     for (let i = 0; i < 80 && !q('[data-testid="control-button-playpause"]'); i++) await sleep(250);
-                    const btn = q('[data-testid="control-button-playpause"]');
-                    if (btn && !isPauseLabel(btn)) btn.click();
-                    if ($positionMs > 0) {
+                    if (!q('[data-testid="control-button-playpause"]')) throw new Error('Веб-плеер Spotify не загрузился');
+                    if (location.pathname !== path) {
+                      const before = q('main h1')?.textContent || '';
+                      history.pushState({}, '', path);
+                      dispatchEvent(new PopStateEvent('popstate', { state: {} }));
+                      for (let i = 0; i < 20 && (q('main h1')?.textContent || '') === before; i++) await sleep(250);
+                      if ((q('main h1')?.textContent || '') === before) {
+                        location.assign('https://open.spotify.com' + path);
+                        for (let i = 0; i < 80 && !q('[data-testid="control-button-playpause"]'); i++) await sleep(250);
+                      }
+                    }
+                    let button = null;
+                    let heading = '';
+                    for (let i = 0; i < 80; i++) {
+                      await sleep(250);
+                      heading = (q('main h1')?.textContent || '').trim();
+                      button = q('main [data-testid="action-bar-row"] [data-testid="play-button"]');
+                      if (button && heading && location.pathname.indexOf('$trackId') >= 0) break;
+                      button = null;
+                    }
+                    if (!button) {
+                      heading = (q('main h1')?.textContent || q('[data-testid="context-item-info-title"]')?.textContent || '').trim();
+                      button = q('[data-testid="control-button-playpause"]');
+                    }
+                    if (!button) throw new Error('Не удалось открыть трек в веб-плеере Spotify');
+                    if (!isPauseLabel(button)) button.click();
+                    for (let i = 0; i < 40; i++) {
+                      await sleep(250);
+                      const s = readState();
+                      if (s.playing && (s.title === heading || !heading || s.ad)) break;
+                    }
+                    const state = readState();
+                    if (!state.playing && !state.ad) {
+                      throw new Error('Spotify не запустил трек — выберите это приложение в устройствах Spotify');
+                    }
+                    MssSpotify.onState(JSON.stringify(state));
+                    if ($positionMs > 0 && !state.ad && Math.abs(state.positionMs - $positionMs) > 2000) {
                       const progress = q('[data-testid="playback-progressbar"] input[type="range"]');
                       if (progress) setRange(progress, $positionMs);
                     }
-                    MssSpotify.onState(JSON.stringify(readState()));
-                  } finally {
-                    MssSpotify.onPlayDone('$id');
+                    MssSpotify.onPlayDone('$id', '');
+                  } catch (e) {
+                    MssSpotify.onPlayDone('$id', String(e && e.message || e));
                   }
                 })();
                 """.trimIndent(),
             )
-            withTimeoutOrNull(25_000) { done.await() }
-            playWaiters.remove(id)
-            runCatching { applyDevices(queryDevices("list", "")) }
+            try {
+                withTimeoutOrNull(30_000) { done.await() }
+                    ?: throw ConnectorException("Spotify не ответил")
+            } finally {
+                playWaiters.remove(id)
+            }
         }
     }
 
@@ -455,7 +518,11 @@ class SpotifyWebSession @Inject constructor(
 
     private fun eval(script: String) {
         val view = webView ?: return
-        main.post { view.evaluateJavascript(script, null) }
+        main.post {
+            view.onResume()
+            view.resumeTimers()
+            view.evaluateJavascript(script, null)
+        }
     }
 
     inner class JsBridge {
@@ -473,8 +540,10 @@ class SpotifyWebSession @Inject constructor(
         }
 
         @JavascriptInterface
-        fun onPlayDone(id: String) {
-            playWaiters.remove(id)?.complete(Unit)
+        fun onPlayDone(id: String, error: String) {
+            val waiter = playWaiters.remove(id) ?: return
+            if (error.isNotBlank()) waiter.completeExceptionally(ConnectorException(error))
+            else waiter.complete(Unit)
         }
 
         @JavascriptInterface

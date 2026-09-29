@@ -86,7 +86,7 @@ class SpotifyConnector @Inject constructor(
                     title = p.name,
                     owner = p.owner.displayName,
                     description = p.description,
-                    coverUrl = p.images.firstOrNull()?.url,
+                    coverUrl = SpotifyImageUrls.normalize(p.images.firstOrNull()?.url),
                     trackCount = p.tracks?.total ?: p.items?.total,
                 )
             }
@@ -142,7 +142,7 @@ class SpotifyConnector @Inject constructor(
             title = meta.name,
             owner = meta.owner.displayName,
             description = meta.description,
-            coverUrl = meta.images.firstOrNull()?.url,
+            coverUrl = SpotifyImageUrls.normalize(meta.images.firstOrNull()?.url),
             trackCount = tracks.size,
             tracks = tracks,
         )
@@ -156,14 +156,14 @@ class SpotifyConnector @Inject constructor(
         if (loadTokens() == null) throw ConnectorException("Spotify не подключён")
         val meta = spotifyGet<SpotifyAlbumDetail>("/albums/$id", emptyMap())
         val tracks = meta.tracks.items.filterNotNull().map { t ->
-            mapTrack(t).copy(album = meta.name, coverUrl = meta.images.firstOrNull()?.url)
+            mapTrack(t).copy(album = meta.name, coverUrl = SpotifyImageUrls.normalize(meta.images.firstOrNull()?.url))
         }
         return com.mss.core.model.AlbumWithTracks(
             source = SourceId.SPOTIFY,
             id = id,
             title = meta.name,
             artist = meta.artists.joinToString { it.name },
-            coverUrl = meta.images.firstOrNull()?.url,
+            coverUrl = SpotifyImageUrls.normalize(meta.images.firstOrNull()?.url),
             trackCount = tracks.size,
             tracks = tracks,
         )
@@ -183,6 +183,22 @@ class SpotifyConnector @Inject constructor(
         awaitWebPlayer()
         runCatching { pathfinder.homeFeed() }.getOrDefault(emptyList())
     } else emptyList()
+
+    suspend fun searchArtists(query: String, limit: Int): List<com.mss.core.model.UnifiedArtist> {
+        if (useWebCatalog()) {
+            awaitWebPlayer()
+            return pathfinder.searchArtists(query, limit)
+        }
+        return emptyList()
+    }
+
+    suspend fun artistTracks(artistId: String, artistName: String?, limit: Int = 50): List<UnifiedTrack> {
+        if (useWebCatalog()) {
+            awaitWebPlayer()
+            return pathfinder.artistTracks(artistId, artistName, limit)
+        }
+        return emptyList()
+    }
 
     private fun useWebCatalog(): Boolean =
         web.loggedIn.value || web.headers != null || web.hasPersistedSession()
@@ -243,9 +259,10 @@ class SpotifyConnector @Inject constructor(
         id = t.id,
         title = t.name,
         artist = t.artists.joinToString { it.name },
+        artists = t.artists.map { com.mss.core.model.ArtistRef(it.id.orEmpty(), it.name) }.takeIf { it.isNotEmpty() },
         album = t.album?.name,
         durationMs = t.durationMs,
-        coverUrl = t.album?.images?.firstOrNull()?.url,
+        coverUrl = SpotifyImageUrls.normalize(t.album?.images?.firstOrNull()?.url),
         playable = true,
     )
 
@@ -322,7 +339,7 @@ private data class SpotifyTrack(
 )
 
 @Serializable
-private data class SpotifyArtistRef(val name: String)
+private data class SpotifyArtistRef(val name: String, val id: String? = null)
 
 @Serializable
 private data class SpotifyAlbumRef(val name: String? = null, val images: List<SpotifyImage> = emptyList())

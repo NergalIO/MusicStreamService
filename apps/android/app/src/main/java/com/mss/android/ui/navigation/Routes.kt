@@ -1,5 +1,8 @@
 package com.mss.android.ui.navigation
 
+import com.mss.core.model.UnifiedArtist
+import com.mss.core.model.UnifiedTrack
+
 data class DeepLinkAction(
     val route: String,
     val playSource: String? = null,
@@ -33,7 +36,10 @@ fun parseMssLink(url: String): DeepLinkAction? {
         "playlist" -> if (parts.getOrNull(0) == "local" && parts.size >= 2) {
             DeepLinkAction(Routes.mssPlaylist(parts[1]))
         } else if (parts.size >= 2) DeepLinkAction(Routes.playlist(parts[0], parts[1])) else null
-        "artist" -> DeepLinkAction(Routes.artist(parts.firstOrNull() ?: return null))
+        "artist" -> when {
+            parts.size >= 3 -> DeepLinkAction(Routes.artist(parts[2], parts[0], parts[1]))
+            else -> DeepLinkAction(Routes.artist(parts.firstOrNull() ?: return null))
+        }
         "wave" -> DeepLinkAction(Routes.WAVE)
         "search" -> DeepLinkAction(Routes.SEARCH)
         "library" -> when (parts.firstOrNull()) {
@@ -76,14 +82,24 @@ object Routes {
     const val MSS_PLAYLIST = "playlists/{id}"
     const val EXT_PLAYLIST = "playlist/{source}/{id}"
     const val ALBUM = "album/{source}/{id}"
-    const val ARTIST = "artist/{name}"
+    const val ARTIST = "artist/{source}/{id}/{name}"
     const val SIMILAR = "similar/{source}/{id}"
     const val SOURCE_HOME = "source/{source}"
 
     fun mssPlaylist(id: String) = "playlists/$id"
     fun playlist(source: String, id: String) = "playlist/$source/${java.net.URLEncoder.encode(id, Charsets.UTF_8)}"
     fun album(source: String, id: String) = "album/$source/${java.net.URLEncoder.encode(id, Charsets.UTF_8)}"
-    fun artist(name: String) = "artist/${java.net.URLEncoder.encode(name, Charsets.UTF_8)}"
+    fun artist(name: String, source: String = "local", id: String = "-"): String {
+        val safeId = id.ifBlank { "-" }
+        return "artist/$source/${java.net.URLEncoder.encode(safeId, Charsets.UTF_8)}/${java.net.URLEncoder.encode(name, Charsets.UTF_8)}"
+    }
+
+    fun artist(track: UnifiedTrack): String {
+        val ref = track.artists?.firstOrNull()
+        return artist(ref?.name ?: track.artist, track.source.name.lowercase(), ref?.id ?: "-")
+    }
+
+    fun artist(item: UnifiedArtist): String = artist(item.name, item.source.name.lowercase(), item.id)
     fun similar(source: String, id: String) = "similar/$source/${java.net.URLEncoder.encode(id, Charsets.UTF_8)}"
     fun sourceHome(source: String) = "source/$source"
     fun lobbyRoom(id: String) = "lobby/$id"
