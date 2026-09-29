@@ -166,7 +166,7 @@ export function VkLoginDialog() {
 
               {method === 'sms' && step === 'sms' && (
                 <p className="text-sm leading-relaxed text-muted">
-                  Откроется страница VK. Войдите по номеру и коду из SMS, затем подтвердите вход.
+                  Откроется страница VK ID. Войдите по номеру и коду из SMS — токен подхватится автоматически.
                 </p>
               )}
 

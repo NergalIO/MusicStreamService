@@ -3,14 +3,17 @@ import {
   kateAuthorizeUrl,
   vkSmsLoginUrl,
   vkQrDisplayCode,
+  vkWebLoginStart,
   normalizeQrConfirmCode,
   normalizeVkPhone,
+  oauthPayloadFromRedirectUrl,
   oauthRedirectError,
   parseConnectAuthorize,
   parseKateOAuthRedirect,
   parseValidateAccount,
   parseVkIdAnonymousToken,
   parseVkIdAuthToken,
+  qrApprovedFields,
   unixOrDurationToMs,
   vkOtpAlreadySent,
 } from '../src/vk-auth.js';
@@ -117,11 +120,37 @@ describe('parseKateOAuthRedirect', () => {
     expect(kateAuthorizeUrl()).toContain('display=mobile');
   });
 
-  it('builds sms login url on m.vk.com, not oauth authorize', () => {
+  it('builds sms login url on id.vk.com, not oauth authorize or qr deep-link', () => {
     const url = vkSmsLoginUrl({ authUrl: 'https://oauth.vk.com/authorize?client_id=2685278', authCode: 'abc' });
-    expect(url).toContain('m.vk.com/login');
+    expect(url).toContain('id.vk.com');
     expect(url).not.toContain('oauth.vk.com/authorize');
-    expect(url).toContain(encodeURIComponent('https://qr.vk.ru/ca?q=abc'));
+    const start = vkWebLoginStart(url);
+    expect(start.start).toMatch(/id\.vk\.com/);
+    expect(start.start).not.toContain('qr.vk.ru');
+    expect(start.confirm).toContain('qr.vk.ru/ca?q=abc');
+  });
+
+  it('does not load m.vk.com/login?to=qr.vk.ru as the window start', () => {
+    const start = vkWebLoginStart('https://m.vk.com/login?to=https%3A%2F%2Fqr.vk.ru%2Fca%3Fq%3DtMLiLl');
+    expect(start.start).toBe('https://id.vk.com/');
+    expect(start.confirm).toContain('qr.vk.ru/ca?q=tMLiLl');
+  });
+
+  it('reads oauth tokens from a redirect location', () => {
+    expect(oauthPayloadFromRedirectUrl('https://oauth.vk.com/blank.html#access_token=tok&user_id=9')).toMatchObject({
+      accessToken: 'tok',
+      userId: 9,
+    });
+  });
+
+  it('keeps super_app_token even when the QR payload is partial', () => {
+    const fields = qrApprovedFields({
+      status: 2,
+      is_partial: true,
+      super_app_token: 'sat',
+    });
+    expect(fields).toMatchObject({ isPartial: true, superApp: 'sat' });
+    expect(fields.access).toBeUndefined();
   });
 
   it('shows short qr codes only', () => {
@@ -159,7 +188,7 @@ describe('parseConnectAuthorize', () => {
       type: 'okay',
       data: { silent_token: 'st', uuid: 'u1', user_id: 42 },
     });
-    expect(r).toEqual({ silentToken: 'st', silentUuid: 'u1', userId: 42, accessToken: undefined });
+    expect(r).toEqual({ silentToken: 'st', silentUuid: 'u1', userId: 42, accessToken: undefined, authUserHash: undefined });
   });
 
   it('maps wrong otp', () => {

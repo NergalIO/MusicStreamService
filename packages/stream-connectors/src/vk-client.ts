@@ -33,6 +33,7 @@ export {
   VK_KATE_USER_AGENT,
   kateAuthorizeUrl,
   parseKateOAuthRedirect,
+  vkWebLoginStart,
   type VkTokenResponse,
 } from './vk-auth.js';
 
@@ -265,8 +266,13 @@ export class VkClient {
         if (oauthErr) throw new VkAuthError(oauthErr);
         const parsed = parseKateOAuthRedirect(raced.url);
         if (parsed?.access_token) {
-          this.saveTokens(await kateTokenFromAndroidToken(parsed.access_token, signal));
-          return { kind: 'done' };
+          try {
+            this.saveTokens(await kateTokenFromAndroidToken(parsed.access_token, signal));
+            return { kind: 'done' };
+          } catch {
+            this.saveTokens(await materializeKateToken(parsed));
+            return { kind: 'done' };
+          }
         }
         if (parsed) {
           this.saveTokens(await materializeKateToken(parsed));

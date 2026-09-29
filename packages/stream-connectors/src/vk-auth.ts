@@ -78,6 +78,7 @@ export interface ConnectAuthSuccess {
   userId?: number;
   silentToken?: string;
   silentUuid?: string;
+  authUserHash?: string;
 }
 
 type Json = Record<string, unknown>;
@@ -135,11 +136,40 @@ export function vkQrDisplayCode(authCode: string): string | undefined {
   return undefined;
 }
 
-/** Официальный мобильный логин VK (SMS). Kate/Android authorize в вебе даёт «direct auth». */
+export const VK_ID_LOGIN_URL = 'https://id.vk.com/';
+export const VK_MOBILE_LOGIN_URL = 'https://m.vk.com/login';
+
+/**
+ * Стартовая страница окна и URL подтверждения QR.
+ * `m.vk.com/login?to=qr.vk.ru` в Electron даёт ERR_FAILED — грузим id.vk.com, QR открываем после входа.
+ */
+export function vkWebLoginStart(url: string): { start: string; confirm?: string } {
+  try {
+    const parsed = new URL(url);
+    const to = parsed.searchParams.get('to') ?? undefined;
+    if (/^m\.vk\.(com|ru)$/i.test(parsed.hostname) && parsed.pathname.includes('login')) {
+      return { start: VK_ID_LOGIN_URL, confirm: to };
+    }
+    if (/^qr\.vk\.(ru|com)$/i.test(parsed.hostname)) {
+      return { start: VK_ID_LOGIN_URL, confirm: url };
+    }
+    if (/^id\.vk\.(ru|com)$/i.test(parsed.hostname)) {
+      return { start: `${parsed.origin}/`, confirm: to && /qr\.vk\./i.test(to) ? to : undefined };
+    }
+    if (/oauth\.vk\.(com|ru)$/i.test(parsed.hostname)) {
+      return { start: VK_ID_LOGIN_URL };
+    }
+    return { start: url };
+  } catch {
+    return { start: VK_ID_LOGIN_URL };
+  }
+}
+
+/** Официальный VK ID (SMS). Kate/Android authorize в вебе даёт «direct auth». */
 export function vkSmsLoginUrl(session: Pick<QrSession, 'authUrl' | 'authCode'>): string {
   const confirm = vkQrBrowserUrl(session);
-  if (/m\.vk\.(com|ru)\/login/i.test(confirm)) return confirm;
-  return `https://m.vk.com/login?to=${encodeURIComponent(confirm)}`;
+  if (/^https:\/\/id\.vk\./i.test(confirm)) return confirm;
+  return `${VK_ID_LOGIN_URL}?to=${encodeURIComponent(confirm)}`;
 }
 
 export function kateAuthorizeUrl(): string {
@@ -281,6 +311,28 @@ async function readJson(res: Response): Promise<Json> {
   }
 }
 
+export function oauthPayloadFromRedirectUrl(url: string): ConnectAuthSuccess | null {
+  const parsed = parseKateOAuthRedirect(url);
+  if (!parsed) return null;
+  return {
+    accessToken: parsed.access_token,
+    userId: parsed.user_id,
+    silentToken: parsed.silent_token,
+    silentUuid: parsed.uuid,
+  };
+}
+
+function syntheticConnectResponse(payload: ConnectAuthSuccess): Response {
+  return new Response(JSON.stringify({ type: 'okay', data: {
+    access_token: payload.accessToken,
+    user_id: payload.userId,
+    silent_token: payload.silentToken,
+    uuid: payload.silentUuid,
+    silent_token_uuid: payload.silentUuid,
+    auth_user_hash: payload.authUserHash,
+  } }), { status: 200, headers: { 'Content-Type': 'application/json' } });
+}
+
 /** Node fetch теряет Set-Cookie на промежуточных 302 — VK ID без remix-cookie сразу даёт flood. */
 async function fetchFollow(url: string, init: RequestInit, cookies?: Map<string, string>, hops = 0): Promise<Response> {
   if (hops > 8) throw new VkAuthError('Слишком много редиректов VK');
@@ -293,6 +345,8 @@ async function fetchFollow(url: string, init: RequestInit, cookies?: Map<string,
     if (!loc) return res;
     await res.arrayBuffer();
     const next = new URL(loc, url).href;
+    const oauth = oauthPayloadFromRedirectUrl(next);
+    if (oauth?.accessToken || oauth?.silentToken) return syntheticConnectResponse(oauth);
     const keepBody = res.status === 307 || res.status === 308;
     return fetchFollow(
       next,
@@ -564,6 +618,7 @@ async function postLoginAct(
         'User-Agent': BROWSER_UA,
         Origin: 'https://id.vk.com',
         Referer: 'https://id.vk.com/',
+        'X-Origin': 'https://id.vk.com',
       },
       body: params,
     },
@@ -585,33 +640,7 @@ async function postLoginAct(
   }
 }
 
-async function exchangeSuperAppToken(superAppToken: string, signal?: AbortSignal): Promise<VkTokenResponse> {
-  const cookies = new Map<string, string>();
-  const to = Buffer.from('https://oauth.vk.com/blank.html', 'utf8').toString('base64');
-  await postLoginAct(
-    'connect_code_auth',
-    {
-      token: superAppToken,
-      app_id: VK_KATE_CLIENT_ID,
-      oauth_scope: KATE_SCOPE_ALL,
-      oauth_force_hash: '1',
-      is_registration: '0',
-      oauth_response_type: 'token',
-      is_oauth_migrated_flow: '1',
-      version: '1',
-      to,
-    },
-    cookies,
-    signal,
-    true,
-  );
-  const json = await postLoginAct(
-    'connect_internal',
-    { app_id: VK_KATE_CLIENT_ID, oauth_version: '1', version: '1' },
-    cookies,
-    signal,
-  );
-  const parsed = parseConnectAuthorize(json);
+async function tokenFromConnectSuccess(parsed: ConnectAuthSuccess, signal?: AbortSignal): Promise<VkTokenResponse | null> {
   if (parsed.silentToken) {
     return materializeKateToken({
       silent_token: parsed.silentToken,
@@ -626,7 +655,133 @@ async function exchangeSuperAppToken(superAppToken: string, signal?: AbortSignal
       return materializeKateToken({ access_token: parsed.accessToken, user_id: parsed.userId });
     }
   }
-  throw new VkAuthError('VK не вернул токен после подтверждения QR');
+  return null;
+}
+
+async function exchangeSuperAppWithApp(
+  superAppToken: string,
+  appId: string,
+  scope: string,
+  signal?: AbortSignal,
+): Promise<VkTokenResponse | null> {
+  const cookies = new Map<string, string>();
+  const to = Buffer.from('https://oauth.vk.com/blank.html', 'utf8').toString('base64');
+  const first = await postLoginAct(
+    'connect_code_auth',
+    {
+      token: superAppToken,
+      app_id: appId,
+      oauth_scope: scope,
+      oauth_force_hash: '1',
+      is_registration: '0',
+      oauth_response_type: 'token',
+      is_oauth_migrated_flow: '1',
+      version: '1',
+      to,
+    },
+    cookies,
+    signal,
+    true,
+  );
+  try {
+    const fromRedirect = await tokenFromConnectSuccess(parseConnectAuthorize(first), signal);
+    if (fromRedirect) return fromRedirect;
+  } catch {
+    /* connect_code_auth часто отдаёт HTML/пустой JSON — дальше connect_internal */
+  }
+  const json = await postLoginAct(
+    'connect_internal',
+    { app_id: appId, oauth_version: '1', version: '1' },
+    cookies,
+    signal,
+    true,
+  );
+  if (!isRecord(json) || !Object.keys(json).length) return null;
+  try {
+    return await tokenFromConnectSuccess(parseConnectAuthorize(json), signal);
+  } catch {
+    return null;
+  }
+}
+
+async function exchangeSuperAppToken(superAppToken: string, signal?: AbortSignal): Promise<VkTokenResponse> {
+  const kate = await exchangeSuperAppWithApp(superAppToken, VK_KATE_CLIENT_ID, KATE_SCOPE_ALL, signal).catch(() => null);
+  if (kate) return kate;
+  const android = await exchangeSuperAppWithApp(superAppToken, ANDROID_CLIENT_ID, 'all', signal).catch(() => null);
+  if (android) return android;
+  try {
+    return await kateTokenFromAndroidToken(superAppToken, signal);
+  } catch {
+    /* super_app_token не всегда принимается как access_token */
+  }
+  try {
+    return await materializeKateToken({ access_token: superAppToken });
+  } catch {
+    throw new VkAuthError('VK не вернул токен после подтверждения QR');
+  }
+}
+
+export type QrApprovedFields = {
+  access?: string;
+  silent?: string;
+  superApp?: string;
+  userId?: number;
+  silentUuid?: string;
+  uuid?: string;
+  isPartial: boolean;
+};
+
+export function qrApprovedFields(r: Json): QrApprovedFields {
+  return {
+    access: typeof r.access_token === 'string' ? r.access_token : undefined,
+    silent: typeof r.silent_token === 'string' ? r.silent_token : undefined,
+    superApp: typeof r.super_app_token === 'string' ? r.super_app_token : undefined,
+    userId: typeof r.user_id === 'number' ? r.user_id : undefined,
+    silentUuid: typeof r.silent_token_uuid === 'string' ? r.silent_token_uuid : undefined,
+    uuid: typeof r.uuid === 'string' ? r.uuid : undefined,
+    isPartial: r.is_partial === true,
+  };
+}
+
+async function mintApprovedQr(fields: QrApprovedFields, signal: AbortSignal | undefined, mintKate: boolean): Promise<VkTokenResponse | null> {
+  if (!mintKate) {
+    if (fields.access) {
+      return materializeKateToken({ access_token: fields.access, user_id: fields.userId });
+    }
+    if (fields.silent) {
+      return materializeKateToken({
+        silent_token: fields.silent,
+        silent_token_uuid: fields.silentUuid,
+        uuid: fields.uuid,
+      });
+    }
+    return null;
+  }
+  if (fields.superApp) {
+    try {
+      return await exchangeSuperAppToken(fields.superApp, signal);
+    } catch {
+      if (!fields.access) return null;
+      try {
+        return await kateTokenFromAndroidToken(fields.access, signal);
+      } catch {
+        return null;
+      }
+    }
+  }
+  if (fields.isPartial && fields.access) {
+    return kateTokenFromAndroidToken(fields.access, signal);
+  }
+  if (fields.access || fields.silent) {
+    return materializeKateToken({
+      access_token: fields.access,
+      user_id: fields.userId,
+      silent_token: fields.silent,
+      silent_token_uuid: fields.silentUuid,
+      uuid: fields.uuid,
+    });
+  }
+  return null;
 }
 
 export async function checkQr(
@@ -640,8 +795,8 @@ export async function checkQr(
     {
       anonymous_token: session.anonymToken,
       auth_hash: session.authHash,
-      web_auth: '1',
       v: AUTH_API_VERSION,
+      web_auth: '1',
       ...extra,
     },
     undefined,
@@ -652,25 +807,21 @@ export async function checkQr(
   if (r.status === 3) return { status: 3, declined: true };
   if (r.status === 4) return { status: 4, expired: true };
   if (r.status === 2) {
-    const access = typeof r.access_token === 'string' ? r.access_token : undefined;
-    const silent = typeof r.silent_token === 'string' ? r.silent_token : undefined;
-    const superApp = typeof r.super_app_token === 'string' ? r.super_app_token : undefined;
-    if (r.is_partial === true) {
-      if (mintKate && access) return { status: 2, token: await kateTokenFromAndroidToken(access, signal) };
-      throw new VkAuthError('VK выдал неполный токен. Попробуйте SMS или пароль');
+    const fields = qrApprovedFields(r);
+    const minted = await mintApprovedQr(fields, signal, mintKate);
+    if (minted) return { status: 2, token: minted };
+    if (mintKate && extra.web_auth !== '0') {
+      try {
+        return await checkQr(session, signal, { ...extra, web_auth: '0' }, mintKate);
+      } catch {
+        /* ниже общее сообщение */
+      }
     }
-    if (superApp && !access && !silent) {
-      if (mintKate) return { status: 2, token: await exchangeSuperAppToken(superApp, signal) };
-      throw new VkAuthError('VK выдал неполный токен. Попробуйте SMS или пароль');
-    }
-    const token = await materializeKateToken({
-      access_token: access,
-      user_id: typeof r.user_id === 'number' ? r.user_id : undefined,
-      silent_token: silent,
-      silent_token_uuid: typeof r.silent_token_uuid === 'string' ? r.silent_token_uuid : undefined,
-      uuid: typeof r.uuid === 'string' ? r.uuid : undefined,
-    });
-    return { status: 2, token };
+    throw new VkAuthError(
+      mintKate
+        ? 'VK не вернул токен после подтверждения QR'
+        : 'VK выдал неполный токен. Попробуйте SMS или пароль',
+    );
   }
   return {
     status: r.status === 1 || r.status === 5 ? r.status : 0,
@@ -805,11 +956,14 @@ export function parseConnectAuthorize(json: Json): ConnectAuthSuccess {
     throw new VkAuthError(desc || 'VK отклонил вход по SMS');
   }
   const data = isRecord(json.data) ? json.data : json;
+  const userIdRaw = data.user_id;
+  const userId = typeof userIdRaw === 'number' ? userIdRaw : typeof userIdRaw === 'string' ? Number(userIdRaw) : undefined;
   return {
     accessToken: typeof data.access_token === 'string' ? data.access_token : undefined,
-    userId: typeof data.user_id === 'number' ? data.user_id : undefined,
+    userId: userId && userId > 0 ? userId : undefined,
     silentToken: typeof data.silent_token === 'string' ? data.silent_token : undefined,
     silentUuid: typeof data.silent_token_uuid === 'string' ? data.silent_token_uuid : typeof data.uuid === 'string' ? data.uuid : undefined,
+    authUserHash: typeof data.auth_user_hash === 'string' ? data.auth_user_hash : undefined,
   };
 }
 
