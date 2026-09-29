@@ -43,6 +43,7 @@ export function AppShell() {
   const navigate = useNavigate();
   const outlet = useOutlet();
   const setNowPlaying = usePlaybackStore((s) => s.setNowPlaying);
+  const nowPlayingOpen = usePlaybackStore((s) => s.nowPlayingOpen);
   const lastLink = useRef({ url: '', at: 0 });
   const onboarded = useSettingsStore((s) => s.onboarded);
   const spotifyPane = isSpotifyPath(location.pathname) && onboarded;
@@ -98,7 +99,10 @@ export function AppShell() {
             <TopPlayer />
             <LobbyBar />
             <ScrollContainerContext.Provider value={scrollRef}>
-              <main ref={scrollRef} className="min-h-0 flex-1 overflow-y-auto">
+              <main
+                ref={scrollRef}
+                className={nowPlayingOpen ? 'min-h-0 flex-1 overflow-hidden' : 'min-h-0 flex-1 overflow-y-auto'}
+              >
                 <AnimatePresence mode="wait" initial={false}>
                   <motion.div
                     key={location.pathname}

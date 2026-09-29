@@ -87,8 +87,8 @@ export function NowPlaying() {
           {!current ? (
             <div className="relative flex h-full items-center justify-center text-muted">Ничего не играет</div>
           ) : (
-            <div className="relative grid h-full grid-cols-1 gap-10 px-12 pb-8 pt-14 lg:grid-cols-[minmax(280px,440px)_1fr]">
-              <div className="no-scrollbar flex min-h-0 flex-col justify-center overflow-y-auto">
+            <div className="relative grid h-full min-h-0 overflow-hidden grid-cols-1 gap-10 px-12 pb-8 pt-14 lg:grid-cols-[minmax(280px,440px)_1fr]">
+              <div className="no-scrollbar flex min-h-0 flex-col justify-center overflow-y-auto overscroll-y-contain">
                 <motion.div
                   key={current.uid}
                   className="mx-auto w-full"
@@ -191,7 +191,7 @@ export function NowPlaying() {
                 {visualizer && <Visualizer active={playing} className="mt-5 h-12 shrink-0 opacity-80" />}
               </div>
 
-              <div className="flex min-h-0 flex-col">
+              <div className="flex min-h-0 flex-col overflow-hidden">
                 <div role="tablist" aria-label="Панель плеера" className="mb-4 flex justify-center gap-1 self-center rounded-full bg-background/40 p-1 backdrop-blur">
                   {tabs.map((t) => (
                     <button
@@ -209,7 +209,7 @@ export function NowPlaying() {
                     </button>
                   ))}
                 </div>
-                <div className="min-h-0 flex-1">
+                <div className="min-h-0 flex-1 overflow-hidden">
                   {shownTab === 'lyrics' ? (
                     <LyricsView track={current} />
                   ) : shownTab === 'similar' ? (

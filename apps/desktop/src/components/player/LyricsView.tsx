@@ -10,6 +10,11 @@ const LEAD_MS = 250;
 
 const LYRICS_SOURCES = new Set<SourceId>(['yandex', 'spotify', 'local']);
 
+function scrollLineIntoView(container: HTMLElement, line: HTMLElement, smooth: boolean): void {
+  const target = line.offsetTop - container.clientHeight / 2 + line.clientHeight / 2;
+  container.scrollTo({ top: Math.max(0, target), behavior: smooth ? 'smooth' : 'auto' });
+}
+
 export function LyricsView({ track }: { track: UnifiedTrack }) {
   const lyricsApi = window.electronAPI?.lyrics?.get;
   const supported = LYRICS_SOURCES.has(track.source);
@@ -37,8 +42,10 @@ export function LyricsView({ track }: { track: UnifiedTrack }) {
 
   useEffect(() => {
     if (active < 0 || Date.now() < userScrollUntil.current) return;
-    const el = containerRef.current?.querySelector<HTMLElement>(`[data-line="${active}"]`);
-    el?.scrollIntoView({ block: 'center', behavior: 'smooth' });
+    const container = containerRef.current;
+    const el = container?.querySelector<HTMLElement>(`[data-line="${active}"]`);
+    if (!container || !el) return;
+    scrollLineIntoView(container, el, true);
   }, [active]);
 
   if (!lyricsApi) {
@@ -72,7 +79,7 @@ export function LyricsView({ track }: { track: UnifiedTrack }) {
     <div
       ref={containerRef}
       onWheel={() => (userScrollUntil.current = Date.now() + 4000)}
-      className="no-scrollbar h-full overflow-y-auto px-2 py-[35vh] [mask-image:linear-gradient(to_bottom,transparent,black_18%,black_82%,transparent)]"
+      className="no-scrollbar h-full overflow-y-auto overscroll-y-contain px-2 py-[35vh] [mask-image:linear-gradient(to_bottom,transparent,black_18%,black_82%,transparent)]"
     >
       {data.lines.map((line, i) =>
         data.synced ? (
