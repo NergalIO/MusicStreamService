@@ -8,6 +8,8 @@ interface PlaybackState {
   duration: number;
   buffered: number;
   preview: boolean;
+  ad: boolean;
+  adTitle?: string;
   codec?: string;
   bitrate?: number;
   error: string | null;
@@ -25,6 +27,7 @@ export const usePlaybackStore = create<PlaybackState>()((set) => ({
   duration: 0,
   buffered: 0,
   preview: false,
+  ad: false,
   error: null,
   nowPlayingOpen: false,
   nowPlayingTab: null,

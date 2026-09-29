@@ -18,20 +18,40 @@ export interface SpotifyConnectState {
   playing: boolean;
   positionMs: number;
   durationMs: number;
+  ad: boolean;
+  adTitle: string | null;
+}
+
+export interface SpotifyPlayResult {
+  ad: boolean;
+  adTitle: string | null;
+  playing: boolean;
+  positionMs: number;
+  durationMs: number;
 }
 
 interface DomState {
   ready: boolean;
   title: string;
   playing: boolean;
+  ad: boolean;
   positionMs: number;
   durationMs: number;
+  trackTitle?: string;
 }
 
 const DOM_HELPERS = `
   const q = (s) => document.querySelector(s);
   const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
   const isPauseLabel = (el) => /pause|пауз/i.test(el?.getAttribute('aria-label') || '');
+  const AD_TITLE = /advertisement|реклама|advertencia|publicit[eé]|werbung|annuncio/i;
+  const isAd = () => {
+    if (q('[data-testid="ad-skip-button"], [data-testid="ad-cta-button"], [data-testid="preview-ad"], [data-testid="ad-banner"]')) return true;
+    const title = (q('[data-testid="context-item-info-title"]')?.textContent || '').trim();
+    const sub = (q('[data-testid="context-item-info-subtitles"]')?.textContent || '').trim();
+    if (AD_TITLE.test(title) || AD_TITLE.test(sub)) return true;
+    return AD_TITLE.test(q('[data-testid="now-playing-widget"]')?.getAttribute('aria-label') || '');
+  };
   const parseClock = (t) => (t || '').trim().split(':').reduce((acc, part) => acc * 60 + (Number(part) || 0), 0) * 1000;
   const bumpVol = () => { window.__mssVolGen = (window.__mssVolGen || 0) + 1; return window.__mssVolGen; };
   const setRange = (input, value) => {
@@ -47,6 +67,7 @@ const DOM_HELPERS = `
       ready: !!button,
       title: (q('[data-testid="context-item-info-title"]')?.textContent || '').trim(),
       playing: isPauseLabel(button),
+      ad: isAd(),
       positionMs: parseClock(q('[data-testid="playback-position"]')?.textContent),
       durationMs: Number(progress?.max) || parseClock(q('[data-testid="playback-duration"]')?.textContent),
     };
@@ -79,12 +100,13 @@ function playScript(trackId: string, positionMs: number): string {
     for (let i = 0; i < 40; i++) {
       await sleep(250);
       const s = readState();
-      if (s.playing && s.title === heading) break;
+      if (s.playing && (s.title === heading || s.ad)) break;
     }
     const state = readState();
-    if (state.title !== heading) throw new Error('Spotify не запустил трек — проверьте веб-плеер (Spotify → Веб-плеер)');
+    if (!state.ad && state.title !== heading) throw new Error('Spotify не запустил трек — проверьте веб-плеер (Spotify → Веб-плеер)');
+    state.trackTitle = heading;
     const target = ${Math.round(positionMs)};
-    if (Math.abs(state.positionMs - target) > 2000) {
+    if (!state.ad && Math.abs(state.positionMs - target) > 2000) {
       const progress = q('[data-testid="playback-progressbar"] input[type="range"]');
       if (progress) setRange(progress, target);
       state.positionMs = target;
@@ -156,6 +178,25 @@ function emitEnded(): void {
   send('spotify-connect:ended', { trackId: expectedTrackId });
 }
 
+function toConnectState(s: DomState): SpotifyConnectState {
+  const ours = !!expectedTitle && s.title === expectedTitle;
+  const ad = !!s.ad;
+  return {
+    trackId: (ours || ad) && expectedTrackId ? expectedTrackId : null,
+    playing: s.playing,
+    positionMs: s.positionMs,
+    durationMs: s.durationMs,
+    ad,
+    adTitle: ad ? s.title || 'Реклама' : null,
+  };
+}
+
+function emitConnectState(s: DomState): SpotifyConnectState {
+  const payload = toConnectState(s);
+  send('spotify-connect:state', payload);
+  return payload;
+}
+
 async function poll(): Promise<void> {
   pollTimer = null;
   if (!active) return;
@@ -166,25 +207,25 @@ async function poll(): Promise<void> {
     lastState = s;
     const ours = !!expectedTitle && s.title === expectedTitle;
     const left = s.durationMs - s.positionMs;
-    if (ours && s.playing && s.durationMs > 0 && left <= endLeadMs) {
-      emitEnded();
-    } else if (!ours && prev?.title === expectedTitle && prev.durationMs - prev.positionMs < 5000) {
-      emitEnded();
+    if (!s.ad) {
+      if (ours && s.playing && s.durationMs > 0 && left <= endLeadMs) {
+        emitEnded();
+      } else if (!ours && prev?.ad && expectedTitle && s.title !== expectedTitle) {
+        emitEnded();
+      } else if (!ours && prev?.title === expectedTitle && prev.durationMs - prev.positionMs < 5000) {
+        emitEnded();
+      }
     }
-    send('spotify-connect:state', {
-      trackId: ours ? expectedTrackId : null,
-      playing: s.playing,
-      positionMs: s.positionMs,
-      durationMs: s.durationMs,
-    } satisfies SpotifyConnectState);
-    if (s.playing) next = left > 0 && left < 4000 ? POLL_NEAR_END_MS : POLL_PLAYING_MS;
+    emitConnectState(s);
+    if (s.ad) next = POLL_NEAR_END_MS;
+    else if (s.playing) next = left > 0 && left < 4000 ? POLL_NEAR_END_MS : POLL_PLAYING_MS;
   } catch (e) {
     log.warn('spotify web player poll failed', e instanceof Error ? e.message : e);
   }
   schedulePoll(next);
 }
 
-async function play(trackId: string, positionMs = 0): Promise<void> {
+async function play(trackId: string, positionMs = 0): Promise<SpotifyPlayResult | undefined> {
   if (!/^[A-Za-z0-9]{10,40}$/.test(trackId)) throw new Error('Некорректный id трека Spotify');
   const seq = ++playSeq;
   active = true;
@@ -195,9 +236,17 @@ async function play(trackId: string, positionMs = 0): Promise<void> {
   lastState = null;
   const state = await spotifyWebExec<DomState>(playScript(trackId, positionMs));
   if (seq !== playSeq) return;
-  expectedTitle = state.title;
+  expectedTitle = state.trackTitle || state.title;
   lastState = state;
-  schedulePoll(600);
+  const sent = emitConnectState(state);
+  schedulePoll(state.ad ? 250 : 600);
+  return {
+    ad: sent.ad,
+    adTitle: sent.adTitle,
+    playing: sent.playing,
+    positionMs: sent.positionMs,
+    durationMs: sent.durationMs,
+  };
 }
 
 async function setPlaying(playing: boolean): Promise<void> {

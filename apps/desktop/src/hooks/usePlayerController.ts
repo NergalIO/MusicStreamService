@@ -160,7 +160,7 @@ function runSleepCommand(cmd: string): void {
 
 function publishSnapshot(): void {
   const { current, volume, muted, shuffle, repeat, radio } = usePlayerStore.getState();
-  const { playing } = usePlaybackStore.getState();
+  const { playing, ad } = usePlaybackStore.getState();
   const { endsAt, afterTrack } = useSleepStore.getState();
   window.electronAPI?.player.publishState({
     title: current?.title ?? 'Ничего не играет',
@@ -176,6 +176,7 @@ function publishSnapshot(): void {
     shuffle,
     repeat,
     radio: !!radio,
+    ad,
     sleep: { endsAt, afterTrack },
   });
   publishProgress();
@@ -455,7 +456,14 @@ export function usePlayerController(): void {
 
     const offSpotifyState = window.electronAPI?.spotifyConnect?.onState((state) => {
       const wasPlaying = usePlaybackStore.getState().playing;
+      const wasAd = usePlaybackStore.getState().ad;
       if (!applySpotifyState(state)) return;
+      const playback = usePlaybackStore.getState();
+      if (playback.ad) {
+        if (wasPlaying !== playback.playing || !wasAd) publishSnapshot();
+        else publishProgress();
+        return;
+      }
       const t = spotifyPositionSeconds();
       if (session && session.track.source === 'spotify') {
         const delta = t - session.lastTime;
@@ -463,7 +471,7 @@ export function usePlayerController(): void {
         session.lastTime = t;
       }
       if (Math.abs(t - lastSavedResume) >= RESUME_SAVE_EVERY) saveResumePosition(t);
-      if (wasPlaying !== usePlaybackStore.getState().playing) publishSnapshot();
+      if (wasPlaying !== playback.playing || wasAd) publishSnapshot();
       else publishProgress();
     });
 

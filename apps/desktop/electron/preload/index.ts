@@ -40,6 +40,7 @@ export interface PlayerSnapshot {
   repeat: 'off' | 'all' | 'one';
   /** Играет «Моя волна»: порядок задаёт Яндекс, перемешивание недоступно, повтор — только трека. */
   radio: boolean;
+  ad?: boolean;
   sleep?: { endsAt: number | null; afterTrack: boolean };
 }
 
@@ -166,7 +167,13 @@ const api = {
   },
   spotifyConnect: {
     play: (trackId: string, positionMs?: number) =>
-      ipcRenderer.invoke('spotify-connect:play', trackId, positionMs) as Promise<void>,
+      ipcRenderer.invoke('spotify-connect:play', trackId, positionMs) as Promise<{
+        ad: boolean;
+        adTitle: string | null;
+        playing: boolean;
+        positionMs: number;
+        durationMs: number;
+      } | void>,
     pause: () => ipcRenderer.invoke('spotify-connect:pause') as Promise<void>,
     resume: () => ipcRenderer.invoke('spotify-connect:resume') as Promise<void>,
     seek: (positionMs: number) => ipcRenderer.invoke('spotify-connect:seek', positionMs) as Promise<void>,
@@ -177,7 +184,14 @@ const api = {
     setEndLead: (ms: number) => ipcRenderer.invoke('spotify-connect:setEndLead', ms) as Promise<void>,
     stop: () => ipcRenderer.invoke('spotify-connect:stop') as Promise<void>,
     onState: (
-      cb: (state: { trackId: string | null; playing: boolean; positionMs: number; durationMs: number }) => void,
+      cb: (state: {
+        trackId: string | null;
+        playing: boolean;
+        positionMs: number;
+        durationMs: number;
+        ad: boolean;
+        adTitle: string | null;
+      }) => void,
     ) => subscribe('spotify-connect:state', cb),
     onEnded: (cb: (payload: { trackId: string }) => void) => subscribe('spotify-connect:ended', cb),
   },

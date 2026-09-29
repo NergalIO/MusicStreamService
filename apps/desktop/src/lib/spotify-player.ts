@@ -93,7 +93,7 @@ function restoreSpotifyVolume(): void {
 }
 
 function maybeStartSpotifyFadeOut(duration: number, t: number): void {
-  if (fadingOut) return;
+  if (fadingOut || usePlaybackStore.getState().ad) return;
   const crossfade = useSettingsStore.getState().crossfade;
   if (!crossfade || !duration || duration < crossfade * 3) return;
   if (duration - t > crossfade) return;
@@ -114,6 +114,8 @@ export async function startSpotifyTrack(
   holdLocal({ playing: true, positionMs: startAtSeconds * 1000 });
   usePlaybackStore.setState({
     preview: false,
+    ad: false,
+    adTitle: undefined,
     codec: 'spotify',
     bitrate: undefined,
     buffered: 0,
@@ -127,13 +129,25 @@ export async function startSpotifyTrack(
   } else {
     void window.electronAPI.spotifyConnect.setVolume(volume * 100, muted);
   }
-  await window.electronAPI.spotifyConnect.play(track.id, startAtSeconds * 1000);
+  const started = await window.electronAPI.spotifyConnect.play(track.id, startAtSeconds * 1000);
   if (activeTrackId !== track.id) return;
-  setAnchor(startAtSeconds * 1000, true);
-  holdLocal({ playing: true, positionMs: startAtSeconds * 1000 });
-  usePlaybackStore.setState({ playing: true });
+  if (started?.ad) {
+    setAnchor(started.positionMs, started.playing);
+    holdLocal({ playing: started.playing, positionMs: started.positionMs });
+    usePlaybackStore.setState({
+      playing: started.playing,
+      ad: true,
+      adTitle: started.adTitle ?? 'Реклама',
+      currentTime: started.positionMs / 1000,
+      duration: started.durationMs / 1000,
+    });
+  } else {
+    setAnchor(startAtSeconds * 1000, true);
+    holdLocal({ playing: true, positionMs: startAtSeconds * 1000 });
+    usePlaybackStore.setState({ playing: true, ad: false, adTitle: undefined });
+    if (fadeIn > 0 && !muted) void fadeSpotifyVolume(0, volume * 100, fadeIn * 1000);
+  }
   startTick();
-  if (fadeIn > 0 && !muted) void fadeSpotifyVolume(0, volume * 100, fadeIn * 1000);
 }
 
 /** MSS переходит на другой источник, очередь опустела или трек Spotify не стартовал. */
@@ -144,6 +158,7 @@ export function stopSpotifyTrack(): void {
   hold = null;
   nextFadeToken();
   stopTick();
+  usePlaybackStore.setState({ ad: false, adTitle: undefined });
   void window.electronAPI?.spotifyConnect.stop();
 }
 
@@ -152,8 +167,11 @@ export function applySpotifyState(state: {
   playing: boolean;
   positionMs: number;
   durationMs: number;
+  ad: boolean;
+  adTitle: string | null;
 }): boolean {
   if (!activeTrackId || state.trackId !== activeTrackId) return false;
+  if (state.ad) hold = null;
 
   const now = Date.now();
   if (hold && now < hold.until) {
@@ -174,8 +192,11 @@ export function applySpotifyState(state: {
     playing: state.playing,
     loading: false,
     currentTime: state.positionMs / 1000,
+    ad: state.ad,
+    adTitle: state.ad ? state.adTitle ?? 'Реклама' : undefined,
   };
   if (state.durationMs) patch.duration = state.durationMs / 1000;
+  else if (state.ad) patch.duration = 0;
   usePlaybackStore.setState(patch);
   syncMediaPosition(state.positionMs / 1000, patch.duration ?? usePlaybackStore.getState().duration);
   if (state.playing) startTick();
@@ -203,6 +224,7 @@ export function toggleSpotify(): void {
 }
 
 export function seekSpotify(seconds: number): void {
+  if (usePlaybackStore.getState().ad) return;
   const target = Math.max(0, seconds);
   fadingOut = false;
   restoreSpotifyVolume();

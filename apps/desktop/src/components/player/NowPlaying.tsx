@@ -29,6 +29,7 @@ export function NowPlaying() {
   const tab = usePlaybackStore((s) => s.nowPlayingTab);
   const setNowPlaying = usePlaybackStore((s) => s.setNowPlaying);
   const playing = usePlaybackStore((s) => s.playing);
+  const ad = usePlaybackStore((s) => s.ad);
   const current = usePlayerStore((s) => s.current);
   const playContext = usePlayerStore((s) => s.context);
   const radio = usePlayerStore((s) => s.radio);
@@ -107,7 +108,14 @@ export function NowPlaying() {
 
                 <div className="mt-7 flex items-start justify-between gap-3">
                   <div className="min-w-0">
-                    <div className="truncate text-xl font-semibold">{current.title}</div>
+                    <div className="flex items-center gap-2">
+                      <div className="truncate text-xl font-semibold">{current.title}</div>
+                      {ad && (
+                        <span className="shrink-0 rounded bg-amber-500/20 px-1.5 py-px text-[10px] font-semibold uppercase tracking-wide text-amber-300">
+                          реклама
+                        </span>
+                      )}
+                    </div>
                     <div className="truncate text-base text-muted">
                       {trackArtistLinks(current).map((a, i) => (
                         <Fragment key={`${a.name}-${i}`}>
@@ -162,7 +170,7 @@ export function NowPlaying() {
                 </div>
 
                 <div className="mt-4">
-                  <SeekBar readOnly={lobbyGuest} />
+                  <SeekBar readOnly={lobbyGuest || ad} />
                 </div>
 
                 {lobbyGuest ? (

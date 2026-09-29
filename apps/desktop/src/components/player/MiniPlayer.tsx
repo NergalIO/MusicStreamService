@@ -219,7 +219,14 @@ export function MiniPlayer() {
       {tall ? (
         <div className="relative w-full min-w-0 space-y-3">
           <div className="text-center">
-            <div className="truncate text-base font-semibold">{state.title}</div>
+            <div className="flex items-center justify-center gap-2">
+              <div className="truncate text-base font-semibold">{state.title}</div>
+              {state.ad && (
+                <span className="shrink-0 rounded bg-amber-500/15 px-1.5 py-px text-[9px] font-semibold uppercase tracking-wide text-amber-500">
+                  реклама
+                </span>
+              )}
+            </div>
             <div className="truncate text-xs text-muted">{state.artist}</div>
           </div>
           {/* Боковые колонки одинаковой ширины держат кнопки воспроизведения ровно по центру. */}
@@ -235,7 +242,14 @@ export function MiniPlayer() {
         </div>
       ) : (
         <div className="relative min-w-0 flex-1">
-          <div className="truncate pr-14 text-sm font-semibold">{state.title}</div>
+          <div className="flex items-center gap-2 pr-14">
+            <div className="truncate text-sm font-semibold">{state.title}</div>
+            {state.ad && (
+              <span className="shrink-0 rounded bg-amber-500/15 px-1.5 py-px text-[9px] font-semibold uppercase tracking-wide text-amber-500">
+                реклама
+              </span>
+            )}
+          </div>
           <div className="truncate text-xs text-muted">{state.artist}</div>
           <div className="mt-2 flex items-center gap-1">
             {compactModes && withShuffle && shuffleButton}
