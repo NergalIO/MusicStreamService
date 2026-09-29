@@ -63,6 +63,8 @@ import androidx.navigation.compose.currentBackStackEntryAsState
 import androidx.navigation.compose.rememberNavController
 import androidx.navigation.navArgument
 import com.mss.android.ui.auth.LoginScreen
+import com.mss.android.ui.catalog.AlbumScreen
+import com.mss.android.ui.catalog.ArtistScreen
 import com.mss.android.ui.catalog.CatalogList
 import com.mss.android.ui.home.HomeScreen
 import com.mss.android.ui.library.ArtistHub
@@ -87,7 +89,6 @@ import com.mss.android.ui.wave.WaveScreen
 import com.mss.android.ui.theme.COVER_ACCENT
 import com.mss.android.ui.theme.MssTheme
 import com.mss.android.ui.theme.rememberCoverHsl
-import com.mss.core.model.SourceId
 import com.mss.core.model.sourceFrom
 import kotlinx.coroutines.flow.filterNotNull
 import kotlinx.coroutines.flow.first
@@ -361,7 +362,7 @@ private fun MainShell(vm: MssViewModel, nav: NavHostController) {
                         vm,
                         onBack = { nav.popBackStack() },
                         onArtist = { track -> nav.navigate(Routes.artist(track)) },
-                        onAlbum = { source, id -> nav.navigate(Routes.album(source, id)) },
+                        onAlbum = { track -> nav.navigate(Routes.album(track)) },
                     )
                 }
                 composable(Routes.MSS_PLAYLIST, listOf(navArgument("id") { type = NavType.StringType })) { e ->
@@ -385,7 +386,7 @@ private fun MainShell(vm: MssViewModel, nav: NavHostController) {
                     val s = e.arguments?.getString("source") ?: return@composable
                     val id = e.arguments?.getString("id") ?: return@composable
                     LaunchedEffect(s, id) { vm.openAlbum(s, id) }
-                    CatalogList(vm, nav)
+                    AlbumScreen(vm, nav)
                 }
                 composable(Routes.ARTIST, listOf(
                     navArgument("source") { type = NavType.StringType },
@@ -396,15 +397,18 @@ private fun MainShell(vm: MssViewModel, nav: NavHostController) {
                     val id = e.arguments?.getString("id") ?: "-"
                     val name = e.arguments?.getString("name") ?: return@composable
                     LaunchedEffect(source, id, name) { vm.openArtist(name, source, id) }
-                    CatalogList(vm, nav)
+                    ArtistScreen(vm, nav)
                 }
                 composable(Routes.SIMILAR, listOf(
                     navArgument("source") { type = NavType.StringType },
                     navArgument("id") { type = NavType.StringType },
                 )) { e ->
+                    val source = e.arguments?.getString("source") ?: return@composable
                     val id = e.arguments?.getString("id") ?: return@composable
-                    LaunchedEffect(id) {
-                        vm.loadSimilar(com.mss.core.model.UnifiedTrack(SourceId.YANDEX, id, "", ""))
+                    LaunchedEffect(source, id) {
+                        vm.loadSimilar(
+                            com.mss.core.model.UnifiedTrack(sourceFrom(source), id, "", ""),
+                        )
                     }
                     CatalogList(vm, nav)
                 }

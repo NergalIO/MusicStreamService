@@ -43,7 +43,31 @@ import androidx.compose.ui.unit.Dp
 import androidx.compose.ui.unit.dp
 import coil.compose.AsyncImage
 import coil.request.ImageRequest
+import com.mss.core.model.SourceId
 import com.mss.core.model.UnifiedTrack
+
+fun sourceLabel(source: SourceId): String = when (source) {
+    SourceId.LOCAL -> "MSS"
+    SourceId.SPOTIFY -> "Spotify"
+    SourceId.YANDEX -> "Yandex"
+    SourceId.VK -> "VK"
+}
+
+@Composable
+fun SourceTag(source: SourceId, modifier: Modifier = Modifier) {
+    val scheme = MaterialTheme.colorScheme
+    val local = source == SourceId.LOCAL
+    Text(
+        sourceLabel(source),
+        modifier = modifier
+            .clip(RoundedCornerShape(4.dp))
+            .background(if (local) scheme.primary.copy(alpha = 0.18f) else scheme.onSurface.copy(alpha = 0.08f))
+            .padding(horizontal = 6.dp, vertical = 1.dp),
+        style = MaterialTheme.typography.labelSmall,
+        color = if (local) scheme.primary else scheme.onSurfaceVariant,
+        fontWeight = FontWeight.Medium,
+    )
+}
 
 fun coverRequest(context: android.content.Context, url: String?): ImageRequest {
     val data = com.mss.core.connectors.SpotifyImageUrls.normalize(url)
@@ -119,7 +143,17 @@ fun TrackRow(
                 )
                 if (active) Icon(Icons.Default.GraphicEq, contentDescription = "Играет", tint = scheme.primary, modifier = Modifier.size(16.dp))
             }
-            Text(track.artist, style = MaterialTheme.typography.bodySmall, color = scheme.onSurfaceVariant, maxLines = 1, overflow = TextOverflow.Ellipsis)
+            Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(6.dp)) {
+                Text(
+                    track.artist,
+                    style = MaterialTheme.typography.bodySmall,
+                    color = scheme.onSurfaceVariant,
+                    maxLines = 1,
+                    overflow = TextOverflow.Ellipsis,
+                    modifier = Modifier.weight(1f, fill = false),
+                )
+                SourceTag(track.source)
+            }
         }
         IconButton(onClick = onLike) {
             Icon(

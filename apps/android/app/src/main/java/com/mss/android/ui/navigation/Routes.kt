@@ -89,6 +89,10 @@ object Routes {
     fun mssPlaylist(id: String) = "playlists/$id"
     fun playlist(source: String, id: String) = "playlist/$source/${java.net.URLEncoder.encode(id, Charsets.UTF_8)}"
     fun album(source: String, id: String) = "album/$source/${java.net.URLEncoder.encode(id, Charsets.UTF_8)}"
+    fun album(track: UnifiedTrack): String {
+        val id = track.albumId?.takeIf { it.isNotBlank() } ?: track.album?.takeIf { it.isNotBlank() } ?: "-"
+        return album(track.source.name.lowercase(), id)
+    }
     fun artist(name: String, source: String = "local", id: String = "-"): String {
         val safeId = id.ifBlank { "-" }
         return "artist/$source/${java.net.URLEncoder.encode(safeId, Charsets.UTF_8)}/${java.net.URLEncoder.encode(name, Charsets.UTF_8)}"

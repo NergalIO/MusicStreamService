@@ -155,6 +155,7 @@ export function createYandexConnector(opts: YandexConnectorOptions): YandexConne
       const list = Array.isArray(data) ? data : (data.artists ?? []);
       return list.filter((a) => a?.id && a?.name).map(mapArtist);
     },
+    getArtistProfile: (artistId: string) => api.artistProfile(artistId),
     async getArtistTracks(artistId: string, limit: number, _artistName?: string): Promise<UnifiedTrack[]> {
       if (client.status !== 'connected') return [];
       type Page = { tracks?: YTrack[]; pager?: { total: number } };

@@ -153,6 +153,8 @@ data class UnifiedArtist(
     val imageUrl: String? = null,
     val genres: List<String>? = null,
     val followers: Int? = null,
+    val monthlyListeners: Int? = null,
+    val description: String? = null,
     val trackCount: Int? = null,
 )
 
@@ -185,6 +187,7 @@ data class AlbumWithTracks(
     val tracks: List<UnifiedTrack> = emptyList(),
     val label: String? = null,
     val durationMs: Long? = null,
+    val description: String? = null,
 )
 
 @Serializable

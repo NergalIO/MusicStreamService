@@ -27,7 +27,7 @@ fun trackBaseId(trackId: String): String = trackId.substringBefore(':')
 fun trackKey(track: UnifiedTrack): String =
     if (!track.albumId.isNullOrBlank()) "${trackBaseId(track.id)}:${track.albumId}" else trackBaseId(track.id)
 
-private fun JsonObject.str(key: String): String? = this[key]?.jsonPrimitive?.contentOrNull
+private fun JsonObject.str(key: String): String? = (this[key] as? kotlinx.serialization.json.JsonPrimitive)?.contentOrNull
 
 private fun artistRefs(arr: JsonArray?): List<ArtistRef> {
     if (arr == null) return emptyList()
@@ -96,6 +96,7 @@ fun mapYandexArtist(obj: JsonObject): UnifiedArtist? {
         genres = obj["genres"]?.jsonArray?.mapNotNull { it.jsonPrimitive.contentOrNull },
         trackCount = obj["counts"]?.jsonObject?.get("tracks")?.jsonPrimitive?.intOrNull,
         followers = obj["likesCount"]?.jsonPrimitive?.intOrNull,
+        description = obj.str("description") ?: obj.str("ogDescription"),
     )
 }
 

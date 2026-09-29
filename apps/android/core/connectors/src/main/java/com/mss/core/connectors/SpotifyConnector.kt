@@ -192,10 +192,30 @@ class SpotifyConnector @Inject constructor(
         return emptyList()
     }
 
+    suspend fun artist(id: String): com.mss.core.model.UnifiedArtist? {
+        if (!useWebCatalog()) return null
+        awaitWebPlayer()
+        return runCatching { pathfinder.artist(id) }.getOrNull()
+    }
+
+    suspend fun artistProfile(id: String): com.mss.core.model.ArtistProfile? {
+        if (!useWebCatalog()) return null
+        awaitWebPlayer()
+        return runCatching { pathfinder.artistProfile(id) }.getOrNull()
+    }
+
     suspend fun artistTracks(artistId: String, artistName: String?, limit: Int = 50): List<UnifiedTrack> {
         if (useWebCatalog()) {
             awaitWebPlayer()
             return pathfinder.artistTracks(artistId, artistName, limit)
+        }
+        return emptyList()
+    }
+
+    suspend fun searchAlbums(query: String, limit: Int): List<com.mss.core.model.UnifiedAlbum> {
+        if (useWebCatalog()) {
+            awaitWebPlayer()
+            return pathfinder.searchAlbums(query, limit)
         }
         return emptyList()
     }

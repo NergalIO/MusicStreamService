@@ -1,5 +1,6 @@
 import type {
   AlbumWithTracks,
+  ArtistProfile,
   ExternalAccount,
   HomeFeedSection,
   PlaybackHandle,
@@ -30,6 +31,8 @@ export interface StreamConnector {
   search(query: string, limit: number): Promise<UnifiedTrack[]>;
   searchArtists?(query: string, limit: number): Promise<UnifiedArtist[]>;
   getArtistTracks?(artistId: string, limit: number, artistName?: string): Promise<UnifiedTrack[]>;
+  /** Карточка исполнителя: слушатели, биография, топ-треки и дискография. */
+  getArtistProfile?(artistId: string): Promise<ArtistProfile>;
   /** Исполнители, которых пользователь лайкнул или на которых подписан в самом сервисе. */
   getFavoriteArtists?(): Promise<UnifiedArtist[]>;
   listPlaylists?(): Promise<UnifiedPlaylist[]>;

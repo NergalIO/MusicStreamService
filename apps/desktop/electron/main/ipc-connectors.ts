@@ -83,6 +83,11 @@ export function registerConnectorIpc(): void {
       return c.getArtistTracks(artistId, safeLimit, artistName);
     },
   );
+  ipcMain.handle('connectors:artistProfile', async (_e, id: string, artistId: string) => {
+    const c = connectorRegistry.get(id);
+    if (!c?.getArtistProfile || c.getAuthStatus() === 'disconnected') return null;
+    return c.getArtistProfile(artistId);
+  });
   ipcMain.handle('connectors:homeTracks', async (_e, id: string, limit: number) => {
     const c = connectorRegistry.get(id);
     if (!c?.getHomeTracks || c.getAuthStatus() === 'disconnected') return [];

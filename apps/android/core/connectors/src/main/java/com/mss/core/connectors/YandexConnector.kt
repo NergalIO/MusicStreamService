@@ -257,13 +257,23 @@ class YandexConnector @Inject constructor(
             tracks = tracks,
             label = labels,
             durationMs = tracks.sumOf { it.durationMs ?: 0 },
+            description = (data["description"] as? kotlinx.serialization.json.JsonPrimitive)?.contentOrNull?.takeIf { it.isNotBlank() },
         )
     }
 
     suspend fun artistProfile(id: String): ArtistProfile {
         val brief = apiGet<JsonObject>("/artists/$id/brief-info")
-        val artist = mapYandexArtist(brief["artist"]?.jsonObject ?: JsonObject(emptyMap()))
-            ?: com.mss.core.model.UnifiedArtist(SourceId.YANDEX, id, "Исполнитель")
+        val artistObj = brief["artist"] as? JsonObject ?: JsonObject(emptyMap())
+        val stats = brief["stats"] as? JsonObject
+        val listeners = (stats?.get("lastMonthListeners") as? kotlinx.serialization.json.JsonPrimitive)?.contentOrNull?.toIntOrNull()
+        val about = ((artistObj["description"] as? JsonObject)?.get("text") as? kotlinx.serialization.json.JsonPrimitive)?.contentOrNull
+        val artist = (mapYandexArtist(artistObj) ?: com.mss.core.model.UnifiedArtist(SourceId.YANDEX, id, "Исполнитель"))
+            .let { a ->
+                a.copy(
+                    monthlyListeners = listeners ?: a.monthlyListeners,
+                    description = about?.takeIf { it.isNotBlank() } ?: a.description,
+                )
+            }
         val popular = brief["popularTracks"]?.jsonArray?.mapNotNull { mapYandexTrack(it.jsonObject) } ?: emptyList()
         val similar = brief["similarArtists"]?.jsonArray?.mapNotNull { mapYandexArtist(it.jsonObject) } ?: emptyList()
         val direct = runCatching {

@@ -20,6 +20,7 @@ import com.mss.core.model.FeedBlock
 import com.mss.core.model.HomeShelves
 import com.mss.core.model.ListeningStats
 import com.mss.core.model.PlaybackSettings
+import com.mss.core.model.AlbumWithTracks
 import com.mss.core.model.PlaylistWithTracks
 import com.mss.core.model.SourceId
 import com.mss.core.model.TrackLyrics
@@ -36,6 +37,8 @@ import com.mss.core.offline.OfflineStore
 import com.mss.core.player.PlayerController
 import dagger.hilt.android.lifecycle.HiltViewModel
 import javax.inject.Inject
+import kotlinx.coroutines.async
+import kotlinx.coroutines.coroutineScope
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.SharingStarted
 import kotlinx.coroutines.flow.StateFlow
@@ -103,6 +106,10 @@ class MssViewModel @Inject constructor(
     val homeSource: StateFlow<SourceId> = _homeSource
     private val _detailTitle = MutableStateFlow("")
     val detailTitle: StateFlow<String> = _detailTitle
+    private val _artistPage = MutableStateFlow(ArtistPageUi())
+    val artistPage: StateFlow<ArtistPageUi> = _artistPage
+    private val _albumPage = MutableStateFlow(AlbumPageUi())
+    val albumPage: StateFlow<AlbumPageUi> = _albumPage
     private val _likedIds = MutableStateFlow<Set<String>>(emptySet())
     val likedIds: StateFlow<Set<String>> = _likedIds
     private val _albums = MutableStateFlow<List<UnifiedAlbum>>(emptyList())
@@ -211,48 +218,24 @@ class MssViewModel @Inject constructor(
     fun search(query: String, source: SourceId?, kind: String = "tracks") = launch {
         when (kind) {
             "albums" -> {
-                _albums.value = when (source) {
-                    SourceId.YANDEX -> yandex.searchAlbums(query)
-                    else -> emptyList()
-                }
+                _albums.value = searchAlbums(query, source)
                 _tracks.value = emptyList()
             }
             "playlists" -> {
-                _searchPlaylists.value = when (source) {
-                    SourceId.YANDEX -> yandex.searchPlaylists(query)
-                    SourceId.SPOTIFY -> spotify.listPlaylists().filter { it.title.contains(query, true) }
-                    SourceId.VK -> vk.listPlaylists().filter { it.title.contains(query, true) }
-                    else -> repo.mssPlaylists().filter { it.title.contains(query, true) }
-                }
+                _searchPlaylists.value = searchPlaylists(query, source)
                 _tracks.value = emptyList()
             }
             "artists" -> {
-                _searchArtists.value = when (source) {
-                    SourceId.VK -> vk.searchArtists(query, 20)
-                    SourceId.SPOTIFY -> spotify.searchArtists(query, 20)
-                    SourceId.YANDEX -> yandex.searchArtists(query, 20)
-                    SourceId.LOCAL, null -> {
-                        val local = repo.artists(query).map { UnifiedArtist(SourceId.LOCAL, it.name, it.name) }
-                        val extra = buildList {
-                            if (spotify.authStatus() != AuthStatus.DISCONNECTED) {
-                                addAll(runCatching { spotify.searchArtists(query, 12) }.getOrDefault(emptyList()))
-                            }
-                            if (yandex.authStatus() != AuthStatus.DISCONNECTED) {
-                                addAll(runCatching { yandex.searchArtists(query, 12) }.getOrDefault(emptyList()))
-                            }
-                            if (vk.authStatus() != AuthStatus.DISCONNECTED) {
-                                addAll(runCatching { vk.searchArtists(query, 12) }.getOrDefault(emptyList()))
-                            }
-                        }
-                        local + extra
-                    }
-                    else -> repo.artists(query).map { UnifiedArtist(SourceId.LOCAL, it.name, it.name) }
-                }
+                _searchArtists.value = searchArtists(query, source)
                 _tracks.value = emptyList()
             }
             else -> {
                 _tracks.value = repo.searchAll(query, source)
-                if (source == SourceId.YANDEX) {
+                if (kind == "all") {
+                    _albums.value = searchAlbums(query, source)
+                    _searchArtists.value = searchArtists(query, source)
+                    _searchPlaylists.value = searchPlaylists(query, source)
+                } else if (source == SourceId.YANDEX) {
                     _albums.value = runCatching { yandex.searchAlbums(query) }.getOrDefault(emptyList())
                     _searchPlaylists.value = runCatching { yandex.searchPlaylists(query) }.getOrDefault(emptyList())
                 }
@@ -297,64 +280,281 @@ class MssViewModel @Inject constructor(
         _tracks.value = pl.tracks
     }
 
-    fun openAlbum(source: String, id: String) = launch {
+    fun openAlbum(source: String, id: String) {
         val decoded = java.net.URLDecoder.decode(id, Charsets.UTF_8)
-        when (sourceFrom(source)) {
-            SourceId.YANDEX -> {
-                val alb = yandex.album(decoded)
-                _detailTitle.value = alb.title
-                _tracks.value = alb.tracks
-            }
-            SourceId.SPOTIFY -> {
-                val alb = spotify.album(decoded)
-                _detailTitle.value = alb.title
-                _tracks.value = alb.tracks
-            }
-            else -> {}
+        _albumPage.value = AlbumPageUi(loading = true)
+        viewModelScope.launch {
+            val album = runCatching { loadAlbum(sourceFrom(source), decoded) }.getOrNull()
+            _albumPage.value = AlbumPageUi(album = album, loading = false, error = if (album == null) "Альбом не найден" else null)
+            _detailTitle.value = album?.title ?: decoded
+            _tracks.value = album?.tracks.orEmpty()
         }
     }
 
-    fun openArtist(name: String, source: String = "local", id: String = "-") = launch {
+    fun openArtist(name: String, source: String = "local", id: String = "-") {
         val decodedName = java.net.URLDecoder.decode(name, Charsets.UTF_8)
         val decodedId = java.net.URLDecoder.decode(id, Charsets.UTF_8).takeIf { it.isNotBlank() && it != "-" }
+        val preferred = sourceFrom(source)
         _detailTitle.value = decodedName
-        _tracks.value = emptyList()
-        _tracks.value = loadArtistTracks(sourceFrom(source), decodedName, decodedId)
+        _artistPage.value = ArtistPageUi(name = decodedName, loading = true)
+        viewModelScope.launch {
+            val page = loadArtistPage(decodedName, preferred, decodedId)
+            if (_artistPage.value.name != decodedName) return@launch
+            _artistPage.value = page
+            _tracks.value = page.tracksBySource.values.flatten()
+        }
+    }
+
+    private suspend fun loadArtistPage(name: String, preferred: SourceId, preferredId: String?): ArtistPageUi = coroutineScope {
+        val local = async { runCatching { repo.artistTracks(name) }.getOrDefault(emptyList()) }
+        val yandex = async { runCatching { if (sourceConnected(SourceId.YANDEX)) loadYandexArtist(name, preferredId.takeIf { preferred == SourceId.YANDEX }) else null }.getOrNull() }
+        val spotify = async { runCatching { if (sourceConnected(SourceId.SPOTIFY)) loadSpotifyArtist(name, preferredId.takeIf { preferred == SourceId.SPOTIFY }) else null }.getOrNull() }
+        val vk = async { runCatching { if (sourceConnected(SourceId.VK)) loadVkArtist(name, preferredId.takeIf { preferred == SourceId.VK }) else null }.getOrNull() }
+        val bundles = listOf(
+            SourceId.LOCAL to ArtistBundle(tracks = local.await()),
+            SourceId.YANDEX to (yandex.await() ?: ArtistBundle()),
+            SourceId.SPOTIFY to (spotify.await() ?: ArtistBundle()),
+            SourceId.VK to (vk.await() ?: ArtistBundle()),
+        )
+        val tracksBySource = bundles.associate { (src, bundle) -> src to bundle.tracks }.filterValues { it.isNotEmpty() }
+        val artists = bundles.mapNotNull { it.second.artist }
+        val image = artists.firstNotNullOfOrNull { it.imageUrl }
+        val description = artists.firstNotNullOfOrNull { it.description?.takeIf { text -> text.isNotBlank() } }
+        val genres = artists.flatMap { it.genres.orEmpty() }.distinct()
+        val popularBySource = bundles
+            .filter { it.first != SourceId.LOCAL }
+            .associate { (src, bundle) -> src to bundle.popular.ifEmpty { bundle.tracks }.take(10) }
+            .filterValues { it.isNotEmpty() }
+        val albumsBySource = bundles.associate { (src, bundle) -> src to bundle.albums }.filterValues { it.isNotEmpty() }
+        ArtistPageUi(
+            name = artists.firstOrNull()?.name ?: name,
+            imageUrl = image,
+            description = description,
+            genres = genres,
+            platforms = bundles.map { (src, bundle) ->
+                ArtistPlatformUi(
+                    source = src,
+                    present = bundle.artist != null || bundle.tracks.isNotEmpty(),
+                    followers = bundle.artist?.followers,
+                    monthlyListeners = bundle.artist?.monthlyListeners,
+                    trackCount = bundle.artist?.trackCount?.takeIf { it > bundle.tracks.size } ?: bundle.tracks.size,
+                    imageUrl = bundle.artist?.imageUrl,
+                    albumCount = bundle.albums.size,
+                )
+            },
+            popularBySource = popularBySource,
+            tracksBySource = tracksBySource,
+            albumsBySource = albumsBySource,
+            loading = false,
+        )
+    }
+
+    private suspend fun loadYandexArtist(name: String, id: String?): ArtistBundle {
+        val artistId = id ?: yandex.searchArtists(name, 8).firstOrNull { it.name.equals(name, true) }?.id
+            ?: yandex.searchArtists(name, 8).firstOrNull()?.id
+        if (artistId.isNullOrBlank()) return ArtistBundle()
+        val profile = runCatching { yandex.artistProfile(artistId) }.getOrNull()
+        val tracks = runCatching { yandex.artistTracks(artistId, 100) }.getOrDefault(emptyList())
+            .ifEmpty { profile?.popularTracks.orEmpty() }
+        return ArtistBundle(profile?.artist, tracks, profile?.popularTracks.orEmpty(), profile?.albums.orEmpty() + profile?.singles.orEmpty())
+    }
+
+    private suspend fun loadSpotifyArtist(name: String, id: String?): ArtistBundle {
+        val artistId = id ?: spotify.searchArtists(name, 8).firstOrNull { it.name.equals(name, true) }?.id
+            ?: spotify.searchArtists(name, 8).firstOrNull()?.id
+        if (artistId.isNullOrBlank()) return ArtistBundle()
+        val profile = runCatching { spotify.artistProfile(artistId) }.getOrNull()
+        val tracks = runCatching { spotify.artistTracks(artistId, name) }.getOrDefault(emptyList())
+        return ArtistBundle(
+            profile?.artist,
+            tracks,
+            profile?.popularTracks?.ifEmpty { null } ?: tracks.take(10),
+            profile?.albums.orEmpty() + profile?.singles.orEmpty(),
+        )
+    }
+
+    private suspend fun loadVkArtist(name: String, id: String?): ArtistBundle {
+        val tracks = runCatching { vk.artistTracks(id ?: name, name, 50) }.getOrDefault(emptyList())
+        val artist = if (tracks.isEmpty()) null else UnifiedArtist(SourceId.VK, id ?: name, name, imageUrl = tracks.firstNotNullOfOrNull { it.coverUrl })
+        return ArtistBundle(artist, tracks, tracks.take(5))
     }
 
     private suspend fun loadArtistTracks(source: SourceId, name: String, id: String?): List<UnifiedTrack> {
-        fun matchName(artists: List<UnifiedArtist>) =
-            artists.firstOrNull { it.name.equals(name, true) } ?: artists.firstOrNull()
+        if (source != SourceId.LOCAL) {
+            val direct = loadArtistTracksFrom(source, name, id)
+            if (direct.isNotEmpty()) return direct
+        }
+        return mergeArtistTracks(name, source.takeIf { it != SourceId.LOCAL }, id)
+    }
 
-        return when (source) {
-            SourceId.SPOTIFY -> {
-                val artistId = id ?: matchName(runCatching { spotify.searchArtists(name, 8) }.getOrDefault(emptyList()))?.id
-                if (artistId.isNullOrBlank()) emptyList()
-                else spotify.artistTracks(artistId, name)
-            }
-            SourceId.YANDEX -> {
-                val artistId = id ?: matchName(runCatching { yandex.searchArtists(name, 8) }.getOrDefault(emptyList()))?.id
-                if (artistId.isNullOrBlank()) yandex.search(name, 40).filter { it.artist.contains(name, true) }
-                else yandex.artistTracks(artistId)
-            }
-            SourceId.VK -> vk.artistTracks(id ?: name, name, 50)
-            else -> {
-                val local = runCatching { repo.artistTracks(name) }.getOrDefault(emptyList())
-                if (local.isNotEmpty()) return local
-                if (spotify.authStatus() != AuthStatus.DISCONNECTED) {
-                    val found = loadArtistTracks(SourceId.SPOTIFY, name, null)
-                    if (found.isNotEmpty()) return found
-                }
-                if (yandex.authStatus() != AuthStatus.DISCONNECTED) {
-                    val found = loadArtistTracks(SourceId.YANDEX, name, null)
-                    if (found.isNotEmpty()) return found
-                }
-                if (vk.authStatus() != AuthStatus.DISCONNECTED) {
-                    return vk.artistTracks(name, name, 50)
-                }
-                emptyList()
+    private suspend fun mergeArtistTracks(name: String, preferredSource: SourceId?, preferredId: String?): List<UnifiedTrack> {
+        val out = mutableListOf<UnifiedTrack>()
+        val seen = mutableSetOf<String>()
+        fun add(list: List<UnifiedTrack>) {
+            list.forEach { t ->
+                if (seen.add("${t.source}:${t.id}")) out += t
             }
         }
+        add(runCatching { repo.artistTracks(name) }.getOrDefault(emptyList()))
+        val order = listOfNotNull(preferredSource, SourceId.SPOTIFY, SourceId.YANDEX, SourceId.VK).distinct()
+        for (src in order) {
+            if (!sourceConnected(src)) continue
+            val id = preferredId.takeIf { preferredSource == src }
+            add(loadArtistTracksFrom(src, name, id))
+        }
+        return out
+    }
+
+    private suspend fun loadArtistTracksFrom(source: SourceId, name: String, id: String?): List<UnifiedTrack> {
+        fun matchName(artists: List<UnifiedArtist>) =
+            artists.firstOrNull { it.name.equals(name, ignoreCase = true) } ?: artists.firstOrNull()
+        return runCatching {
+            when (source) {
+                SourceId.SPOTIFY -> {
+                    val artistId = id ?: matchName(spotify.searchArtists(name, 8))?.id
+                    if (artistId.isNullOrBlank()) emptyList()
+                    else spotify.artistTracks(artistId, name)
+                }
+                SourceId.YANDEX -> {
+                    val artistId = id ?: matchName(yandex.searchArtists(name, 8))?.id
+                    if (artistId.isNullOrBlank()) yandex.search(name, 40).filter { it.artist.contains(name, true) }
+                    else yandex.artistTracks(artistId)
+                }
+                SourceId.VK -> vk.artistTracks(id ?: name, name, 50)
+                else -> emptyList()
+            }
+        }.getOrDefault(emptyList())
+    }
+
+    private suspend fun loadAlbum(source: SourceId, idOrTitle: String): AlbumWithTracks? {
+        if (source != SourceId.LOCAL) {
+            albumById(source, idOrTitle)?.takeIf { it.tracks.isNotEmpty() }?.let { return it }
+        }
+        return findAlbumEverywhere(idOrTitle)
+    }
+
+    private suspend fun albumById(source: SourceId, id: String): AlbumWithTracks? = runCatching {
+        when (source) {
+            SourceId.YANDEX -> yandex.album(id)
+            SourceId.SPOTIFY -> spotify.album(id)
+            else -> null
+        }
+    }.getOrNull()
+
+    private suspend fun findAlbumEverywhere(query: String): AlbumWithTracks? {
+        val q = query.trim()
+        if (q.isEmpty()) return null
+        fun pick(list: List<UnifiedAlbum>): UnifiedAlbum? =
+            list.firstOrNull { it.id == q || it.title.equals(q, true) } ?: list.firstOrNull()
+
+        if (sourceConnected(SourceId.YANDEX)) {
+            pick(runCatching { yandex.searchAlbums(q, 8) }.getOrDefault(emptyList()))
+                ?.let { albumById(SourceId.YANDEX, it.id) }?.let { return it }
+        }
+        if (sourceConnected(SourceId.SPOTIFY)) {
+            pick(runCatching { spotify.searchAlbums(q, 8) }.getOrDefault(emptyList()))
+                ?.let { albumById(SourceId.SPOTIFY, it.id) }?.let { return it }
+        }
+        if (sourceConnected(SourceId.VK)) {
+            val vkAlbums = runCatching { vk.searchAlbums(q, 8) }.getOrDefault(emptyList())
+            pick(vkAlbums)?.let { hit ->
+                val tracks = runCatching { vk.search("${hit.title} ${hit.artist}", 40) }
+                    .getOrDefault(emptyList())
+                    .filter { it.albumId == hit.id || it.album.equals(hit.title, true) }
+                if (tracks.isNotEmpty()) {
+                    return AlbumWithTracks(
+                        SourceId.VK,
+                        hit.id,
+                        hit.title,
+                        hit.artist,
+                        coverUrl = hit.coverUrl,
+                        tracks = tracks,
+                    )
+                }
+            }
+        }
+        val tracks = runCatching { repo.searchAll(q, null, 30) }.getOrDefault(emptyList())
+        val grouped = tracks.filter { it.albumId == q || it.album.equals(q, true) }
+        val seed = grouped.firstOrNull() ?: tracks.firstOrNull { !it.album.isNullOrBlank() } ?: return null
+        seed.albumId?.let { albumId ->
+            albumById(seed.source, albumId)?.let { return it }
+        }
+        val sameAlbum = grouped.ifEmpty { tracks.filter { it.album.equals(seed.album, true) } }
+        if (sameAlbum.isEmpty()) return null
+        return AlbumWithTracks(
+            source = seed.source,
+            id = seed.albumId ?: q,
+            title = seed.album ?: q,
+            artist = seed.artist,
+            coverUrl = seed.coverUrl,
+            tracks = sameAlbum,
+        )
+    }
+
+    private suspend fun searchAlbums(query: String, source: SourceId?): List<UnifiedAlbum> {
+        val out = mutableListOf<UnifiedAlbum>()
+        if ((source == null || source == SourceId.YANDEX) && sourceConnected(SourceId.YANDEX)) {
+            out += runCatching { yandex.searchAlbums(query, 20) }.getOrDefault(emptyList())
+        }
+        if ((source == null || source == SourceId.SPOTIFY) && sourceConnected(SourceId.SPOTIFY)) {
+            out += runCatching { spotify.searchAlbums(query, 20) }.getOrDefault(emptyList())
+        }
+        if ((source == null || source == SourceId.VK) && sourceConnected(SourceId.VK)) {
+            out += runCatching { vk.searchAlbums(query, 20) }.getOrDefault(emptyList())
+        }
+        if (source == null || source == SourceId.LOCAL) {
+            val tracks = runCatching { repo.mssTracks(query, 30) }.getOrDefault(emptyList())
+            val seen = linkedMapOf<String, UnifiedAlbum>()
+            tracks.forEach { t ->
+                val title = t.album ?: return@forEach
+                val id = t.albumId ?: title
+                if (id !in seen) seen[id] = UnifiedAlbum(SourceId.LOCAL, id, title, t.artist, coverUrl = t.coverUrl)
+            }
+            out += seen.values
+        }
+        return out
+    }
+
+    private suspend fun searchArtists(query: String, source: SourceId?): List<UnifiedArtist> {
+        val out = mutableListOf<UnifiedArtist>()
+        if (source == null || source == SourceId.LOCAL) {
+            out += runCatching { repo.artists(query).map { UnifiedArtist(SourceId.LOCAL, it.name, it.name) } }
+                .getOrDefault(emptyList())
+        }
+        if ((source == null || source == SourceId.SPOTIFY) && sourceConnected(SourceId.SPOTIFY)) {
+            out += runCatching { spotify.searchArtists(query, 20) }.getOrDefault(emptyList())
+        }
+        if ((source == null || source == SourceId.YANDEX) && sourceConnected(SourceId.YANDEX)) {
+            out += runCatching { yandex.searchArtists(query, 20) }.getOrDefault(emptyList())
+        }
+        if ((source == null || source == SourceId.VK) && sourceConnected(SourceId.VK)) {
+            out += runCatching { vk.searchArtists(query, 20) }.getOrDefault(emptyList())
+        }
+        return out
+    }
+
+    private suspend fun searchPlaylists(query: String, source: SourceId?): List<UnifiedPlaylist> {
+        val out = mutableListOf<UnifiedPlaylist>()
+        if (source == null || source == SourceId.LOCAL) {
+            out += runCatching { repo.mssPlaylists().filter { it.title.contains(query, true) } }.getOrDefault(emptyList())
+        }
+        if ((source == null || source == SourceId.YANDEX) && sourceConnected(SourceId.YANDEX)) {
+            out += runCatching { yandex.searchPlaylists(query) }.getOrDefault(emptyList())
+        }
+        if ((source == null || source == SourceId.SPOTIFY) && sourceConnected(SourceId.SPOTIFY)) {
+            out += runCatching { spotify.listPlaylists().filter { it.title.contains(query, true) } }.getOrDefault(emptyList())
+        }
+        if ((source == null || source == SourceId.VK) && sourceConnected(SourceId.VK)) {
+            out += runCatching { vk.listPlaylists().filter { it.title.contains(query, true) } }.getOrDefault(emptyList())
+        }
+        return out
+    }
+
+    private fun sourceConnected(source: SourceId): Boolean = when (source) {
+        SourceId.LOCAL -> true
+        SourceId.SPOTIFY -> spotify.authStatus() != AuthStatus.DISCONNECTED
+        SourceId.YANDEX -> yandex.authStatus() != AuthStatus.DISCONNECTED
+        SourceId.VK -> vk.authStatus() != AuthStatus.DISCONNECTED
     }
 
     fun createPlaylist(name: String) = launch {
@@ -543,14 +743,22 @@ class MssViewModel @Inject constructor(
     }
 
     fun loadSimilar(track: UnifiedTrack) = launch {
-        val list = when (track.source) {
-            SourceId.YANDEX -> yandex.similarTracks(track.id)
-            SourceId.SPOTIFY -> runCatching { spotify.trackRadio(track).tracks.filter { it.id != track.id } }.getOrDefault(emptyList())
-            else -> emptyList()
-        }
+        val list = similarTracks(track)
         _similar.value = list
         _tracks.value = list
         _detailTitle.value = "Похожие"
+    }
+
+    private suspend fun similarTracks(track: UnifiedTrack): List<UnifiedTrack> {
+        val direct = when (track.source) {
+            SourceId.YANDEX -> runCatching { yandex.similarTracks(track.id) }.getOrDefault(emptyList())
+            SourceId.SPOTIFY -> runCatching { spotify.trackRadio(track).tracks.filter { it.id != track.id } }.getOrDefault(emptyList())
+            else -> emptyList()
+        }
+        if (direct.isNotEmpty()) return direct
+        val q = listOf(track.title, track.artist).filter { it.isNotBlank() }.joinToString(" ")
+        if (q.isBlank()) return emptyList()
+        return runCatching { repo.searchAll(q, null, 30) }.getOrDefault(emptyList()).filter { it.id != track.id }
     }
 
     fun loadLyrics(track: UnifiedTrack) {
@@ -651,12 +859,32 @@ class MssViewModel @Inject constructor(
     }
 
     private suspend fun playFrom(source: String, id: String) {
-        when (sourceFrom(source)) {
-            SourceId.LOCAL -> play(listOf(repo.getTrack(id)))
-            SourceId.YANDEX -> yandex.tracksByIds(listOf(id)).firstOrNull()?.let { play(listOf(it)) }
-            SourceId.SPOTIFY -> play(listOf(UnifiedTrack(SourceId.SPOTIFY, id, id, "Spotify")))
-            SourceId.VK -> play(listOf(UnifiedTrack(SourceId.VK, id, id, "VK")))
+        val decoded = java.net.URLDecoder.decode(id, Charsets.UTF_8)
+        val sid = sourceFrom(source)
+        resolveTrack(sid, decoded)?.let { play(listOf(it)); return }
+        resolveTrackEverywhere(decoded)?.let { play(listOf(it)); return }
+        error("Трек не найден")
+    }
+
+    private suspend fun resolveTrack(source: SourceId, id: String): UnifiedTrack? = runCatching {
+        when (source) {
+            SourceId.LOCAL -> repo.getTrack(id)
+            SourceId.YANDEX -> yandex.tracksByIds(listOf(id)).firstOrNull()
+            SourceId.SPOTIFY -> {
+                if (!sourceConnected(SourceId.SPOTIFY)) null
+                else spotify.search(id, 8).firstOrNull { it.id == id }
+                    ?: UnifiedTrack(SourceId.SPOTIFY, id, id, "Spotify").takeIf { id.length >= 16 }
+            }
+            SourceId.VK -> {
+                if (!sourceConnected(SourceId.VK)) null
+                else vk.search(id, 8).firstOrNull { it.id == id || it.id.contains(id) }
+            }
         }
+    }.getOrNull()
+
+    private suspend fun resolveTrackEverywhere(query: String): UnifiedTrack? {
+        val all = runCatching { repo.searchAll(query, null, 20) }.getOrDefault(emptyList())
+        return all.firstOrNull { it.id == query || it.title.equals(query, true) } ?: all.firstOrNull()
     }
 
     private fun loadLikesIds() {
@@ -686,6 +914,41 @@ data class LyricsUi(
     val loading: Boolean = false,
     val failed: Boolean = false,
     val data: TrackLyrics? = null,
+)
+
+data class ArtistBundle(
+    val artist: UnifiedArtist? = null,
+    val tracks: List<UnifiedTrack> = emptyList(),
+    val popular: List<UnifiedTrack> = emptyList(),
+    val albums: List<UnifiedAlbum> = emptyList(),
+)
+
+data class ArtistPlatformUi(
+    val source: SourceId,
+    val present: Boolean,
+    val followers: Int? = null,
+    val monthlyListeners: Int? = null,
+    val trackCount: Int = 0,
+    val imageUrl: String? = null,
+    val albumCount: Int = 0,
+)
+
+data class ArtistPageUi(
+    val name: String = "",
+    val imageUrl: String? = null,
+    val description: String? = null,
+    val genres: List<String> = emptyList(),
+    val platforms: List<ArtistPlatformUi> = emptyList(),
+    val popularBySource: Map<SourceId, List<UnifiedTrack>> = emptyMap(),
+    val tracksBySource: Map<SourceId, List<UnifiedTrack>> = emptyMap(),
+    val albumsBySource: Map<SourceId, List<UnifiedAlbum>> = emptyMap(),
+    val loading: Boolean = false,
+)
+
+data class AlbumPageUi(
+    val album: AlbumWithTracks? = null,
+    val loading: Boolean = false,
+    val error: String? = null,
 )
 
 data class SourceStatuses(

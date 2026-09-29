@@ -5,6 +5,7 @@ import com.mss.core.model.ArtistRef
 import com.mss.core.model.ExternalAccount
 import com.mss.core.model.PlaylistWithTracks
 import com.mss.core.model.SourceId
+import com.mss.core.model.UnifiedAlbum
 import com.mss.core.model.UnifiedArtist
 import com.mss.core.model.UnifiedPlaylist
 import com.mss.core.model.UnifiedTrack
@@ -201,6 +202,20 @@ class VkConnector @Inject constructor(
         val owner = loadTokens()?.userId
         val params = if (owner != null) mapOf("owner_id" to owner.toString()) else emptyMap()
         return collectAudio(params, limit).map { mapVkTrack(it) }
+    }
+
+    suspend fun searchAlbums(query: String, limit: Int): List<UnifiedAlbum> {
+        val tracks = search(query, minOf(limit * 8, 80))
+        val seen = linkedMapOf<String, UnifiedAlbum>()
+        for (t in tracks) {
+            val id = t.albumId ?: continue
+            val title = t.album ?: continue
+            if (id !in seen) {
+                seen[id] = UnifiedAlbum(SourceId.VK, id, title, t.artist, coverUrl = t.coverUrl)
+            }
+            if (seen.size >= limit) break
+        }
+        return seen.values.toList()
     }
 
     suspend fun artistTracks(artistId: String, artistName: String?, limit: Int): List<UnifiedTrack> {

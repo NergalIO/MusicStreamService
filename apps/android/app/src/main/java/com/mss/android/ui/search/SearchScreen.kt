@@ -146,7 +146,7 @@ fun SearchScreen(vm: MssViewModel, nav: NavHostController) {
         }
         if (showArtists && artists.isNotEmpty()) {
             item { SectionTitle("Артисты") }
-            items(artists, key = { "ar:${it.name}" }) { a ->
+            items(artists, key = { "ar:${it.source}:${it.id}:${it.name}" }) { a ->
                 EntityRow(a.name, null, a.imageUrl, { nav.navigate(Routes.artist(a)) })
             }
         }

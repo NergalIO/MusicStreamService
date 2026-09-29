@@ -1,10 +1,13 @@
 import type { UnifiedTrack } from '@mss/shared';
 import { useQuery } from '@tanstack/react-query';
-import { Fragment } from 'react';
+import { Fragment, useState } from 'react';
 import { Link, useParams } from 'react-router-dom';
 import { CollectionHeader, TrackListSkeleton } from '@/components/media/CollectionHeader';
 import { DownloadAllButton } from '@/components/tracks/DownloadAllButton';
 import { TrackFilterInput, TrackList } from '@/components/tracks/TrackList';
+import { Button } from '@/components/ui/button';
+import { SOURCE_LABEL } from '@/lib/sources';
+import { cn } from '@/lib/utils';
 import { EmptyState, ErrorState } from '@/components/ui/states';
 import { useTrackSort } from '@/hooks/useTrackSort';
 import { formatTotalDuration, formatTrackCount } from '@/lib/format';
@@ -30,6 +33,7 @@ export function AlbumPage() {
     staleTime: 30 * 60_000,
   });
   const { view, sort, cycle, filter, setFilter, isNatural } = useTrackSort(album?.tracks ?? NO_TRACKS);
+  const [aboutOpen, setAboutOpen] = useState(false);
 
   if (!supported) return <EmptyState title="Страницы альбомов доступны для Яндекс Музыки и Spotify" />;
   if (error) return <ErrorState title="Не удалось загрузить альбом" error={error} onRetry={() => void refetch()} />;
@@ -51,6 +55,7 @@ export function AlbumPage() {
   const context = { type: 'album' as const, title: album.title, path: `/album/${source}/${id}` };
   const artists = trackArtistLinks({ source: album.source, artist: album.artist, artists: album.artists });
   const meta = [
+    SOURCE_LABEL[album.source],
     album.genre,
     album.year,
     formatTrackCount(album.tracks.length),
@@ -78,6 +83,15 @@ export function AlbumPage() {
         onShuffle={album.tracks.length > 1 ? () => playCollection(album.tracks, context, true) : undefined}
         actions={<DownloadAllButton tracks={album.tracks} />}
       />
+      {album.description && (
+        <section className="mb-8 max-w-3xl">
+          <h2 className="mb-1 text-lg font-semibold">Описание</h2>
+          <p className={cn('whitespace-pre-line text-sm text-muted', !aboutOpen && 'line-clamp-4')}>{album.description}</p>
+          <Button variant="ghost" size="sm" className="mt-1" onClick={() => setAboutOpen((v) => !v)}>
+            {aboutOpen ? 'Свернуть' : 'Подробнее'}
+          </Button>
+        </section>
+      )}
       {album.tracks.length > 12 && (
         <div className="mb-3 flex justify-end">
           <TrackFilterInput value={filter} onChange={setFilter} />

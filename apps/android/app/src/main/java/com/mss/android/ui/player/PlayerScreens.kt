@@ -307,7 +307,7 @@ fun NowPlayingScreen(
     vm: MssViewModel,
     onBack: () -> Unit = {},
     onArtist: (UnifiedTrack) -> Unit = {},
-    onAlbum: (String, String) -> Unit = { _, _ -> },
+    onAlbum: (UnifiedTrack) -> Unit = {},
 ) {
     val settings by vm.playbackSettings.collectAsState()
     val state by vm.playerState.collectAsState()
@@ -322,7 +322,7 @@ private fun NowPlayingBody(
     vm: MssViewModel,
     onBack: () -> Unit,
     onArtist: (UnifiedTrack) -> Unit,
-    onAlbum: (String, String) -> Unit,
+    onAlbum: (UnifiedTrack) -> Unit,
 ) {
     val state by vm.playerState.collectAsState()
     val lyrics by vm.lyrics.collectAsState()
@@ -429,13 +429,12 @@ private fun NowPlayingBody(
                 }
                 if (!track.album.isNullOrBlank() || !track.albumId.isNullOrBlank()) {
                     item {
-                        val albumId = track.albumId
                         NowPlayingEntityCard(
                             caption = "Альбом",
                             title = track.album?.ifBlank { null } ?: "Альбом",
                             subtitle = track.artist,
                             coverUrl = track.coverUrl,
-                            onClick = albumId?.let { id -> { onAlbum(track.source.name.lowercase(), id) } },
+                            onClick = { onAlbum(track) },
                         )
                     }
                 }

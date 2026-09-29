@@ -1,5 +1,6 @@
 import type {
   AlbumWithTracks,
+  ArtistProfile,
   HomeFeedItem,
   HomeFeedSection,
   PlaybackHandle,
@@ -252,6 +253,48 @@ export function createSpotifyWebConnector(opts: SpotifyWebConnectorOptions): Str
       }
       return [...byTitle.values()].slice(0, limit);
     },
+    async getArtistProfile(artistId: string): Promise<ArtistProfile> {
+      const data: Json = await query('queryArtistOverview', {
+        uri: `spotify:artist:${artistId}`,
+        locale: '',
+        preReleaseV2: false,
+      });
+      const a = data?.data?.artistUnion;
+      if (!a?.profile?.name) throw new Error('Исполнитель Spotify не найден');
+      const name: string = a.profile.name;
+      const bio: string | undefined = a.profile.biography?.text;
+      const d = a.discography ?? {};
+      const releases = (block: Json): UnifiedAlbum[] =>
+        compact(
+          ((block?.items ?? []) as Json[]).flatMap((row) => {
+            const nested: Json[] | undefined = row?.releases?.items;
+            return (nested ?? [row]).map((r) => {
+              const album = mapAlbum(r);
+              return album && { ...album, artist: album.artist || name };
+            });
+          }),
+        );
+      const seen = new Set<string>();
+      const unique = (list: UnifiedAlbum[]) => list.filter((x) => (seen.has(x.id) ? false : (seen.add(x.id), true)));
+      const albums = unique([...releases(d.popularReleasesAlbums), ...releases(d.albums), ...releases(d.compilations)]);
+      const singles = unique(releases(d.singles));
+      const related: Json[] = a.relatedContent?.relatedArtists?.items ?? [];
+      return {
+        artist: {
+          source: 'spotify',
+          id: idFromUri(a.uri) ?? artistId,
+          name,
+          imageUrl: bestImage(a.visuals?.avatarImage?.sources),
+          followers: a.stats?.followers ?? undefined,
+          monthlyListeners: a.stats?.monthlyListeners ?? undefined,
+          description: bio ? bio.replace(/<[^>]+>/g, '').trim() || undefined : undefined,
+        },
+        popularTracks: compact(((d.topTracks?.items ?? []) as Json[]).map((row) => mapPathfinderTrack(row?.track))),
+        albums,
+        singles,
+        similar: compact(related.map(mapArtist)),
+      };
+    },
     async listPlaylists(): Promise<UnifiedPlaylist[]> {
       const data: Json = await query('libraryV3', {
         filters: ['Playlists'],
@@ -322,6 +365,8 @@ export function createSpotifyWebConnector(opts: SpotifyWebConnectorOptions): Str
         trackCount: a.tracksV2?.totalCount ?? tracks.length,
         durationMs: tracks.reduce((sum, t) => sum + (t.durationMs ?? 0), 0),
         label: a.label || undefined,
+        description:
+          typeof a.description === 'string' ? a.description.replace(/<[^>]+>/g, '').trim() || undefined : undefined,
       };
     },
     async getTrackRadio(track: UnifiedTrack): Promise<PlaylistWithTracks> {

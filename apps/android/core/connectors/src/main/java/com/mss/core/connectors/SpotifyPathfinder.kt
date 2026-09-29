@@ -1,6 +1,7 @@
 package com.mss.core.connectors
 
 import com.mss.core.model.AlbumWithTracks
+import com.mss.core.model.ArtistProfile
 import com.mss.core.model.TrackLyrics
 import com.mss.core.model.FeedBlock
 import com.mss.core.model.FeedItem
@@ -104,6 +105,35 @@ class SpotifyPathfinder @Inject constructor(
         return byTitle.values.take(limit)
     }
 
+    suspend fun searchAlbums(query: String, limit: Int): List<UnifiedAlbum> {
+        val fromQuery = runCatching {
+            val data = query(
+                "searchAlbums",
+                buildJsonObject {
+                    put("searchTerm", query)
+                    put("offset", 0)
+                    put("limit", minOf(limit, 50))
+                    put("numberOfTopResults", 5)
+                    put("includeAudiobooks", false)
+                    put("includePreReleases", false)
+                    put("includeAuthors", false)
+                },
+            )
+            val items = data.obj("data")?.obj("searchV2")?.obj("albums")?.arr("items") ?: return@runCatching emptyList()
+            items.mapNotNull { row -> mapAlbum(row.jsonObject.obj("data") ?: return@mapNotNull null) }
+        }.getOrDefault(emptyList())
+        if (fromQuery.isNotEmpty()) return fromQuery.take(limit)
+        val seen = linkedMapOf<String, UnifiedAlbum>()
+        searchTracks(query, 40).forEach { t ->
+            val id = t.albumId ?: return@forEach
+            val title = t.album ?: return@forEach
+            if (id !in seen) {
+                seen[id] = UnifiedAlbum(SourceId.SPOTIFY, id, title, t.artist, coverUrl = t.coverUrl)
+            }
+        }
+        return seen.values.take(limit)
+    }
+
     suspend fun savedTracks(limit: Int): List<UnifiedTrack> {
         val out = mutableListOf<UnifiedTrack>()
         var offset = 0
@@ -200,7 +230,80 @@ class SpotifyPathfinder @Inject constructor(
         val tracks = a.obj("tracksV2")?.arr("items")?.mapNotNull { row ->
             mapTrack(unwrapTrack(row.jsonObject.obj("track")), cover)
         }.orEmpty()
-        return AlbumWithTracks(SourceId.SPOTIFY, id, title, artist, coverUrl = cover, trackCount = tracks.size, tracks = tracks)
+        val description = a.str("description")?.takeIf { it.isNotBlank() }
+            ?: a.arr("copyrights")?.firstOrNull()?.jsonObject?.str("text")
+        return AlbumWithTracks(
+            SourceId.SPOTIFY,
+            id,
+            title,
+            artist,
+            coverUrl = cover,
+            trackCount = tracks.size,
+            tracks = tracks,
+            description = description,
+        )
+    }
+
+    suspend fun artist(id: String): UnifiedArtist? = artistProfile(id)?.artist
+
+    suspend fun artistProfile(id: String): ArtistProfile? {
+        val data = query(
+            "queryArtistOverview",
+            buildJsonObject {
+                put("uri", "spotify:artist:$id")
+                put("locale", "")
+                put("preReleaseV2", false)
+            },
+        )
+        val a = data.obj("data")?.obj("artistUnion") ?: return null
+        val name = a.obj("profile")?.str("name") ?: return null
+        val stats = a.obj("stats")
+        val artist = UnifiedArtist(
+            source = SourceId.SPOTIFY,
+            id = idFromUri(a.str("uri")) ?: id,
+            name = name,
+            imageUrl = coverOf(a),
+            followers = jsonInt(stats?.get("followers")),
+            monthlyListeners = jsonInt(stats?.get("monthlyListeners")),
+            description = a.obj("profile")?.obj("biography")?.str("text")
+                ?.replace(Regex("<[^>]+>"), "")
+                ?.takeIf { it.isNotBlank() },
+        )
+        val discography = a.obj("discography")
+        val top = discography?.obj("topTracks")?.arr("items")?.mapNotNull { row ->
+            mapTrack(unwrapTrack(row.jsonObject.obj("track")))
+        }.orEmpty()
+        fun releases(key: String): List<UnifiedAlbum> =
+            discography?.obj(key)?.arr("items")?.flatMap { row ->
+                val obj = row.jsonObject
+                val nested = obj.obj("releases")?.arr("items")
+                if (nested != null) nested.mapNotNull { mapRelease(it.jsonObject, name) }
+                else listOfNotNull(mapRelease(obj, name))
+            }.orEmpty()
+        val albums = (releases("popularReleasesAlbums") + releases("albums")).distinctBy { it.id }
+        val singles = releases("singles").filter { s -> albums.none { it.id == s.id } }
+        return ArtistProfile(artist, popularTracks = top, albums = albums, singles = singles)
+    }
+
+    private fun mapRelease(d: JsonObject, artistName: String): UnifiedAlbum? {
+        val uri = d.str("uri") ?: return null
+        if (!uri.startsWith("spotify:album:")) return null
+        return UnifiedAlbum(
+            source = SourceId.SPOTIFY,
+            id = idFromUri(uri) ?: return null,
+            title = d.str("name") ?: return null,
+            artist = d.obj("artists")?.arr("items")?.mapNotNull { it.jsonObject.obj("profile")?.str("name") }
+                ?.joinToString()?.ifBlank { null } ?: artistName,
+            year = d.obj("date")?.get("year")?.jsonPrimitive?.contentOrNull?.toIntOrNull(),
+            coverUrl = coverOf(d),
+            trackCount = d.obj("tracks")?.get("totalCount")?.jsonPrimitive?.contentOrNull?.toIntOrNull(),
+            type = d.str("type")?.lowercase(),
+        )
+    }
+
+    private fun jsonInt(value: kotlinx.serialization.json.JsonElement?): Int? {
+        val n = (value as? kotlinx.serialization.json.JsonPrimitive)?.contentOrNull?.toLongOrNull() ?: return null
+        return n.coerceIn(0, Int.MAX_VALUE.toLong()).toInt()
     }
 
     suspend fun homeFeed(): List<FeedBlock> {

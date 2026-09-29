@@ -166,6 +166,8 @@ export interface UnifiedArtist {
   imageUrl?: string;
   genres?: string[];
   followers?: number;
+  monthlyListeners?: number;
+  description?: string;
   trackCount?: number;
 }
 
@@ -187,6 +189,7 @@ export interface AlbumWithTracks extends UnifiedAlbum {
   tracks: UnifiedTrack[];
   label?: string;
   durationMs?: number;
+  description?: string;
 }
 
 export interface UnifiedPlaylist {

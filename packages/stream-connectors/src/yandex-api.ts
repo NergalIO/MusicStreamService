@@ -154,13 +154,17 @@ export class YandexMusicApi {
   // --- Альбомы и исполнители ---
 
   async album(id: string): Promise<AlbumWithTracks> {
-    const data = await this.client.get<YAlbum>(`/albums/${id}/with-tracks`);
+    const data = await this.client.get<YAlbum & { description?: string; shortDescription?: string }>(
+      `/albums/${id}/with-tracks`,
+    );
     const tracks = (data.volumes ?? []).flat().map(mapTrack);
     const label = data.labels?.map((l) => (typeof l === 'string' ? l : l.name)).join(', ');
+    const description = [data.description, data.shortDescription].find((d) => typeof d === 'string' && d.trim());
     return {
       ...mapAlbum(data),
       tracks,
       label: label || undefined,
+      description: description?.trim(),
       durationMs: tracks.reduce((sum, t) => sum + (t.durationMs ?? 0), 0),
     };
   }
@@ -168,10 +172,11 @@ export class YandexMusicApi {
   async artistProfile(id: string): Promise<ArtistProfile> {
     const [brief, direct] = await Promise.all([
       this.client.get<{
-        artist: YArtist;
+        artist: YArtist & { description?: { text?: string } | string };
         popularTracks?: YTrack[];
         albums?: YAlbum[];
         similarArtists?: YArtist[];
+        stats?: { lastMonthListeners?: number };
       }>(`/artists/${id}/brief-info`),
       this.client
         .get<{ albums?: YAlbum[] }>(`/artists/${id}/direct-albums?page=0&page-size=100&sort-by=year`)
@@ -179,8 +184,14 @@ export class YandexMusicApi {
     ]);
     const releases = (direct.albums?.length ? direct.albums : (brief.albums ?? [])).map(mapAlbum);
     releases.sort((a, b) => (b.year ?? 0) - (a.year ?? 0));
+    const about = brief.artist.description;
+    const description = (typeof about === 'string' ? about : about?.text)?.trim() || undefined;
     return {
-      artist: mapArtist(brief.artist),
+      artist: {
+        ...mapArtist(brief.artist),
+        monthlyListeners: brief.stats?.lastMonthListeners,
+        description,
+      },
       popularTracks: (brief.popularTracks ?? []).map(mapTrack),
       albums: releases.filter((a) => a.type !== 'single'),
       singles: releases.filter((a) => a.type === 'single'),
