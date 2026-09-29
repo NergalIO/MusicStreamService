@@ -9,7 +9,9 @@ import javax.inject.Inject
 
 @AndroidEntryPoint
 @UnstableApi
-class PlaybackService : MediaSessionService() {
+class PlaybackService : MediaSessionService {
+    constructor() : super()
+
     @Inject lateinit var controller: PlayerController
 
     private var mediaSession: MediaSession? = null

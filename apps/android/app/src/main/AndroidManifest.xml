@@ -12,6 +12,8 @@
     <application
         android:name=".MssApplication"
         android:allowBackup="true"
+        android:icon="@mipmap/ic_launcher"
+        android:roundIcon="@mipmap/ic_launcher_round"
         android:label="MusicStreamService"
         android:supportsRtl="true"
         android:theme="@style/Theme.MSS"
@@ -37,13 +39,15 @@
         <service
             android:name="com.mss.core.player.PlaybackService"
             android:exported="false"
-            android:foregroundServiceType="mediaPlayback">
+            android:foregroundServiceType="mediaPlayback"
+            tools:ignore="Instantiatable"
+            tools:node="merge">
             <intent-filter>
                 <action android:name="androidx.media3.session.MediaSessionService" />
             </intent-filter>
         </service>
 
-        <provider
+        <provider>
             android:name="androidx.startup.InitializationProvider"
             android:authorities="${applicationId}.androidx-startup"
             android:exported="false"
