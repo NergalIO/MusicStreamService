@@ -125,14 +125,14 @@ describe('parseKateOAuthRedirect', () => {
     expect(url).toContain('id.vk.com');
     expect(url).not.toContain('oauth.vk.com/authorize');
     const start = vkWebLoginStart(url);
-    expect(start.start).toMatch(/id\.vk\.com/);
+    expect(start.start).toMatch(/vk\.com/);
     expect(start.start).not.toContain('qr.vk.ru');
     expect(start.confirm).toContain('qr.vk.ru/ca?q=abc');
   });
 
   it('does not load m.vk.com/login?to=qr.vk.ru as the window start', () => {
     const start = vkWebLoginStart('https://m.vk.com/login?to=https%3A%2F%2Fqr.vk.ru%2Fca%3Fq%3DtMLiLl');
-    expect(start.start).toBe('https://id.vk.com/');
+    expect(start.start).toBe('https://vk.com/');
     expect(start.confirm).toContain('qr.vk.ru/ca?q=tMLiLl');
   });
 

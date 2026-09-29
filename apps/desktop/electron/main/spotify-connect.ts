@@ -33,6 +33,7 @@ const DOM_HELPERS = `
   const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
   const isPauseLabel = (el) => /pause|пауз/i.test(el?.getAttribute('aria-label') || '');
   const parseClock = (t) => (t || '').trim().split(':').reduce((acc, part) => acc * 60 + (Number(part) || 0), 0) * 1000;
+  const bumpVol = () => { window.__mssVolGen = (window.__mssVolGen || 0) + 1; return window.__mssVolGen; };
   const setRange = (input, value) => {
     const setter = Object.getOwnPropertyDescriptor(HTMLInputElement.prototype, 'value').set;
     setter.call(input, String(value));
@@ -117,10 +118,35 @@ function seekScript(positionMs: number): string {
 function volumeScript(fraction: number): string {
   return `(() => {
     ${DOM_HELPERS}
+    bumpVol();
     const volume = q('[data-testid="volume-bar"] input[type="range"]');
     if (!volume) return false;
     setRange(volume, ${fraction.toFixed(2)});
     return true;
+  })()`;
+}
+
+function fadeVolumeScript(from: number, to: number, durationMs: number): string {
+  return `(async () => {
+    ${DOM_HELPERS}
+    const gen = bumpVol();
+    const volume = q('[data-testid="volume-bar"] input[type="range"]');
+    if (!volume) return false;
+    const start = Date.now();
+    const duration = ${Math.round(durationMs)};
+    const from = ${from};
+    const to = ${to};
+    if (duration <= 0) {
+      setRange(volume, to);
+      return true;
+    }
+    while (window.__mssVolGen === gen) {
+      const t = Math.min(1, (Date.now() - start) / duration);
+      setRange(volume, from + (to - from) * t);
+      if (t >= 1) break;
+      await sleep(50);
+    }
+    return window.__mssVolGen === gen;
   })()`;
 }
 
@@ -132,6 +158,7 @@ let pollTimer: ReturnType<typeof setTimeout> | null = null;
 let volumeTimer: ReturnType<typeof setTimeout> | null = null;
 let active = false;
 let playSeq = 0;
+let endLeadMs = END_EARLY_MS;
 
 function send(channel: string, payload: unknown): void {
   for (const win of BrowserWindow.getAllWindows()) {
@@ -160,7 +187,7 @@ async function poll(): Promise<void> {
     lastState = s;
     const ours = !!expectedTitle && s.title === expectedTitle;
     const left = s.durationMs - s.positionMs;
-    if (ours && s.playing && s.durationMs > 0 && left <= END_EARLY_MS) {
+    if (ours && s.playing && s.durationMs > 0 && left <= endLeadMs) {
       emitEnded();
     } else if (!ours && prev?.title === expectedTitle && prev.durationMs - prev.positionMs < 5000) {
       emitEnded();
@@ -208,16 +235,38 @@ async function seek(positionMs: number): Promise<void> {
   schedulePoll(400);
 }
 
+function clamp01(value: number): number {
+  if (!Number.isFinite(value)) return 0;
+  return Math.min(1, Math.max(0, value));
+}
+
 function setVolume(percent: number, muted: boolean): void {
   setSpotifyWebMuted(muted);
+  void spotifyWebExec('window.__mssVolGen = (window.__mssVolGen || 0) + 1').catch(() => undefined);
   if (volumeTimer) clearTimeout(volumeTimer);
   volumeTimer = setTimeout(() => {
     volumeTimer = null;
-    const fraction = Math.min(1, Math.max(0, percent / 100));
-    void spotifyWebExec(volumeScript(fraction)).catch((e) =>
+    void spotifyWebExec(volumeScript(clamp01(percent / 100))).catch((e) =>
       log.warn('spotify volume failed', e instanceof Error ? e.message : e),
     );
   }, 250);
+}
+
+async function fadeVolume(fromPercent: number, toPercent: number, durationMs: number): Promise<void> {
+  if (volumeTimer) {
+    clearTimeout(volumeTimer);
+    volumeTimer = null;
+  }
+  try {
+    const ms = Number.isFinite(durationMs) ? Math.max(0, durationMs) : 0;
+    await spotifyWebExec(fadeVolumeScript(clamp01(fromPercent / 100), clamp01(toPercent / 100), ms));
+  } catch (e) {
+    log.warn('spotify fade failed', e instanceof Error ? e.message : e);
+  }
+}
+
+function setEndLead(ms: number): void {
+  endLeadMs = Number.isFinite(ms) ? Math.max(0, Math.min(5000, Math.round(ms))) : END_EARLY_MS;
 }
 
 /** MSS переключился на другой источник или очистил очередь. */
@@ -230,8 +279,13 @@ async function stop(): Promise<void> {
   lastState = null;
   if (pollTimer) clearTimeout(pollTimer);
   pollTimer = null;
+  if (volumeTimer) clearTimeout(volumeTimer);
+  volumeTimer = null;
   setSpotifyControlled(false);
-  if (wasActive) await spotifyWebExec(clickPlayPauseScript(false)).catch(() => undefined);
+  if (wasActive) {
+    await spotifyWebExec('window.__mssVolGen = (window.__mssVolGen || 0) + 1').catch(() => undefined);
+    await spotifyWebExec(clickPlayPauseScript(false)).catch(() => undefined);
+  }
 }
 
 export function registerSpotifyConnectIpc(): void {
@@ -240,5 +294,9 @@ export function registerSpotifyConnectIpc(): void {
   ipcMain.handle('spotify-connect:resume', () => setPlaying(true));
   ipcMain.handle('spotify-connect:seek', (_e, positionMs: number) => seek(positionMs));
   ipcMain.handle('spotify-connect:setVolume', (_e, percent: number, muted: boolean) => setVolume(percent, muted));
+  ipcMain.handle('spotify-connect:fadeVolume', (_e, fromPercent: number, toPercent: number, durationMs: number) =>
+    fadeVolume(fromPercent, toPercent, durationMs),
+  );
+  ipcMain.handle('spotify-connect:setEndLead', (_e, ms: number) => setEndLead(ms));
   ipcMain.handle('spotify-connect:stop', () => stop());
 }

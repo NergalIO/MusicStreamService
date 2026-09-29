@@ -8,6 +8,7 @@ import {
   needsMoreWave,
   playNextTrack,
   seekBy,
+  seekTo,
   skipNext,
   skipPrev,
   toggleLike,
@@ -19,6 +20,7 @@ import { useSleepStore } from '@/store/sleep-store';
 import { invalidateStream, resolveStream } from '@/lib/playback';
 import {
   applySpotifyState,
+  fadeSpotifyOutAndPause,
   isActiveSpotifyTrack,
   isSpotifyControlled,
   spotifyPositionSeconds,
@@ -201,7 +203,8 @@ async function startCurrent(playId: number): Promise<void> {
     if (!current.playable) throw new Error(current.unplayableReason ?? 'Трек недоступен');
     if (current.source === 'spotify' && !downloadedFileUrl(current)) {
       engine.stop();
-      await startSpotifyTrack(current, startAt);
+      const fadeIn = transition === 'crossfade' && !startAt ? crossfade : 0;
+      await startSpotifyTrack(current, startAt, { fadeIn });
       if (usePlayerStore.getState().playId !== playId) return;
       consecutiveErrors = 0;
       usePlayerStore.getState().pushHistory(current);
@@ -292,7 +295,9 @@ export function usePlayerController(): void {
       syncSpotifyVolume(s.volume, s.muted);
     };
     sync();
-    engine.setCrossfade(useSettingsStore.getState().crossfade);
+    const initialCrossfade = useSettingsStore.getState().crossfade;
+    engine.setCrossfade(initialCrossfade);
+    void window.electronAPI?.spotifyConnect.setEndLead(initialCrossfade > 0 ? 200 : 900);
     const restored = usePlayerStore.getState();
     if (!engine.currentUrl && restored.current) {
       lastSavedResume = restored.resumeAt;
@@ -316,7 +321,10 @@ export function usePlayerController(): void {
         }
       }),
       useSettingsStore.subscribe((s, prev) => {
-        if (s.crossfade !== prev.crossfade) engine.setCrossfade(s.crossfade);
+        if (s.crossfade !== prev.crossfade) {
+          engine.setCrossfade(s.crossfade);
+          void window.electronAPI?.spotifyConnect.setEndLead(s.crossfade > 0 ? 200 : 900);
+        }
         if (s.eqBands !== prev.eqBands || s.eqEnabled !== prev.eqEnabled) {
           applyEqualizer({ bands: s.eqBands, enabled: s.eqEnabled });
         }
@@ -421,7 +429,7 @@ export function usePlayerController(): void {
       ms.setActionHandler('previoustrack', () => skipPrev());
       ms.setActionHandler('seekto', (d) => {
         if (d.seekTime === undefined) return;
-        engine.seek(d.seekTime);
+        seekTo(d.seekTime);
       });
       updateMediaSession(usePlayerStore.getState().current);
     }
@@ -448,14 +456,14 @@ export function usePlayerController(): void {
     const offSpotifyState = window.electronAPI?.spotifyConnect?.onState((state) => {
       const wasPlaying = usePlaybackStore.getState().playing;
       if (!applySpotifyState(state)) return;
-      const t = state.positionMs / 1000;
+      const t = spotifyPositionSeconds();
       if (session && session.track.source === 'spotify') {
         const delta = t - session.lastTime;
         if (delta > 0 && delta < 3) session.played += delta;
         session.lastTime = t;
       }
       if (Math.abs(t - lastSavedResume) >= RESUME_SAVE_EVERY) saveResumePosition(t);
-      if (wasPlaying !== state.playing) publishSnapshot();
+      if (wasPlaying !== usePlaybackStore.getState().playing) publishSnapshot();
       else publishProgress();
     });
 
@@ -483,8 +491,13 @@ export function usePlayerController(): void {
       const { endsAt } = useSleepStore.getState();
       if (!endsAt || Date.now() < endsAt) return;
       useSleepStore.getState().cancel();
+      const done = () => toast('Таймер сна: воспроизведение остановлено');
+      if (isSpotifyControlled()) {
+        void fadeSpotifyOutAndPause(8).then(done);
+        return;
+      }
       void window.electronAPI?.spotifySession.pause();
-      void engine.fadeOutAndPause(8).then(() => toast('Таймер сна: воспроизведение остановлено'));
+      void engine.fadeOutAndPause(8).then(done);
     }, 1000);
 
     // Спектр для мини-плеера шлём, только пока он открыт и визуализатор там включён.

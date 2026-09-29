@@ -172,6 +172,9 @@ const api = {
     seek: (positionMs: number) => ipcRenderer.invoke('spotify-connect:seek', positionMs) as Promise<void>,
     setVolume: (percent: number, muted: boolean) =>
       ipcRenderer.invoke('spotify-connect:setVolume', percent, muted) as Promise<void>,
+    fadeVolume: (fromPercent: number, toPercent: number, durationMs: number) =>
+      ipcRenderer.invoke('spotify-connect:fadeVolume', fromPercent, toPercent, durationMs) as Promise<void>,
+    setEndLead: (ms: number) => ipcRenderer.invoke('spotify-connect:setEndLead', ms) as Promise<void>,
     stop: () => ipcRenderer.invoke('spotify-connect:stop') as Promise<void>,
     onState: (
       cb: (state: { trackId: string | null; playing: boolean; positionMs: number; durationMs: number }) => void,

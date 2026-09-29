@@ -141,27 +141,28 @@ export const VK_MOBILE_LOGIN_URL = 'https://m.vk.com/login';
 
 /**
  * Стартовая страница окна и URL подтверждения QR.
- * `m.vk.com/login?to=qr.vk.ru` в Electron даёт ERR_FAILED — грузим id.vk.com, QR открываем после входа.
+ * `id.vk.com` и `m.vk.com/login?to=qr` в Electron часто дают ERR_FAILED — стартуем с vk.com.
  */
 export function vkWebLoginStart(url: string): { start: string; confirm?: string } {
+  const loginStart = 'https://vk.com/';
   try {
     const parsed = new URL(url);
     const to = parsed.searchParams.get('to') ?? undefined;
     if (/^m\.vk\.(com|ru)$/i.test(parsed.hostname) && parsed.pathname.includes('login')) {
-      return { start: VK_ID_LOGIN_URL, confirm: to };
+      return { start: loginStart, confirm: to };
     }
     if (/^qr\.vk\.(ru|com)$/i.test(parsed.hostname)) {
-      return { start: VK_ID_LOGIN_URL, confirm: url };
+      return { start: loginStart, confirm: url };
     }
     if (/^id\.vk\.(ru|com)$/i.test(parsed.hostname)) {
-      return { start: `${parsed.origin}/`, confirm: to && /qr\.vk\./i.test(to) ? to : undefined };
+      return { start: loginStart, confirm: to && /qr\.vk\./i.test(to) ? to : undefined };
     }
     if (/oauth\.vk\.(com|ru)$/i.test(parsed.hostname)) {
-      return { start: VK_ID_LOGIN_URL };
+      return { start: loginStart };
     }
     return { start: url };
   } catch {
-    return { start: VK_ID_LOGIN_URL };
+    return { start: loginStart };
   }
 }
 
@@ -794,6 +795,13 @@ async function mintApprovedQr(fields: QrApprovedFields, signal: AbortSignal | un
   if (fields.isPartial && fields.access) {
     return kateTokenFromAndroidToken(fields.access, signal);
   }
+  if (fields.access) {
+    try {
+      return await kateTokenFromAndroidToken(fields.access, signal);
+    } catch {
+      /* silent / materialize ниже */
+    }
+  }
   if (fields.access || fields.silent) {
     return materializeKateToken({
       access_token: fields.access,
@@ -801,7 +809,7 @@ async function mintApprovedQr(fields: QrApprovedFields, signal: AbortSignal | un
       silent_token: fields.silent,
       silent_token_uuid: fields.silentUuid,
       uuid: fields.uuid,
-    });
+    }, signal);
   }
   return null;
 }

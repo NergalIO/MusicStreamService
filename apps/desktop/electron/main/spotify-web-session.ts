@@ -7,7 +7,6 @@ import {
   type Session,
   type WebContents,
 } from 'electron';
-import type { PlayerCommand } from '../preload/index.js';
 import { log } from './logger.js';
 
 const PARTITION = 'persist:spotify';
@@ -358,36 +357,6 @@ async function pausePlayback(): Promise<void> {
   wc.setAudioMuted(true);
 }
 
-function sendMediaCommand(command: Extract<PlayerCommand, 'toggle' | 'next' | 'prev'>): boolean {
-  const wc = view?.webContents;
-  if (!visible || !wc || wc.isDestroyed()) return false;
-  const selector =
-    command === 'toggle'
-      ? '[data-testid="control-button-playpause"]'
-      : command === 'next'
-        ? '[data-testid="control-button-skip-forward"]'
-        : '[data-testid="control-button-skip-back"]';
-  const keyCode =
-    command === 'toggle' ? 'MediaPlayPause' : command === 'next' ? 'MediaNextTrack' : 'MediaPreviousTrack';
-  void wc
-    .executeJavaScript(
-      `(() => { const el = document.querySelector(${JSON.stringify(selector)}); if (el) { el.click(); return true; } return false; })()`,
-    )
-    .then((clicked: unknown) => {
-      if (clicked || wc.isDestroyed()) return;
-      wc.focus();
-      wc.sendInputEvent({ type: 'keyDown', keyCode });
-      wc.sendInputEvent({ type: 'keyUp', keyCode });
-    })
-    .catch(() => {
-      if (wc.isDestroyed()) return;
-      wc.focus();
-      wc.sendInputEvent({ type: 'keyDown', keyCode });
-      wc.sendInputEvent({ type: 'keyUp', keyCode });
-    });
-  return true;
-}
-
 async function logout(): Promise<void> {
   loaded = false;
   webHeaders = null;
@@ -403,11 +372,6 @@ async function logout(): Promise<void> {
 
 export function isSpotifyWebSessionVisible(): boolean {
   return visible;
-}
-
-export function routeSpotifyMediaCommand(command: PlayerCommand): boolean {
-  if (command !== 'toggle' && command !== 'next' && command !== 'prev') return false;
-  return sendMediaCommand(command);
 }
 
 function bindWindow(win: BrowserWindow): void {

@@ -8,6 +8,7 @@ import { OutputDeviceSelect, SleepTimerControl } from '@/components/player/sound
 import { useFocusTrap } from '@/hooks/useFocusTrap';
 import { Range, Segmented, Switch } from '@/components/ui/controls';
 import { cn } from '@/lib/utils';
+import { usePlayerStore } from '@/store/player-store';
 import { PLAYBACK_RATES, useSettingsStore } from '@/store/settings-store';
 
 const PRESET_LABELS: Record<string, string> = {
@@ -37,6 +38,7 @@ export function SoundSheet({ open, onClose }: { open: boolean; onClose: () => vo
     playbackRate,
     setPlaybackRate,
   } = useSettingsStore();
+  const spotifyNow = usePlayerStore((s) => s.current?.source === 'spotify');
   const activePreset = Object.entries(EQ_PRESETS).find(([, bands]) => bands.every((b, i) => b === eqBands[i]))?.[0];
   const panelRef = useRef<HTMLElement>(null);
   useFocusTrap(panelRef, open);
@@ -88,6 +90,9 @@ export function SoundSheet({ open, onClose }: { open: boolean; onClose: () => vo
                 <span className="text-sm font-medium">Эквалайзер</span>
                 <Switch checked={eqEnabled} onChange={(on) => setEq(eqBands, on)} label="Эквалайзер" />
               </div>
+              {spotifyNow && (
+                <p className="text-xs text-muted">Эквалайзер не действует на Spotify — звук идёт из веб-плеера.</p>
+              )}
               <div className="flex flex-wrap gap-1.5">
                 {Object.keys(EQ_PRESETS).map((name) => (
                   <button

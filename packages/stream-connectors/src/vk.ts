@@ -36,15 +36,72 @@ function isHls(url: string): boolean {
   return /m3u8(\?|$)/i.test(url);
 }
 
+function playlistAudioParams(p: VkPlaylist): Record<string, string | number | undefined> {
+  return {
+    owner_id: p.owner_id,
+    playlist_id: p.id,
+    access_key: p.access_key,
+  };
+}
+
+async function collectUserAudioFromPlaylists(client: VkClient, limit: number): Promise<VkAudio[]> {
+  const ownerId = client.userId;
+  if (!ownerId) throw new VkApiError(8, 'audio.get');
+  const playlists: VkPlaylist[] = [];
+  let offset = 0;
+  for (;;) {
+    const page = await client.call<VkList<VkPlaylist>>('audio.getPlaylists', {
+      owner_id: ownerId,
+      offset,
+      count: 100,
+      filters: 'owned',
+    });
+    const batch = page.items ?? [];
+    playlists.push(...batch);
+    if (!batch.length || playlists.length >= (page.count ?? playlists.length)) break;
+    offset += batch.length;
+  }
+  const preferred = [
+    ...playlists.filter((p) => p.id === 0),
+    ...playlists.filter((p) => /добавлен|мои треки|моя музыка|избран/i.test(p.title ?? '')),
+    ...playlists.filter((p) => (p.count ?? 0) > 0),
+  ];
+  const seen = new Set<string>();
+  let last: unknown;
+  for (const pl of preferred) {
+    const key = `${pl.owner_id}_${pl.id}`;
+    if (seen.has(key)) continue;
+    seen.add(key);
+    for (const params of [playlistAudioParams(pl), { owner_id: pl.owner_id, album_id: pl.id, access_key: pl.access_key }]) {
+      try {
+        return await collectAudio(client, 'audio.get', params, limit);
+      } catch (e) {
+        last = e;
+        if (!(e instanceof VkApiError) || e.code !== 8) throw e;
+      }
+    }
+  }
+  throw last instanceof Error ? last : new VkApiError(8, 'Не удалось загрузить библиотеку VK');
+}
+
 async function collectUserAudio(client: VkClient, limit: number): Promise<VkAudio[]> {
   const ownerId = client.userId;
-  try {
-    return await collectAudio(client, 'audio.get', ownerId ? { owner_id: ownerId } : {}, limit);
-  } catch (e) {
-    if (ownerId && e instanceof VkApiError && e.code === 8) {
-      return await collectAudio(client, 'audio.get', {}, limit);
+  const attempts: Record<string, string | number | undefined>[] = [{}];
+  if (ownerId) attempts.push({ owner_id: ownerId });
+
+  let last: unknown;
+  for (const params of attempts) {
+    try {
+      return await collectAudio(client, 'audio.get', params, limit);
+    } catch (e) {
+      last = e;
+      if (!(e instanceof VkApiError) || e.code !== 8) throw e;
     }
-    throw e;
+  }
+  try {
+    return await collectUserAudioFromPlaylists(client, limit);
+  } catch (e) {
+    throw last ?? e;
   }
 }
 

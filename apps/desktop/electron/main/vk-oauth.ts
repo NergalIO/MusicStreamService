@@ -4,7 +4,7 @@ import { log } from './logger.js';
 
 const PARTITION = 'persist:vk-web-login';
 const ANDROID_CLIENT_ID = '2274003';
-const FALLBACK_STARTS = ['https://id.vk.com/', 'https://m.vk.com/login', 'https://vk.com/login'];
+const FALLBACK_STARTS = ['https://vk.com/', 'https://m.vk.com/login', 'https://id.vk.com/', 'https://vk.com/login'];
 
 function chromeUa(): string {
   const chrome = process.versions.chrome || '128.0.0.0';
@@ -143,7 +143,7 @@ export function openKateOAuthWindow(url: string, signal?: AbortSignal): Promise<
       partition: PARTITION,
       nodeIntegration: false,
       contextIsolation: true,
-      sandbox: true,
+      sandbox: false,
     },
   });
   win.webContents.setUserAgent(ua);
@@ -175,7 +175,7 @@ export function openKateOAuthWindow(url: string, signal?: AbortSignal): Promise<
     const blockAuthorize = (nextUrl: string, event?: { preventDefault: () => void }) => {
       if (!isDirectAuthAuthorize(nextUrl)) return false;
       event?.preventDefault();
-      if (!win.isDestroyed()) void win.loadURL('https://id.vk.com/', { userAgent: ua });
+      if (!win.isDestroyed()) void win.loadURL('https://vk.com/', { userAgent: ua });
       return true;
     };
     const scrapeToken = async (href: string): Promise<{ access_token?: string; silent_token?: string; uuid?: string } | null> => {
@@ -296,7 +296,7 @@ export function openKateOAuthWindow(url: string, signal?: AbortSignal): Promise<
               parent: win,
               webPreferences: {
                 partition: PARTITION,
-                sandbox: true,
+                sandbox: false,
                 contextIsolation: true,
                 nodeIntegration: false,
               },

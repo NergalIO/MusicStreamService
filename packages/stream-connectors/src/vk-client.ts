@@ -705,10 +705,10 @@ export class VkClient {
     }
   }
 
-  /** После VK ID без обмена audio.* отвечает «Invalid request». */
+  /** После VK ID без обмена audio.get отвечает «Invalid request», audio.search при этом может работать. */
   private async verifyAudioAccess(signal?: AbortSignal): Promise<void> {
     try {
-      await this.call('audio.search', { q: '.', count: 1, auto_complete: 0 });
+      await this.call('audio.get', { count: 1 });
       return;
     } catch (e) {
       if (!(e instanceof VkApiError) || (e.code !== 8 && e.code !== 15)) throw e;
@@ -719,7 +719,7 @@ export class VkClient {
         );
       }
     }
-    await this.call('audio.search', { q: '.', count: 1, auto_complete: 0 });
+    await this.call('audio.get', { count: 1 });
   }
 
   async fetchAccount(refresh = false): Promise<ExternalAccount | null> {
@@ -779,12 +779,8 @@ export class VkClient {
           if (method.startsWith('audio.') && await this.tryUpgradeKateToken()) continue;
           throw new VkApiError(code, 'VK отклонил доступ к аудио. Войдите заново — нужен клиент с правом audio');
         }
-        if ((code === 8 || code === 113) && method.startsWith('audio.')) {
+        if ((code === 8 || code === 113) && method.startsWith('audio.') && method !== 'audio.get') {
           if (await this.tryUpgradeKateToken()) continue;
-          throw new VkApiError(
-            code,
-            'VK отклонил запрос к музыке. Отключите VK в настройках и войдите снова (QR или пароль).',
-          );
         }
         throw new VkApiError(code, msg || `Ошибка VK ${code}`);
       }
