@@ -2,6 +2,7 @@ import {
   BarChart3,
   ChevronRight,
   CircleArrowDown,
+  EyeOff,
   Clock,
   Globe,
   Heart,
@@ -23,6 +24,8 @@ import { createContext, useContext, useEffect, useMemo, useState } from 'react';
 import { NavLink, useLocation, useNavigate, useSearchParams } from 'react-router-dom';
 import { AppLogo } from '@/components/layout/AppLogo';
 import { SidebarLobbyRooms } from '@/components/lobby/SidebarLobbyRooms';
+import { Button } from '@/components/ui/button';
+import { Dialog } from '@/components/ui/dialog';
 import { clearSession, loadSession } from '@/lib/api';
 import { lobbyPath } from '@/lib/lobby-route';
 import { leaveCurrentLobby } from '@/lib/lobby-session';
@@ -33,7 +36,12 @@ import { useMssPlaylists, useSpotifyPlaylists, useVkPlaylists, useYandexPlaylist
 import { cn } from '@/lib/utils';
 import { usePlayerStore } from '@/store/player-store';
 import { useSettingsStore } from '@/store/settings-store';
-import { type SidebarSectionId, useSidebarStore } from '@/store/sidebar-store';
+import {
+  isSidebarCategory,
+  type SidebarCategoryId,
+  type SidebarSectionId,
+  useSidebarStore,
+} from '@/store/sidebar-store';
 import { hasUpdateBadge, useUpdateStore } from '@/store/update-store';
 
 const NARROW_WIDTH = 960;
@@ -118,6 +126,10 @@ function CollapsibleSection({
   const panelCollapsed = useContext(CollapsedContext);
   const open = useSidebarStore((s) => s.sectionsOpen[id]);
   const toggleSection = useSidebarStore((s) => s.toggleSection);
+  const setSectionHidden = useSidebarStore((s) => s.setSectionHidden);
+  const hidden = useSidebarStore((s) => (isSidebarCategory(id) ? s.sectionsHidden[id] : false));
+
+  if (hidden) return null;
 
   if (panelCollapsed) {
     return (
@@ -128,17 +140,32 @@ function CollapsibleSection({
     );
   }
 
+  const categoryId = isSidebarCategory(id) ? id : null;
+
   return (
-    <div className="space-y-0.5" role="group" aria-label={title}>
-      <button
-        type="button"
-        aria-expanded={open}
-        onClick={() => toggleSection(id)}
-        className="flex w-full items-center gap-1 px-2.5 pb-1 pt-4 text-left text-[11px] font-semibold uppercase tracking-wide text-muted transition-colors hover:text-foreground"
-      >
-        <ChevronRight size={14} className={cn('shrink-0 transition-transform', open && 'rotate-90')} aria-hidden />
-        <span className="truncate">{title}</span>
-      </button>
+    <div className="group/section space-y-0.5" role="group" aria-label={title}>
+      <div className="flex items-center gap-0.5 px-1 pt-4">
+        <button
+          type="button"
+          aria-expanded={open}
+          onClick={() => toggleSection(id)}
+          className="flex min-w-0 flex-1 items-center gap-1 px-1.5 pb-1 text-left text-[11px] font-semibold uppercase tracking-wide text-muted transition-colors hover:text-foreground"
+        >
+          <ChevronRight size={14} className={cn('shrink-0 transition-transform', open && 'rotate-90')} aria-hidden />
+          <span className="truncate">{title}</span>
+        </button>
+        {categoryId && (
+          <button
+            type="button"
+            title="Скрыть категорию"
+            aria-label={`Скрыть категорию «${title}»`}
+            onClick={() => setSectionHidden(categoryId, true)}
+            className="shrink-0 rounded p-1 text-muted opacity-0 transition-opacity hover:bg-foreground/[0.06] hover:text-foreground group-hover/section:opacity-100 focus-visible:opacity-100"
+          >
+            <EyeOff size={13} aria-hidden />
+          </button>
+        )}
+      </div>
       {open ? children : null}
     </div>
   );
@@ -152,7 +179,8 @@ function PlaylistSubsection({
   scope: 'mss' | 'yandex' | 'vk' | 'spotify';
 }) {
   const panelCollapsed = useContext(CollapsedContext);
-  const parentSection = scope === 'mss' ? 'mss' : scope;
+  const parentSection: SidebarCategoryId = scope === 'mss' ? 'mss' : scope;
+  const parentHidden = useSidebarStore((s) => s.sectionsHidden[parentSection]);
   const parentOpen = useSidebarStore((s) => s.sectionsOpen[parentSection]);
   const open = useSidebarStore((s) => s.sectionsOpen[id]);
   const toggleSection = useSidebarStore((s) => s.toggleSection);
@@ -181,6 +209,7 @@ function PlaylistSubsection({
       .filter(Boolean) as { key: string; to: string; label: string; image?: string | null }[];
   }, [pins, mssPlaylists, yandexPlaylists, vkPlaylists, spotifyPlaylists]);
 
+  if (parentHidden) return null;
   if (!parentOpen && !panelCollapsed) return null;
   if (!pins.length && panelCollapsed) return null;
 
@@ -261,6 +290,15 @@ export function Sidebar() {
   const narrow = useNarrowWindow();
   const collapsed = preferCollapsed || narrow;
   const updateBadge = hasUpdateBadge(useUpdateStore((s) => s.status));
+  const [logoutOpen, setLogoutOpen] = useState(false);
+
+  const confirmLogout = () => {
+    setLogoutOpen(false);
+    void leaveCurrentLobby().finally(() => {
+      clearSession();
+      navigate('/login');
+    });
+  };
 
   return (
     <CollapsedContext.Provider value={collapsed}>
@@ -345,12 +383,7 @@ export function Sidebar() {
             type="button"
             title={email ? `Выйти (${email})` : 'Выйти'}
             aria-label={email ? `Выйти (${email})` : 'Выйти'}
-            onClick={() => {
-              void leaveCurrentLobby().finally(() => {
-                clearSession();
-                navigate('/login');
-              });
-            }}
+            onClick={() => setLogoutOpen(true)}
             className={cn(
               'flex h-8 w-full items-center gap-2.5 rounded-md text-[13px] text-foreground/60 transition-colors hover:bg-foreground/[0.05] hover:text-foreground',
               collapsed ? 'justify-center' : 'px-2.5',
@@ -359,6 +392,17 @@ export function Sidebar() {
             <LogOut size={collapsed ? 18 : 16} className="shrink-0" />
             {!collapsed && <span className="truncate">{email ?? 'Выйти'}</span>}
           </button>
+          <Dialog open={logoutOpen} onClose={() => setLogoutOpen(false)} title="Выйти из аккаунта?">
+            <p className="mb-5 text-sm text-muted">
+              {email
+                ? `Вы выйдете из MSS (${email}). Потребуется снова войти по почте и паролю.`
+                : 'Вы выйдете из MSS. Потребуется снова войти по почте и паролю.'}
+            </p>
+            <div className="flex justify-end gap-2">
+              <Button variant="ghost" onClick={() => setLogoutOpen(false)}>Отмена</Button>
+              <Button variant="danger" onClick={confirmLogout}>Выйти</Button>
+            </div>
+          </Dialog>
           {!narrow && (
             <button
               type="button"

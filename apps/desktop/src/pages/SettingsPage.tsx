@@ -29,6 +29,7 @@ import { ACCENTS, COVER_ACCENT } from '@/lib/appearance';
 import { formatBytes, formatTrackCount } from '@/lib/format';
 import { isCompressible, useDownloadsStore } from '@/store/downloads-store';
 import { compressionKbps, useSettingsStore, type DownloadCompression } from '@/store/settings-store';
+import { SIDEBAR_CATEGORIES, useSidebarStore } from '@/store/sidebar-store';
 import { useUpdateStore } from '@/store/update-store';
 import { toast } from 'sonner';
 
@@ -363,6 +364,35 @@ function DiscordSection() {
   );
 }
 
+function SidebarCategoriesSection() {
+  const hidden = useSidebarStore((s) => s.sectionsHidden);
+  const setSectionHidden = useSidebarStore((s) => s.setSectionHidden);
+  const showAll = useSidebarStore((s) => s.showAllCategories);
+  const anyHidden = SIDEBAR_CATEGORIES.some((c) => hidden[c.id]);
+  return (
+    <Section
+      title="Категории в боковой панели"
+    >
+      {SIDEBAR_CATEGORIES.map((c) => (
+        <Row key={c.id} title={c.label}>
+          <Switch
+            checked={!hidden[c.id]}
+            onChange={(visible) => setSectionHidden(c.id, !visible)}
+            label={`Показывать «${c.label}»`}
+          />
+        </Row>
+      ))}
+      {anyHidden && (
+        <div className="pt-1">
+          <Button type="button" variant="secondary" size="sm" onClick={() => showAll()}>
+            Показать все категории
+          </Button>
+        </div>
+      )}
+    </Section>
+  );
+}
+
 function AppearanceSection() {
   const theme = useSettingsStore((s) => s.theme);
   const setTheme = useSettingsStore((s) => s.setTheme);
@@ -638,6 +668,8 @@ export function SettingsPage() {
       </Section>
 
       <ClientSecretsSection />
+
+      <SidebarCategoriesSection />
 
       <AppearanceSection />
 

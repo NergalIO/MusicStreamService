@@ -12,6 +12,29 @@ export type SidebarSectionId =
   | 'vk'
   | 'vkPlaylists';
 
+/** Верхнеуровневые блоки боковой панели (можно полностью скрыть). */
+export type SidebarCategoryId = 'media' | 'mss' | 'yandex' | 'spotify' | 'vk';
+
+export const SIDEBAR_CATEGORIES: readonly { id: SidebarCategoryId; label: string }[] = [
+  { id: 'media', label: 'Медиатека' },
+  { id: 'mss', label: 'MSS' },
+  { id: 'yandex', label: 'Яндекс Музыка' },
+  { id: 'spotify', label: 'Spotify' },
+  { id: 'vk', label: 'VK Музыка' },
+] as const;
+
+const defaultHidden: Record<SidebarCategoryId, boolean> = {
+  media: false,
+  mss: false,
+  yandex: false,
+  spotify: false,
+  vk: false,
+};
+
+export function isSidebarCategory(id: SidebarSectionId): id is SidebarCategoryId {
+  return id in defaultHidden;
+}
+
 export type SidebarPlaylistPin = { source: 'local' | 'yandex' | 'spotify' | 'vk'; id: string };
 
 export function sidebarPinKey(pin: SidebarPlaylistPin): string {
@@ -20,9 +43,12 @@ export function sidebarPinKey(pin: SidebarPlaylistPin): string {
 
 interface SidebarState {
   sectionsOpen: Record<SidebarSectionId, boolean>;
+  sectionsHidden: Record<SidebarCategoryId, boolean>;
   pinnedPlaylists: SidebarPlaylistPin[];
   toggleSection: (id: SidebarSectionId) => void;
   setSectionOpen: (id: SidebarSectionId, open: boolean) => void;
+  setSectionHidden: (id: SidebarCategoryId, hidden: boolean) => void;
+  showAllCategories: () => void;
   isPinned: (source: SidebarPlaylistPin['source'], id: string) => boolean;
   togglePin: (source: SidebarPlaylistPin['source'], id: string) => void;
 }
@@ -43,6 +69,7 @@ export const useSidebarStore = create<SidebarState>()(
   persist(
     (set, get) => ({
       sectionsOpen: { ...defaultOpen },
+      sectionsHidden: { ...defaultHidden },
       pinnedPlaylists: [],
       toggleSection: (id) =>
         set((s) => ({
@@ -52,6 +79,11 @@ export const useSidebarStore = create<SidebarState>()(
         set((s) => ({
           sectionsOpen: { ...s.sectionsOpen, [id]: open },
         })),
+      setSectionHidden: (id, hidden) =>
+        set((s) => ({
+          sectionsHidden: { ...s.sectionsHidden, [id]: hidden },
+        })),
+      showAllCategories: () => set({ sectionsHidden: { ...defaultHidden } }),
       isPinned: (source, id) => get().pinnedPlaylists.some((p) => p.source === source && p.id === id),
       togglePin: (source, id) =>
         set((s) => {
@@ -66,11 +98,16 @@ export const useSidebarStore = create<SidebarState>()(
     }),
     {
       name: 'mss-sidebar',
-      version: 2,
+      version: 3,
       migrate: (persisted) => {
-        const state = persisted as { sectionsOpen?: Partial<Record<SidebarSectionId, boolean>>; pinnedPlaylists?: SidebarPlaylistPin[] } | undefined;
+        const state = persisted as {
+          sectionsOpen?: Partial<Record<SidebarSectionId, boolean>>;
+          sectionsHidden?: Partial<Record<SidebarCategoryId, boolean>>;
+          pinnedPlaylists?: SidebarPlaylistPin[];
+        } | undefined;
         return {
           sectionsOpen: { ...defaultOpen, ...state?.sectionsOpen },
+          sectionsHidden: { ...defaultHidden, ...state?.sectionsHidden },
           pinnedPlaylists: state?.pinnedPlaylists ?? [],
         };
       },
