@@ -60,6 +60,13 @@ class VkAuthTest {
     fun sessionCookieDetectsRemixSid() {
         org.junit.Assert.assertTrue(VkAuth.hasSessionCookie("remixsid=abc; remixlang=0"))
         org.junit.Assert.assertFalse(VkAuth.hasSessionCookie("remixlang=0"))
+        org.junit.Assert.assertFalse(VkAuth.hasSessionCookie("remixstlid=anon; remixlang=0"))
+    }
+
+    @Test
+    fun loginCookieNeedsLOrP() {
+        org.junit.Assert.assertTrue(VkAuth.hasLoginCookie("remixlang=0; l=123"))
+        org.junit.Assert.assertFalse(VkAuth.hasLoginCookie("remixlang=0; remixstlid=anon"))
     }
 
     @Test

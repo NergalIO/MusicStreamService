@@ -132,7 +132,6 @@ fun VkIdOverlay(
     onClose: () -> Unit,
     onForm: () -> Unit,
     onDone: (String) -> Unit,
-    onCookies: (String) -> Unit,
     modifier: Modifier = Modifier,
 ) {
     var pageError by remember { mutableStateOf<String?>(null) }
@@ -174,24 +173,44 @@ fun VkIdOverlay(
                         ),
                     )
                     web.prepareLogin(VkAuth.MOBILE_UA)
-                    var deliverConnect: ((String) -> Unit)? = null
+                    var deliverConnect: ((String, String) -> Unit)? = null
                     web.addJavascriptInterface(object {
                         @JavascriptInterface
-                        fun onConnect(body: String) {
-                            web.post { deliverConnect?.invoke(body) }
+                        fun onConnect(appId: String, body: String) {
+                            web.post { deliverConnect?.invoke(appId, body) }
                         }
                     }, "MssVk")
                     web.webViewClient = object : WebViewClient() {
                         private var finished = false
                         private var fellBack = false
                         private var openedFeed = false
-                        private var lastCookieAt = 0L
+                        private var connecting = false
+                        private var connectAttempts = 0
+                        private var lastConnectAt = 0L
 
                         init {
-                            deliverConnect = { body ->
+                            deliverConnect = { appId, body ->
                                 val payload = vkConnectPayload(body)
-                                if (payload != null) acceptOAuth(VkAuth.toRedirectUrl(payload))
+                                when {
+                                    payload != null -> {
+                                        connecting = false
+                                        acceptOAuth(VkAuth.toRedirectUrl(payload))
+                                    }
+                                    appId == VkAuth.KATE_CLIENT_ID && !finished ->
+                                        web.evaluateJavascript(vkConnectScript(VkAuth.ANDROID_CLIENT_ID), null)
+                                    else -> connecting = false
+                                }
                             }
+                        }
+
+                        private fun tryConnect(target: WebView) {
+                            val now = android.os.SystemClock.elapsedRealtime()
+                            if (finished || connecting || connectAttempts >= MAX_CONNECT_ATTEMPTS) return
+                            if (now - lastConnectAt < CONNECT_INTERVAL_MS) return
+                            connecting = true
+                            connectAttempts++
+                            lastConnectAt = now
+                            target.evaluateJavascript(vkConnectScript(VkAuth.KATE_CLIENT_ID), null)
                         }
 
                         private fun acceptOAuth(url: String): Boolean {
@@ -219,20 +238,14 @@ fun VkIdOverlay(
                                 }
                                 val scraped = VkAuth.parsePageTokens(snap.html.ifBlank { snap.text })
                                 if (scraped != null && acceptOAuth(VkAuth.toRedirectUrl(scraped))) return@evaluateJavascript
-                                val cookies = vkWebCookies()
-                                if (VkAuth.hasSessionCookie(cookies) && VkAuth.isVkHost(runCatching { java.net.URI(href.ifBlank { candidate }).host.orEmpty() }.getOrDefault(""))) {
-                                    val now = android.os.SystemClock.elapsedRealtime()
-                                    if (now - lastCookieAt < 1500L) return@evaluateJavascript
-                                    lastCookieAt = now
-                                    if (!openedFeed && !VkAuth.looksLoggedIn(href) && !VkAuth.looksLoggedIn(candidate)) {
-                                        openedFeed = true
-                                        target.loadUrl("https://vk.com/")
-                                        return@evaluateJavascript
-                                    }
-                                    onCookies(cookies)
-                                    target.evaluateJavascript(vkConnectScript(VkAuth.KATE_CLIENT_ID), null)
-                                    target.evaluateJavascript(vkConnectScript(VkAuth.ANDROID_CLIENT_ID), null)
+                                val host = runCatching { java.net.URI(href.ifBlank { candidate }).host.orEmpty() }.getOrDefault("")
+                                if (!VkAuth.isVkHost(host) || !vkLoggedIn()) return@evaluateJavascript
+                                if (!openedFeed && !VkAuth.looksLoggedIn(href) && !VkAuth.looksLoggedIn(candidate)) {
+                                    openedFeed = true
+                                    target.loadUrl(if (host.endsWith("vk.ru", true)) "https://vk.ru/" else "https://vk.com/")
+                                    return@evaluateJavascript
                                 }
+                                tryConnect(target)
                             }
                         }
 
@@ -333,8 +346,11 @@ private fun vkConnectScript(appId: String): String = """
     credentials: 'include',
     headers: { 'Content-Type': 'application/x-www-form-urlencoded' },
     body: 'app_id=$appId&oauth_version=1&version=1'
-  }).then((r) => r.text()).then((t) => { try { MssVk.onConnect(t); } catch (e) {} }).catch(() => {});
+  }).then((r) => r.text()).catch(() => '').then((t) => { try { MssVk.onConnect('$appId', t); } catch (e) {} });
 """
+
+private const val MAX_CONNECT_ATTEMPTS = 3
+private const val CONNECT_INTERVAL_MS = 5_000L
 
 private fun vkConnectPayload(body: String): com.mss.core.connectors.VkOAuthPayload? {
     val obj = runCatching { org.json.JSONObject(body) }.getOrNull() ?: return null
@@ -351,19 +367,9 @@ private fun vkConnectPayload(body: String): com.mss.core.connectors.VkOAuthPaylo
     return com.mss.core.connectors.VkOAuthPayload(access, user, silent, str("uuid") ?: str("silent_token_uuid"))
 }
 
-private fun vkWebCookies(): String {
+private fun vkLoggedIn(): Boolean {
     val cookies = CookieManager.getInstance()
-    return listOf(
-        "https://login.vk.com/",
-        "https://id.vk.com/",
-        "https://vk.com/",
-        "https://m.vk.com/",
-        "https://oauth.vk.com/",
-        "https://login.vk.ru/",
-        "https://id.vk.ru/",
-        "https://vk.ru/",
-        "https://m.vk.ru/",
-        "https://oauth.vk.ru/",
-    ).mapNotNull { cookies.getCookie(it)?.takeIf(String::isNotBlank) }
-        .joinToString("; ")
+    fun read(vararg urls: String) = urls.mapNotNull { cookies.getCookie(it)?.takeIf(String::isNotBlank) }.joinToString("; ")
+    return VkAuth.hasSessionCookie(read("https://vk.ru/", "https://vk.com/", "https://m.vk.ru/", "https://m.vk.com/")) ||
+        VkAuth.hasLoginCookie(read("https://login.vk.ru/", "https://login.vk.com/"))
 }

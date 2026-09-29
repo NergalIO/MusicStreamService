@@ -36,6 +36,7 @@ import com.mss.core.offline.OfflineStore
 import com.mss.core.player.PlayerController
 import dagger.hilt.android.lifecycle.HiltViewModel
 import javax.inject.Inject
+import kotlinx.coroutines.Job
 import kotlinx.coroutines.async
 import kotlinx.coroutines.awaitAll
 import kotlinx.coroutines.coroutineScope
@@ -129,7 +130,7 @@ class MssViewModel @Inject constructor(
     private val _librarySource = MutableStateFlow<SourceId?>(null)
     val librarySource: StateFlow<SourceId?> = _librarySource
     val playHistory = repo.prefs.playHistory.stateIn(viewModelScope, SharingStarted.Eagerly, emptyList())
-    @Volatile private var vkCookieProbe = false
+    private var vkExchange: Job? = null
 
     init {
         refreshSources()
@@ -669,7 +670,6 @@ class MssViewModel @Inject constructor(
 
     fun openVkLogin() {
         vk.cancelLogin()
-        vkCookieProbe = false
         _vkLogin.value = VkLoginUi(open = true, step = VkLoginStep.VKID)
     }
 
@@ -677,13 +677,11 @@ class MssViewModel @Inject constructor(
 
     fun closeVkLogin() {
         vk.cancelLogin()
-        vkCookieProbe = false
         _vkLogin.value = VkLoginUi()
     }
 
     fun setVkMethod(sms: Boolean) {
         vk.cancelLogin()
-        vkCookieProbe = false
         _vkLogin.value = VkLoginUi(open = true, sms = sms)
     }
 
@@ -714,7 +712,8 @@ class MssViewModel @Inject constructor(
 
     fun completeVkId(url: String) {
         if (!VkAuth.shouldCompleteWebLogin(url)) return
-        launchVk {
+        if (vkExchange?.isActive == true || _sources.value.vk != AuthStatus.DISCONNECTED) return
+        vkExchange = launchVk {
             vk.completeWebLogin(url)
             _vkLogin.value = VkLoginUi()
             refreshSources()
@@ -722,27 +721,8 @@ class MssViewModel @Inject constructor(
         }
     }
 
-    fun tryVkWebCookies(cookies: String) {
-        if (cookies.isBlank() || vkCookieProbe) return
-        viewModelScope.launch {
-            vkCookieProbe = true
-            runCatching { vk.completeWebLoginFromCookies(cookies) }
-                .onSuccess { ok ->
-                    if (ok) {
-                        _vkLogin.value = VkLoginUi()
-                        refreshSources()
-                        loadHome()
-                    }
-                }
-                .onFailure { e ->
-                    _vkLogin.value = _vkLogin.value.copy(busy = false, error = e.message)
-                }
-            vkCookieProbe = false
-        }
-    }
-
-    private fun launchVk(block: suspend () -> Unit) {
-        viewModelScope.launch {
+    private fun launchVk(block: suspend () -> Unit): Job {
+        return viewModelScope.launch {
             _vkLogin.value = _vkLogin.value.copy(busy = true, error = null)
             runCatching { block() }.onFailure { e ->
                 val cur = _vkLogin.value

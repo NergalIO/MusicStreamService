@@ -179,12 +179,20 @@ object VkAuth {
         return out
     }
 
+    /** `remixstlid` VK ставит и анонимам, поэтому сессией не считается. */
     fun hasSessionCookie(header: String): Boolean {
         return parseCookieHeader(header).keys.any { name ->
-            val n = name.lowercase()
-            n.contains("remix") && (n.contains("sid") || n.contains("token") || n.contains("stlid"))
+            name.lowercase() in SESSION_COOKIES
         }
     }
+
+    /** Куки хоста login.vk.*: VK ID ставит `l`/`p` сразу после входа, раньше `remixsid`. */
+    fun hasLoginCookie(header: String): Boolean {
+        val names = parseCookieHeader(header).keys
+        return "l" in names || "p" in names
+    }
+
+    private val SESSION_COOKIES = setOf("remixsid", "remixnsid")
 
     fun parsePageTokens(html: String): VkOAuthPayload? {
         val access = Regex("\"(?:apiPrefetchToken|access_token|accessToken)\"\\s*:\\s*\"(vk1\\.[^\"]+)\"")
@@ -212,31 +220,29 @@ object VkAuth {
     suspend fun tokensFromConnectInternal(
         cookies: Map<String, String>,
         appId: String,
+        domain: String = "vk.ru",
         ua: String = MOBILE_UA,
     ): VkOAuthPayload? {
         if (cookies.isEmpty()) return null
-        for (domain in listOf("vk.ru", "vk.com")) {
-            val obj = runCatching {
-                postForm(
-                    "https://login.$domain/?act=connect_internal",
-                    mapOf("app_id" to appId, "oauth_version" to "1", "version" to "1"),
-                    cookies = cookies.toMutableMap(),
-                    ua = ua,
-                    origin = "https://id.$domain",
-                )
-            }.getOrNull() ?: continue
-            val nested = obj["data"]?.jsonObject ?: obj
-            val access = nested.str("access_token")
-            val silent = nested.str("silent_token")
-            if (access.isNullOrBlank() && silent.isNullOrBlank()) continue
-            return VkOAuthPayload(
-                accessToken = access,
-                userId = nested["user_id"]?.jsonPrimitive?.longOrNull ?: nested.str("user_id")?.toLongOrNull(),
-                silentToken = silent,
-                uuid = nested.str("uuid") ?: nested.str("silent_token_uuid"),
+        val obj = runCatching {
+            postForm(
+                "https://login.$domain/?act=connect_internal",
+                mapOf("app_id" to appId, "oauth_version" to "1", "version" to "1"),
+                cookies = cookies.toMutableMap(),
+                ua = ua,
+                origin = "https://id.$domain",
             )
-        }
-        return null
+        }.getOrNull() ?: return null
+        val nested = obj["data"]?.jsonObject ?: obj
+        val access = nested.str("access_token")
+        val silent = nested.str("silent_token")
+        if (access.isNullOrBlank() && silent.isNullOrBlank()) return null
+        return VkOAuthPayload(
+            accessToken = access,
+            userId = nested["user_id"]?.jsonPrimitive?.longOrNull ?: nested.str("user_id")?.toLongOrNull(),
+            silentToken = silent,
+            uuid = nested.str("uuid") ?: nested.str("silent_token_uuid"),
+        )
     }
 
     suspend fun loginPassword(
@@ -430,7 +436,7 @@ object VkAuth {
             mapOf("access_token" to androidToken, "auth_code" to qr.authCode, "action" to "1", "v" to AUTH_API),
             ua = BROWSER_UA,
         )
-        repeat(12) {
+        repeat(8) {
             val check = postForm(
                 "https://api.vk.com/method/auth.checkAuthCode",
                 mapOf(
@@ -451,7 +457,7 @@ object VkAuth {
                 3 -> throw VkAuthException("VK отклонил подтверждение входа")
                 4 -> throw VkAuthException("Сессия входа истекла. Попробуйте ещё раз")
             }
-            kotlinx.coroutines.delay(400)
+            kotlinx.coroutines.delay(1_000)
         }
         throw VkAuthException("Не удалось получить токен Kate после входа по SMS")
     }
@@ -537,13 +543,23 @@ object VkAuth {
         ua: String = if (kate) KATE_UA else BROWSER_UA,
         origin: String? = null,
     ): JsonObject {
-        val text = follow("POST", url, body, cookies, ua, origin).second
-        val parsed = runCatching { json.parseToJsonElement(text).jsonObject }.getOrElse {
-            throw VkAuthException("VK вернул не JSON")
+        repeat(2) { attempt ->
+            val text = follow("POST", url, body, cookies, ua, origin).second
+            val parsed = runCatching { json.parseToJsonElement(text).jsonObject }.getOrElse {
+                throw VkAuthException("VK вернул не JSON")
+            }
+            if (attempt == 0 && apiErrorCode(parsed) == 6) {
+                kotlinx.coroutines.delay(1_000)
+                return@repeat
+            }
+            throwIfApiError(parsed)
+            return parsed
         }
-        throwIfApiError(parsed)
-        return parsed
+        throw VkAuthException("Слишком много запросов к VK, подождите пару минут", robot = true)
     }
+
+    private fun apiErrorCode(obj: JsonObject): Int? =
+        (obj["error"] as? JsonObject)?.get("error_code")?.jsonPrimitive?.intOrNull
 
     private fun throwIfApiError(obj: JsonObject) {
         val err = obj["error"] ?: return
@@ -574,7 +590,7 @@ object VkAuth {
             }
             throw VkAuthException("Введите код с картинки", captchaSid = captchaSid, captchaImg = captchaImg)
         }
-        if (code == 9 || msg.contains("flood", true)) {
+        if (code == 6 || code == 9 || msg.contains("flood", true)) {
             throw VkAuthException("Слишком много попыток, подождите пару минут", robot = true)
         }
         throw VkAuthException(msg)

@@ -4,6 +4,7 @@ import { log } from './logger.js';
 
 const PARTITION = 'persist:vk-web-login';
 const ANDROID_CLIENT_ID = '2274003';
+const EXTRACT_INTERVAL_MS = 5_000;
 const FALLBACK_STARTS = ['https://vk.com/', 'https://m.vk.com/login', 'https://id.vk.com/', 'https://vk.com/login'];
 
 let activeLogin: BrowserWindow | null = null;
@@ -86,18 +87,27 @@ function looksLoggedIn(href: string): boolean {
   }
 }
 
-async function tokensFromConnectInternal(
-  ses: Session,
-  appId: string,
-): Promise<{ access_token?: string; silent_token?: string; uuid?: string; user_id?: number } | null> {
-  for (const domain of ['vk.ru', 'vk.com']) {
-    const tokens = await tokensFromConnectInternalAt(ses, appId, domain);
-    if (tokens) return tokens;
-  }
-  return null;
+function vkDomainOf(host: string): 'vk.ru' | 'vk.com' {
+  return /(^|\.)vk\.ru$/i.test(host) ? 'vk.ru' : 'vk.com';
 }
 
-async function tokensFromConnectInternalAt(
+/** `remixstlid` ставится и анонимам; сессия — `remixsid`/`remixnsid` или `l`/`p` на login-хосте. */
+async function hasVkSession(ses: Session, domain: string): Promise<boolean> {
+  try {
+    const [site, login] = await Promise.all([
+      ses.cookies.get({ domain }),
+      ses.cookies.get({ url: `https://login.${domain}/` }),
+    ]);
+    return (
+      site.some((c) => c.name === 'remixsid' || c.name === 'remixnsid') ||
+      login.some((c) => c.name === 'l' || c.name === 'p')
+    );
+  } catch {
+    return false;
+  }
+}
+
+async function tokensFromConnectInternal(
   ses: Session,
   appId: string,
   domain: string,
@@ -177,7 +187,7 @@ export function openKateOAuthWindow(url: string, signal?: AbortSignal): Promise<
     let settled = false;
     let openedConfirm = false;
     let extracting = false;
-    let extractAgain = false;
+    let lastExtractAt = 0;
     const tried = new Set<string>([start]);
     const finish = (fn: () => void) => {
       if (settled) return;
@@ -287,21 +297,19 @@ export function openKateOAuthWindow(url: string, signal?: AbortSignal): Promise<
         return null;
       }
     };
-    const extractSessionToken = async () => {
-      if (settled || win.isDestroyed()) return;
-      if (extracting) {
-        extractAgain = true;
-        return;
-      }
+    const extractSessionToken = async (host: string) => {
+      if (settled || win.isDestroyed() || extracting) return;
+      if (Date.now() - lastExtractAt < EXTRACT_INTERVAL_MS) return;
+      const domain = vkDomainOf(host);
+      if (!(await hasVkSession(ses, domain))) return;
+      if (settled || extracting) return;
       extracting = true;
+      lastExtractAt = Date.now();
       try {
-        do {
-          extractAgain = false;
-          const kate = await tokensFromConnectInternal(ses, VK_KATE_CLIENT_ID);
-          if (acceptTokens(kate)) return;
-          const android = await tokensFromConnectInternal(ses, ANDROID_CLIENT_ID);
-          if (acceptTokens(android)) return;
-        } while (extractAgain && !settled && !win.isDestroyed());
+        const kate = await tokensFromConnectInternal(ses, VK_KATE_CLIENT_ID, domain);
+        if (acceptTokens(kate)) return;
+        const android = await tokensFromConnectInternal(ses, ANDROID_CLIENT_ID, domain);
+        acceptTokens(android);
       } finally {
         extracting = false;
       }
@@ -324,7 +332,7 @@ export function openKateOAuthWindow(url: string, signal?: AbortSignal): Promise<
       try {
         const hostNow = new URL(href).hostname;
         if (isVkHost(hostNow) && !/oauth\.vk\./i.test(hostNow) && !/qr\.vk\./i.test(hostNow)) {
-          await extractSessionToken();
+          await extractSessionToken(hostNow);
           if (settled) return;
         }
       } catch {
