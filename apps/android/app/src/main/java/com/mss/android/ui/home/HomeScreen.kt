@@ -58,6 +58,7 @@ fun HomeScreen(vm: MssViewModel, nav: NavHostController) {
     val tracks by vm.tracks.collectAsState()
     val liked by vm.likedIds.collectAsState()
     val player by vm.playerState.collectAsState()
+    val sources by vm.sources.collectAsState()
     val window = rememberMssWindow()
     LaunchedEffect(source) { vm.loadHome() }
     val empty = shelves == null && feed.isEmpty() && playlists.isEmpty() && tracks.isEmpty()
@@ -81,13 +82,18 @@ fun HomeScreen(vm: MssViewModel, nav: NavHostController) {
             ) {
                 items(
                     listOf(
-                        SourceId.LOCAL to "MSS",
-                        SourceId.YANDEX to "Яндекс",
-                        SourceId.SPOTIFY to "Spotify",
-                        SourceId.VK to "VK",
+                        Triple(SourceId.LOCAL, "MSS", null),
+                        Triple(SourceId.YANDEX, "Яндекс", sources.yandex),
+                        Triple(SourceId.SPOTIFY, "Spotify", sources.spotify),
+                        Triple(SourceId.VK, "VK", sources.vk),
                     ),
-                ) { (s, label) ->
-                    MssChip(selected = source == s, label = label, onClick = { vm.setHomeSource(s) })
+                ) { (s, label, status) ->
+                    MssChip(
+                        selected = source == s,
+                        label = label,
+                        caption = status?.let { sourceCaption(it) },
+                        onClick = { vm.setHomeSource(s) },
+                    )
                 }
             }
         }
@@ -95,7 +101,7 @@ fun HomeScreen(vm: MssViewModel, nav: NavHostController) {
             item {
                 EmptyState(
                     "Здесь появится ваша музыка",
-                    "Подключите Яндекс, Spotify или VK в разделе «Ещё», либо загрузите свои треки.",
+                    "Подключите Яндекс, Spotify или VK в разделе «Ещё» — на чипе будет видно, какой сервис уже работает.",
                 )
             }
         }
@@ -239,5 +245,11 @@ private fun WaveHero(playing: Boolean, title: String?, onPlay: () -> Unit, onOpe
             }
         }
     }
+}
+
+private fun sourceCaption(status: com.mss.core.connectors.AuthStatus): String = when (status) {
+    com.mss.core.connectors.AuthStatus.CONNECTED -> "подключён"
+    com.mss.core.connectors.AuthStatus.EXPIRED -> "войти снова"
+    com.mss.core.connectors.AuthStatus.DISCONNECTED -> "не подключён"
 }
 

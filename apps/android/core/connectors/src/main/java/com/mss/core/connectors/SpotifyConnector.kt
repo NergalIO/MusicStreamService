@@ -5,7 +5,6 @@ import com.mss.core.model.SourceId
 import com.mss.core.model.UnifiedPlaylist
 import com.mss.core.model.UnifiedTrack
 import io.ktor.client.HttpClient
-import io.ktor.client.call.body
 import io.ktor.client.engine.okhttp.OkHttp
 import io.ktor.client.request.forms.FormDataContent
 import io.ktor.client.request.get
@@ -18,9 +17,6 @@ import io.ktor.http.HttpHeaders
 import io.ktor.http.Parameters
 import io.ktor.http.contentType
 import io.ktor.http.isSuccess
-import java.security.MessageDigest
-import java.security.SecureRandom
-import java.util.Base64
 import javax.inject.Inject
 import javax.inject.Singleton
 import kotlinx.serialization.SerialName
@@ -39,73 +35,16 @@ class SpotifyConnector @Inject constructor(
     private val json = Json { ignoreUnknownKeys = true }
     private val http = HttpClient(OkHttp)
     private val clientId = BuildConfig.SPOTIFY_CLIENT_ID
-    private val redirectUri = "mss://spotify/callback"
-    private val scopes =
-        "user-read-email user-read-private streaming user-modify-playback-state user-read-playback-state user-library-read playlist-read-private playlist-read-collaborative"
 
-    private var pendingVerifier: String? = null
-    private var pendingState: String? = null
-
-    override fun authStatus(): AuthStatus {
-        if (web.loggedIn.value) return AuthStatus.CONNECTED
-        val t = loadTokens() ?: return AuthStatus.DISCONNECTED
-        return if (t.refreshToken.isNotBlank()) AuthStatus.CONNECTED else AuthStatus.DISCONNECTED
-    }
-
-    fun buildAuthorizeUrl(): String {
-        val verifier = randomUrlSafe(32)
-        val challenge = sha256Url(verifier)
-        val state = randomUrlSafe(16)
-        pendingVerifier = verifier
-        pendingState = state
-        return buildString {
-            append("https://accounts.spotify.com/authorize?")
-            append("client_id=").append(clientId)
-            append("&response_type=code")
-            append("&redirect_uri=").append(java.net.URLEncoder.encode(redirectUri, Charsets.UTF_8))
-            append("&scope=").append(java.net.URLEncoder.encode(scopes, Charsets.UTF_8))
-            append("&state=").append(state)
-            append("&code_challenge_method=S256")
-            append("&code_challenge=").append(challenge)
-            append("&show_dialog=true")
-        }
-    }
-
-    suspend fun completeOAuth(code: String, state: String) {
-        if (state != pendingState) throw ConnectorException("Invalid OAuth state")
-        val verifier = pendingVerifier ?: throw ConnectorException("Missing PKCE verifier")
-        pendingVerifier = null
-        pendingState = null
-        if (clientId.isBlank()) throw ConnectorException("SPOTIFY_CLIENT_ID не задан в local.properties")
-        val res = http.post("https://accounts.spotify.com/api/token") {
-            contentType(ContentType.Application.FormUrlEncoded)
-            setBody(
-                FormDataContent(
-                    Parameters.build {
-                        append("grant_type", "authorization_code")
-                        append("code", code)
-                        append("redirect_uri", redirectUri)
-                        append("client_id", clientId)
-                        append("code_verifier", verifier)
-                    },
-                ),
-            )
-        }
-        if (!res.status.isSuccess()) throw ConnectorException(res.bodyAsText())
-        val data = json.decodeFromString<TokenResponse>(res.bodyAsText())
-        if (data.refreshToken.isNullOrBlank()) throw ConnectorException("Spotify не выдал refresh_token")
-        saveTokens(
-            SpotifyTokens(
-                accessToken = data.accessToken,
-                refreshToken = data.refreshToken,
-                expiresAt = System.currentTimeMillis() + data.expiresIn * 1000,
-            ),
-        )
-    }
+    override fun authStatus(): AuthStatus =
+        if (web.loggedIn.value) AuthStatus.CONNECTED else AuthStatus.DISCONNECTED
 
     override suspend fun disconnect() {
         vault.delete(VAULT_KEY)
+        web.logout()
     }
+
+    suspend fun trackRadio(track: UnifiedTrack) = pathfinder.trackRadio(track.id)
 
     override suspend fun search(query: String, limit: Int): List<UnifiedTrack> {
         if (web.headers != null) {
@@ -395,15 +334,4 @@ private object SpotifyErrors {
         }
         return raw.ifBlank { "Spotify API $status ($path)" }
     }
-}
-
-private fun randomUrlSafe(bytes: Int): String {
-    val buf = ByteArray(bytes)
-    SecureRandom().nextBytes(buf)
-    return Base64.getUrlEncoder().withoutPadding().encodeToString(buf)
-}
-
-private fun sha256Url(verifier: String): String {
-    val digest = MessageDigest.getInstance("SHA-256").digest(verifier.toByteArray(Charsets.US_ASCII))
-    return Base64.getUrlEncoder().withoutPadding().encodeToString(digest)
 }

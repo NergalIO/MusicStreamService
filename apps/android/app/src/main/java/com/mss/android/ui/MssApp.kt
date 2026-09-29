@@ -96,19 +96,17 @@ fun MssApp(
 ) {
     val session by vm.session.collectAsState()
     val nav = rememberNavController()
-    val spotifyVisible by vm.spotifyWeb.loggedIn.collectAsState()
+    val spotifyLoggedIn by vm.spotifyWeb.loggedIn.collectAsState()
+    val spotifyLogin by vm.spotifyWeb.visibleForLogin.collectAsState()
     val settings by vm.playbackSettings.collectAsState()
+    LaunchedEffect(spotifyLoggedIn) {
+        if (spotifyLoggedIn) vm.spotifyWeb.hideLogin()
+    }
 
     LaunchedEffect(incomingUri, session) {
         if (session == null) return@LaunchedEffect
         val uri = incomingUri ?: return@LaunchedEffect
         val url = uri.toString()
-        if (uri.host == "spotify" && uri.path?.contains("callback") == true) {
-            val code = uri.getQueryParameter("code") ?: return@LaunchedEffect
-            val state = uri.getQueryParameter("state") ?: return@LaunchedEffect
-            vm.completeSpotify(code, state)
-            return@LaunchedEffect
-        }
         val action = parseMssLink(url) ?: return@LaunchedEffect
         vm.applyDeepLink(url)
         snapshotFlow { nav.currentBackStackEntry }.filterNotNull().first()
@@ -122,7 +120,7 @@ fun MssApp(
             } else {
                 MainShell(vm, nav)
             }
-            SpotifyWebLayer(vm, visible = !spotifyVisible && vm.spotifyWeb.visibleForLogin)
+            SpotifyWebLayer(vm, visible = spotifyLogin && !spotifyLoggedIn)
         }
     }
 }
@@ -130,7 +128,7 @@ fun MssApp(
 @SuppressLint("SetJavaScriptEnabled")
 @Composable
 private fun SpotifyWebLayer(vm: MssViewModel, visible: Boolean) {
-    Box(Modifier.fillMaxWidth().then(if (visible) Modifier.fillMaxSize() else Modifier.height(1.dp))) {
+    Box(Modifier.fillMaxWidth().then(if (visible) Modifier.fillMaxSize() else Modifier.height(0.dp))) {
         AndroidView(
             factory = { ctx ->
                 WebView(ctx).also { view ->
@@ -168,13 +166,16 @@ private fun MainShell(vm: MssViewModel, nav: NavHostController) {
 
     prompt?.let { p ->
         AlertDialog(
-            onDismissRequest = {},
+            onDismissRequest = { vm.cancelYandexLogin() },
             title = { Text("Яндекс Музыка") },
             text = { Text("Код ${p.userCode}\nОткройте ${p.verificationUrl}") },
             confirmButton = {
                 Button(onClick = {
                     CustomTabsIntent.Builder().build().launchUrl(ctx, Uri.parse(p.verificationUrl))
                 }) { Text("Открыть") }
+            },
+            dismissButton = {
+                Button(onClick = { vm.cancelYandexLogin() }) { Text("Отмена") }
             },
         )
     }

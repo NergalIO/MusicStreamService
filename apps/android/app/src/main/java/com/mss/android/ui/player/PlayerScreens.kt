@@ -20,15 +20,18 @@ import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
+import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.lazy.LazyColumn
-import androidx.compose.foundation.lazy.items
+import androidx.compose.foundation.lazy.itemsIndexed
 import androidx.compose.foundation.shape.CircleShape
+import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.Favorite
 import androidx.compose.material.icons.filled.FavoriteBorder
 import androidx.compose.material.icons.filled.KeyboardArrowDown
 import androidx.compose.material.icons.filled.Pause
 import androidx.compose.material.icons.filled.PlayArrow
+import androidx.compose.material.icons.filled.Radio
 import androidx.compose.material.icons.filled.Repeat
 import androidx.compose.material.icons.filled.RepeatOne
 import androidx.compose.material.icons.filled.Shuffle
@@ -48,7 +51,7 @@ import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.collectAsState
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableFloatStateOf
-import androidx.compose.runtime.mutableIntStateOf
+import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
@@ -72,6 +75,9 @@ import com.mss.android.ui.components.Cover
 import com.mss.android.ui.components.TrackRow
 import com.mss.android.ui.theme.MssTheme
 import com.mss.core.model.LobbyDto
+import com.mss.core.model.SourceId
+import com.mss.core.model.UnifiedTrack
+import com.mss.core.model.WaveSettings
 import com.mss.core.player.RepeatMode
 
 @Composable
@@ -155,6 +161,7 @@ private fun NowPlayingBody(vm: MssViewModel, onBack: () -> Unit, onArtist: (Stri
     val lyrics by vm.lyrics.collectAsState()
     val liked by vm.likedIds.collectAsState()
     val settings by vm.playbackSettings.collectAsState()
+    val similar by vm.similar.collectAsState()
     val track = state.current
     Box(Modifier.fillMaxSize()) {
         PlayerBackdrop(track?.coverUrl)
@@ -171,97 +178,186 @@ private fun NowPlayingBody(vm: MssViewModel, onBack: () -> Unit, onArtist: (Stri
             }
             return@Box
         }
-        var tab by remember { mutableIntStateOf(1) }
-        LaunchedEffect(track.id) { vm.loadLyrics(track) }
+        var tab by remember { mutableStateOf<Int?>(null) }
+        LaunchedEffect(track.id) {
+            vm.loadLyrics(track)
+            tab = null
+        }
+        LaunchedEffect(tab, track.id) {
+            if (tab == 2) vm.loadSimilar(track)
+        }
         val scheme = MaterialTheme.colorScheme
         BoxWithConstraints(Modifier.fillMaxSize()) {
             val landscape = maxWidth > maxHeight
-            val cover = min(min(maxWidth - 48.dp, 320.dp), if (landscape) maxHeight * 0.5f else maxHeight * 0.36f)
-            val showVisualizer = settings.visualizer && !landscape && maxHeight > 640.dp
+            val cover = min(min(maxWidth - 48.dp, 320.dp), if (landscape) maxHeight * 0.48f else maxHeight * 0.38f)
+            val showVisualizer = settings.visualizer && !landscape && maxHeight > 640.dp && tab == null
             Column(Modifier.fillMaxSize().padding(horizontal = 20.dp, vertical = 8.dp)) {
                 IconButton(onBack) {
                     Icon(Icons.Default.KeyboardArrowDown, "Свернуть", tint = scheme.onSurface)
                 }
-                if (landscape) {
-                    Row(Modifier.fillMaxWidth(), verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(20.dp)) {
-                        Cover(track.coverUrl, Modifier.size(cover), corner = 16.dp)
-                        Column(Modifier.weight(1f)) {
-                            TrackHeading(track.title, track.artist, track.id in liked, { vm.toggleLike(track) }, { onArtist(track.artist) })
-                            NowPlayingControls(vm, state)
-                        }
-                    }
-                } else {
-                    Cover(track.coverUrl, Modifier.size(cover).align(Alignment.CenterHorizontally), corner = 16.dp)
-                    TrackHeading(
-                        track.title,
-                        track.artist,
-                        track.id in liked,
-                        { vm.toggleLike(track) },
-                        { onArtist(track.artist) },
-                        Modifier.padding(top = 20.dp),
-                    )
-                    if (showVisualizer) SessionVisualizer(vm.player.audioSessionId())
-                    NowPlayingControls(vm, state)
+                PlayerTabs(tab) { index ->
+                    tab = if (tab == index) null else index
                 }
-                PlayerTabs(tab, onTab = { index -> tab = index }, onSimilar = { vm.loadSimilar(track) })
-                when (tab) {
-                    0 -> LazyColumn(Modifier.weight(1f).fillMaxWidth()) {
-                        items(state.queue.size) { i ->
-                            val t = state.queue[i]
-                            Text(
-                                t.title,
-                                modifier = Modifier.fillMaxWidth().clickable { vm.play(state.queue, i) }.padding(horizontal = 4.dp, vertical = 12.dp),
-                                color = if (i == state.index) scheme.primary else scheme.onSurface,
-                                fontWeight = if (i == state.index) FontWeight.SemiBold else FontWeight.Normal,
-                                maxLines = 1,
-                                overflow = TextOverflow.Ellipsis,
-                            )
-                        }
+                Box(
+                    Modifier
+                        .fillMaxWidth()
+                        .height(cover)
+                        .clip(RoundedCornerShape(16.dp)),
+                    contentAlignment = Alignment.Center,
+                ) {
+                    CoverSlot(track.coverUrl, blurred = tab != null, modifier = Modifier.fillMaxSize())
+                    when (tab) {
+                        0 -> QueuePane(state.queue, state.index, { vm.play(state.queue, it) }, Modifier.fillMaxSize())
+                        1 -> LyricsPane(lyrics, state.positionMs, Modifier.fillMaxSize())
+                        2 -> SimilarPane(similar, liked, state, vm, Modifier.fillMaxSize())
+                        else -> Cover(track.coverUrl, Modifier.fillMaxSize(), corner = 16.dp)
                     }
-                    1 -> LazyColumn(Modifier.weight(1f).fillMaxWidth()) {
-                        val lines = lyrics?.lines.orEmpty()
-                        if (lines.isEmpty()) {
-                            item {
-                                Text(
-                                    "Текст пока недоступен",
-                                    color = scheme.onSurfaceVariant,
-                                    modifier = Modifier.padding(vertical = 24.dp).fillMaxWidth(),
-                                    textAlign = TextAlign.Center,
-                                )
-                            }
-                        }
-                        items(lines) { line ->
-                            val active = lyrics?.synced == true && state.positionMs >= line.timeMs
-                            Text(
-                                line.text,
-                                color = if (active) scheme.onSurface else scheme.onSurfaceVariant,
-                                fontWeight = if (active) FontWeight.SemiBold else FontWeight.Normal,
-                                style = MaterialTheme.typography.titleMedium,
-                                modifier = Modifier.padding(vertical = 6.dp),
-                            )
-                        }
-                    }
-                    else -> {
-                        val similar by vm.tracks.collectAsState()
-                        if (similar.isEmpty()) {
-                            Text("Похожих треков нет", color = scheme.onSurfaceVariant, modifier = Modifier.padding(vertical = 24.dp))
-                        }
-                        LazyColumn(Modifier.weight(1f).fillMaxWidth()) {
-                            items(similar) { t ->
-                                TrackRow(
-                                    t,
-                                    t.id in liked,
-                                    onPlay = { vm.play(similar, similar.indexOf(t)) },
-                                    onLike = { vm.toggleLike(t) },
-                                    onDownload = { vm.download(t) },
-                                    active = state.current?.id == t.id && state.current?.source == t.source,
-                                )
-                            }
-                        }
+                }
+                TrackHeading(
+                    track.title,
+                    track.artist,
+                    track.id in liked,
+                    { vm.toggleLike(track) },
+                    { onArtist(track.artist) },
+                    Modifier.padding(top = 16.dp),
+                )
+                if (showVisualizer) SessionVisualizer(vm.player.audioSessionId())
+                NowPlayingControls(vm, state)
+                Spacer(Modifier.weight(1f))
+                SourceAction(track) {
+                    when (track.source) {
+                        SourceId.YANDEX -> vm.startWave(WaveSettings(seed = "track:${track.id}", seedTitle = track.title))
+                        SourceId.SPOTIFY -> vm.startSpotifyRadio(track)
+                        else -> {}
                     }
                 }
             }
         }
+    }
+}
+
+@Composable
+private fun CoverSlot(coverUrl: String?, blurred: Boolean, modifier: Modifier = Modifier) {
+    if (coverUrl.isNullOrBlank()) {
+        Box(modifier.background(Color.Black.copy(alpha = 0.35f)))
+        return
+    }
+    AsyncImage(
+        model = coverUrl,
+        contentDescription = null,
+        contentScale = ContentScale.Crop,
+        modifier = modifier.graphicsLayer {
+            alpha = if (blurred) 0.45f else 1f
+            if (blurred && Build.VERSION.SDK_INT >= Build.VERSION_CODES.S) {
+                renderEffect = coverBlur()
+            }
+        },
+    )
+}
+
+@Composable
+private fun QueuePane(queue: List<UnifiedTrack>, index: Int, onPlay: (Int) -> Unit, modifier: Modifier) {
+    val scheme = MaterialTheme.colorScheme
+    LazyColumn(modifier.padding(horizontal = 8.dp, vertical = 8.dp)) {
+        itemsIndexed(queue) { i, t ->
+            Text(
+                t.title,
+                modifier = Modifier.fillMaxWidth().clickable { onPlay(i) }.padding(horizontal = 8.dp, vertical = 10.dp),
+                color = if (i == index) scheme.primary else scheme.onSurface,
+                fontWeight = if (i == index) FontWeight.SemiBold else FontWeight.Normal,
+                maxLines = 1,
+                overflow = TextOverflow.Ellipsis,
+            )
+        }
+    }
+}
+
+@Composable
+private fun LyricsPane(lyrics: com.mss.core.model.TrackLyrics?, positionMs: Long, modifier: Modifier) {
+    val scheme = MaterialTheme.colorScheme
+    val lines = lyrics?.lines.orEmpty()
+    val currentIndex = if (lyrics?.synced == true) lines.indexOfLast { positionMs >= it.timeMs } else -1
+    LazyColumn(modifier.padding(horizontal = 16.dp, vertical = 12.dp), horizontalAlignment = Alignment.CenterHorizontally) {
+        if (lines.isEmpty()) {
+            item {
+                Text(
+                    "Текст пока недоступен",
+                    color = scheme.onSurfaceVariant,
+                    modifier = Modifier.fillMaxWidth().padding(vertical = 32.dp),
+                    textAlign = TextAlign.Center,
+                )
+            }
+        }
+        itemsIndexed(lines) { i, line ->
+            val active = i == currentIndex
+            Text(
+                line.text,
+                color = if (active) scheme.onSurface else scheme.onSurfaceVariant.copy(alpha = if (currentIndex >= 0) 0.55f else 1f),
+                fontWeight = if (active) FontWeight.SemiBold else FontWeight.Normal,
+                style = MaterialTheme.typography.titleMedium,
+                textAlign = TextAlign.Center,
+                modifier = Modifier.fillMaxWidth().padding(vertical = 6.dp),
+            )
+        }
+    }
+}
+
+@Composable
+private fun SimilarPane(
+    similar: List<UnifiedTrack>,
+    liked: Set<String>,
+    state: com.mss.core.player.PlayerUiState,
+    vm: MssViewModel,
+    modifier: Modifier,
+) {
+    if (similar.isEmpty()) {
+        Text(
+            "Похожих треков нет",
+            color = MaterialTheme.colorScheme.onSurfaceVariant,
+            modifier = modifier.padding(24.dp),
+            textAlign = TextAlign.Center,
+        )
+        return
+    }
+    LazyColumn(modifier) {
+        itemsIndexed(similar) { i, t ->
+            TrackRow(
+                t,
+                t.id in liked,
+                onPlay = { vm.play(similar, i) },
+                onLike = { vm.toggleLike(t) },
+                onDownload = { vm.download(t) },
+                active = state.current?.id == t.id && state.current?.source == t.source,
+            )
+        }
+    }
+}
+
+@Composable
+private fun SourceAction(track: UnifiedTrack, onClick: () -> Unit) {
+    val label = when (track.source) {
+        SourceId.YANDEX -> "Моя волна по треку"
+        SourceId.SPOTIFY -> "Радио по треку"
+        else -> return
+    }
+    val scheme = MaterialTheme.colorScheme
+    Row(
+        Modifier
+            .padding(top = 12.dp)
+            .fillMaxWidth()
+            .clip(RoundedCornerShape(16.dp))
+            .background(scheme.onSurface.copy(alpha = 0.10f))
+            .clickable(onClick = onClick)
+            .padding(horizontal = 16.dp, vertical = 12.dp),
+        verticalAlignment = Alignment.CenterVertically,
+        horizontalArrangement = Arrangement.spacedBy(10.dp),
+    ) {
+        Icon(Icons.Default.Radio, contentDescription = null, tint = scheme.onSurface)
+        Column(Modifier.weight(1f)) {
+            Text(label, style = MaterialTheme.typography.labelLarge, fontWeight = FontWeight.SemiBold)
+            Text(track.title, style = MaterialTheme.typography.bodySmall, color = scheme.onSurfaceVariant, maxLines = 1, overflow = TextOverflow.Ellipsis)
+        }
+        Icon(Icons.Default.PlayArrow, contentDescription = label, tint = scheme.onSurface)
     }
 }
 
@@ -296,11 +392,11 @@ private fun TrackHeading(
 }
 
 @Composable
-private fun PlayerTabs(tab: Int, onTab: (Int) -> Unit, onSimilar: () -> Unit) {
+private fun PlayerTabs(tab: Int?, onTab: (Int) -> Unit) {
     val labels = listOf("Очередь", "Текст", "Похожие")
     Row(
         Modifier
-            .padding(vertical = 12.dp)
+            .padding(bottom = 12.dp)
             .clip(CircleShape)
             .background(Color.Black.copy(alpha = 0.35f))
             .padding(4.dp)
@@ -319,10 +415,7 @@ private fun PlayerTabs(tab: Int, onTab: (Int) -> Unit, onSimilar: () -> Unit) {
                     .weight(1f)
                     .clip(CircleShape)
                     .background(if (selected) MaterialTheme.colorScheme.onSurface.copy(alpha = 0.16f) else Color.Transparent)
-                    .clickable {
-                        onTab(index)
-                        if (index == 2) onSimilar()
-                    }
+                    .clickable { onTab(index) }
                     .padding(vertical = 10.dp),
             )
         }

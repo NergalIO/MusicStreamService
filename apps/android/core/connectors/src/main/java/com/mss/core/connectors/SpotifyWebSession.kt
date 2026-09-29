@@ -43,7 +43,8 @@ class SpotifyWebSession @Inject constructor() {
     @Volatile var headers: SpotifyWebHeaders? = null
         private set
 
-    @Volatile var visibleForLogin: Boolean = false
+    private val _visibleForLogin = MutableStateFlow(false)
+    val visibleForLogin: StateFlow<Boolean> = _visibleForLogin
 
     @Volatile private var hashes: Map<String, String> = emptyMap()
 
@@ -99,12 +100,24 @@ class SpotifyWebSession @Inject constructor() {
     }
 
     fun showLogin() {
-        visibleForLogin = true
+        _visibleForLogin.value = true
         eval("window.location.href='https://open.spotify.com/'")
     }
 
     fun hideLogin() {
-        visibleForLogin = false
+        _visibleForLogin.value = false
+    }
+
+    fun logout() {
+        _visibleForLogin.value = false
+        _loggedIn.value = false
+        headers = null
+        hashes = emptyMap()
+        main.post {
+            CookieManager.getInstance().removeAllCookies(null)
+            CookieManager.getInstance().flush()
+            webView?.loadUrl("https://open.spotify.com/")
+        }
     }
 
     fun play(trackId: String, positionMs: Long = 0) {

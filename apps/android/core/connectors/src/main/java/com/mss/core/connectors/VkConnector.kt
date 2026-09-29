@@ -48,24 +48,72 @@ class VkConnector @Inject constructor(
         return if (loadTokens() != null) AuthStatus.CONNECTED else AuthStatus.DISCONNECTED
     }
 
-    fun authorizeUrl(): String {
-        val params = listOf(
-            "client_id" to KATE_CLIENT_ID,
-            "scope" to KATE_SCOPE,
-            "redirect_uri" to REDIRECT,
-            "display" to "mobile",
-            "response_type" to "token",
-            "revoke" to "1",
-            "v" to API_VERSION,
-        ).joinToString("&") { "${it.first}=${encode(it.second)}" }
-        return "https://oauth.vk.com/authorize?$params"
+    private var smsSession: VkIdSession? = null
+    private var smsSid: String = ""
+    private var smsPhone: String = ""
+    private var passwordCaptchaSid: String? = null
+
+    private fun deviceId(): String {
+        vault.get(DEVICE_KEY)?.let { return it }
+        val id = java.util.UUID.randomUUID().toString()
+        vault.set(DEVICE_KEY, id)
+        return id
     }
 
-    fun completeRedirect(url: String) {
-        val parsed = android.net.Uri.parse(url.replace('#', '?').let { if (it.contains('?')) it else "$it?" })
-        val token = parsed.getQueryParameter("access_token") ?: throw ConnectorException("VK: нет токена")
-        val userId = parsed.getQueryParameter("user_id")?.toLongOrNull() ?: 0L
-        saveTokens(VkTokens(token, userId))
+    fun vkIdLoginUrl(): String = VkAuth.ID_LOGIN
+
+    suspend fun loginWithPassword(
+        username: String,
+        password: String,
+        code: String? = null,
+        captchaKey: String? = null,
+    ) {
+        val extra = mutableMapOf<String, String>()
+        if (!code.isNullOrBlank()) extra["code"] = code
+        if (passwordCaptchaSid != null && !captchaKey.isNullOrBlank()) {
+            extra["captcha_sid"] = passwordCaptchaSid!!
+            extra["captcha_key"] = captchaKey
+        }
+        try {
+            val pair = VkAuth.loginPassword(username.trim(), password, extra)
+            passwordCaptchaSid = null
+            saveTokens(VkTokens(pair.accessToken, pair.userId))
+        } catch (e: VkAuthException) {
+            passwordCaptchaSid = e.captchaSid
+            throw e
+        }
+    }
+
+    suspend fun startSms(phone: String, captchaSid: String? = null, captchaKey: String? = null): String {
+        val normalized = VkAuth.normalizePhone(phone)
+        if (normalized.isBlank()) throw VkAuthException("Введите номер телефона")
+        val session = smsSession ?: VkAuth.startIdSession().also { smsSession = it }
+        val (sid, mask) = VkAuth.validatePhone(session, normalized, deviceId(), captchaSid, captchaKey)
+        smsSid = sid
+        smsPhone = normalized
+        return mask
+    }
+
+    suspend fun confirmSms(code: String) {
+        val session = smsSession ?: throw VkAuthException("Начните вход по SMS заново")
+        if (smsSid.isBlank() || smsPhone.isBlank()) throw VkAuthException("Начните вход по SMS заново")
+        val pair = VkAuth.confirmSms(session, smsPhone, smsSid, code.trim(), deviceId())
+        smsSession = null
+        smsSid = ""
+        saveTokens(VkTokens(pair.accessToken, pair.userId))
+    }
+
+    fun cancelLogin() {
+        smsSession = null
+        smsSid = ""
+        smsPhone = ""
+        passwordCaptchaSid = null
+    }
+
+    suspend fun completeWebLogin(url: String) {
+        val payload = VkAuth.parseOAuthRedirect(url) ?: throw VkAuthException("VK не вернул токен")
+        val pair = VkAuth.materialize(payload)
+        saveTokens(VkTokens(pair.accessToken, pair.userId))
     }
 
     override suspend fun disconnect() {
@@ -313,11 +361,9 @@ class VkConnector @Inject constructor(
     companion object {
         private const val VAULT_KEY = "vk_tokens"
         private const val ACCOUNT_KEY = "vk_account"
-        private const val KATE_CLIENT_ID = "2685278"
-        private const val KATE_SCOPE = "1073737727"
-        private const val REDIRECT = "https://oauth.vk.com/blank.html"
+        private const val DEVICE_KEY = "vk_device_id"
         private const val API_VERSION = "5.131"
-        private const val KATE_UA = "KateMobileAndroid/56 lite-5474 (Android 9; SDK 28; arm64-v8a; Google Pixel 3; ru)"
+        private const val KATE_UA = VkAuth.KATE_UA
     }
 }
 
@@ -326,5 +372,3 @@ private data class VkTokens(
     @SerialName("access_token") val accessToken: String,
     @SerialName("user_id") val userId: Long,
 )
-
-private fun encode(v: String) = java.net.URLEncoder.encode(v, Charsets.UTF_8)

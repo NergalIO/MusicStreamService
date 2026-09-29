@@ -11,6 +11,7 @@ import com.mss.core.model.UnifiedPlaylist
 import com.mss.core.model.UnifiedTrack
 import io.ktor.client.HttpClient
 import io.ktor.client.engine.okhttp.OkHttp
+import io.ktor.client.request.get
 import io.ktor.client.request.header
 import io.ktor.client.request.post
 import io.ktor.client.request.setBody
@@ -185,6 +186,28 @@ class SpotifyPathfinder @Inject constructor(
             val items = obj.obj("sectionItems")?.arr("items")?.mapNotNull { mapHomeItem(it.jsonObject.obj("content")) }.orEmpty()
             if (items.isEmpty()) null else FeedBlock(obj.str("uri") ?: "section-$i", title, items)
         }
+    }
+
+    suspend fun trackRadio(trackId: String): PlaylistWithTracks {
+        val headers = web.headers ?: throw ConnectorException("Войдите в Spotify через веб-плеер")
+        val path = "/inspiredby-mix/v2/seed_to_playlist/spotify:track:${java.net.URLEncoder.encode(trackId, Charsets.UTF_8)}?response-format=json"
+        val res = http.get("https://spclient.wg.spotify.com$path") {
+            header("authorization", headers.authorization)
+            header("client-token", headers.clientToken)
+            header("spotify-app-version", headers.appVersion)
+            header("app-platform", "WebPlayer")
+        }
+        val text = res.bodyAsText()
+        if (!res.status.isSuccess()) {
+            if (res.status.value == 401) web.invalidateHeaders()
+            throw ConnectorException(if (res.status.value == 429) "Spotify просит подождать — повторите через минуту" else "У этого трека нет радио в Spotify")
+        }
+        val seed = json.parseToJsonElement(text).jsonObject
+        val uri = seed.arr("mediaItems")?.firstOrNull()?.jsonObject?.str("uri")
+        if (uri.isNullOrBlank() || !uri.startsWith("spotify:playlist:")) {
+            throw ConnectorException("У этого трека нет радио в Spotify")
+        }
+        return playlist(idFromUri(uri) ?: throw ConnectorException("У этого трека нет радио в Spotify"))
     }
 
     private suspend fun query(name: String, variables: JsonObject): JsonObject {

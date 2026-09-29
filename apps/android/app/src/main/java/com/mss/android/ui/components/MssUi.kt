@@ -86,17 +86,17 @@ fun SectionTitle(text: String, modifier: Modifier = Modifier) {
 }
 
 @Composable
-fun MssChip(selected: Boolean, label: String, modifier: Modifier = Modifier, onClick: () -> Unit) {
+fun MssChip(selected: Boolean, label: String, modifier: Modifier = Modifier, caption: String? = null, onClick: () -> Unit) {
     val scheme = MaterialTheme.colorScheme
-    Row(
+    Column(
         modifier
             .defaultMinSize(minWidth = 48.dp, minHeight = 40.dp)
             .clip(CircleShape)
             .background(if (selected) scheme.onSurface.copy(alpha = 0.10f) else scheme.onSurface.copy(alpha = 0.04f))
             .clickable(onClick = onClick)
             .padding(horizontal = 14.dp, vertical = 8.dp),
-        verticalAlignment = Alignment.CenterVertically,
-        horizontalArrangement = Arrangement.Center,
+        horizontalAlignment = Alignment.CenterHorizontally,
+        verticalArrangement = Arrangement.Center,
     ) {
         Text(
             label,
@@ -105,6 +105,14 @@ fun MssChip(selected: Boolean, label: String, modifier: Modifier = Modifier, onC
             color = if (selected) scheme.onSurface else scheme.onSurfaceVariant,
             maxLines = 1,
         )
+        if (!caption.isNullOrBlank()) {
+            Text(
+                caption,
+                style = MaterialTheme.typography.labelSmall,
+                color = scheme.onSurfaceVariant,
+                maxLines = 1,
+            )
+        }
     }
 }
 
@@ -157,7 +165,9 @@ fun HubRow(
     title: String,
     subtitle: String,
     icon: ImageVector,
-    onClick: () -> Unit,
+    onClick: (() -> Unit)? = null,
+    action: String? = null,
+    onAction: (() -> Unit)? = null,
 ) {
     Row(
         Modifier
@@ -165,7 +175,7 @@ fun HubRow(
             .fillMaxWidth()
             .clip(RoundedCornerShape(12.dp))
             .background(MaterialTheme.colorScheme.surface)
-            .clickable(onClick = onClick)
+            .then(if (onClick != null && onAction == null) Modifier.clickable(onClick = onClick) else Modifier)
             .padding(horizontal = 12.dp, vertical = 12.dp),
         verticalAlignment = Alignment.CenterVertically,
         horizontalArrangement = Arrangement.spacedBy(12.dp),
@@ -188,6 +198,9 @@ fun HubRow(
                 maxLines = 2,
                 overflow = TextOverflow.Ellipsis,
             )
+        }
+        if (action != null && onAction != null) {
+            androidx.compose.material3.TextButton(onClick = onAction) { Text(action) }
         }
     }
 }
@@ -289,3 +302,46 @@ fun BrandMark(modifier: Modifier = Modifier.size(44.dp)) {
 }
 
 val ScreenPad = PaddingValues(horizontal = 16.dp, vertical = 12.dp)
+
+@Composable
+fun SettingsSection(title: String, footer: String? = null, content: @Composable () -> Unit) {
+    Column(Modifier.fillMaxWidth().padding(bottom = 20.dp)) {
+        Text(
+            title,
+            style = MaterialTheme.typography.titleMedium,
+            modifier = Modifier.padding(horizontal = 16.dp, vertical = 8.dp),
+        )
+        content()
+        if (!footer.isNullOrBlank()) {
+            Text(
+                footer,
+                style = MaterialTheme.typography.bodySmall,
+                color = MaterialTheme.colorScheme.onSurfaceVariant,
+                modifier = Modifier.padding(horizontal = 16.dp, vertical = 4.dp),
+            )
+        }
+    }
+}
+
+@Composable
+fun SettingsRow(title: String, subtitle: String? = null, trailing: @Composable () -> Unit = {}) {
+    Row(
+        Modifier.fillMaxWidth().padding(horizontal = 16.dp, vertical = 8.dp),
+        verticalAlignment = Alignment.CenterVertically,
+        horizontalArrangement = Arrangement.spacedBy(12.dp),
+    ) {
+        Column(Modifier.weight(1f)) {
+            Text(title, style = MaterialTheme.typography.bodyLarge, maxLines = 2, overflow = TextOverflow.Ellipsis)
+            if (!subtitle.isNullOrBlank()) {
+                Text(
+                    subtitle,
+                    style = MaterialTheme.typography.bodySmall,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                    maxLines = 3,
+                    overflow = TextOverflow.Ellipsis,
+                )
+            }
+        }
+        trailing()
+    }
+}

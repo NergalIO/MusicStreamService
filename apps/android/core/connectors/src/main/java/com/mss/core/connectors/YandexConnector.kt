@@ -54,8 +54,8 @@ class YandexConnector @Inject constructor(
     override val id = SourceId.YANDEX
     override val displayName = "Яндекс Музыка"
 
-    private val clientId = BuildConfig.YANDEX_CLIENT_ID
-    private val clientSecret = BuildConfig.YANDEX_CLIENT_SECRET
+    private val clientId = BuildConfig.YANDEX_CLIENT_ID.ifBlank { MUSIC_CLIENT_ID }
+    private val clientSecret = BuildConfig.YANDEX_CLIENT_SECRET.ifBlank { MUSIC_CLIENT_SECRET }
     private val json = Json { ignoreUnknownKeys = true }
     private val http = HttpClient(OkHttp)
     private val queueMutex = Mutex()
@@ -115,6 +115,12 @@ class YandexConnector @Inject constructor(
                     ),
                 )
                 pendingPrompt = null
+                try {
+                    userId()
+                } catch (_: Exception) {
+                    disconnect()
+                    throw ConnectorException(YandexErrors.SESSION)
+                }
                 return
             } catch (e: ConnectorException) {
                 if (e.message?.contains("authorization_pending") == true) continue
@@ -320,7 +326,7 @@ class YandexConnector @Inject constructor(
         settings.moodEnergy?.let { seeds += "settingMoodEnergy:$it" }
         settings.language?.let { seeds += "settingLanguage:$it" }
         val data = apiPostJson<JsonObject>(
-            "/rotor/session/new",
+            rotorPath("/rotor/session/new"),
             """{"seeds":${json.encodeToString(seeds)},"includeTracksInResponse":true}""",
         )
         val batch = parseWave(data, "")
@@ -331,7 +337,7 @@ class YandexConnector @Inject constructor(
 
     suspend fun waveMore(sessionId: String, queue: List<String>): WaveBatch {
         val data = apiPostJson<JsonObject>(
-            "/rotor/session/$sessionId/tracks",
+            rotorPath("/rotor/session/$sessionId/tracks"),
             """{"queue":${json.encodeToString(queue)}}""",
         )
         val batch = parseWave(data, sessionId)
@@ -352,7 +358,7 @@ class YandexConnector @Inject constructor(
             if (totalPlayedSeconds != null) append(""","totalPlayedSeconds":${totalPlayedSeconds.toInt()}""")
             append("}")
         }
-        apiPostJson<JsonObject>("/rotor/session/$sessionId/feedback", """{"event":$event,"batchId":"$batchId"}""")
+        apiPostJson<JsonObject>(rotorPath("/rotor/session/$sessionId/feedback"), """{"event":$event,"batchId":"$batchId"}""")
     }
 
     suspend fun reportPlay(report: PlaybackReport) {
@@ -430,11 +436,21 @@ class YandexConnector @Inject constructor(
         }
     }
 
+    private suspend fun rotorPath(path: String): String {
+        val uid = userId()
+        val sep = if (path.contains('?')) '&' else '?'
+        return "$path${sep}uid=$uid"
+    }
+
     private suspend fun userId(): String {
-        vault.get(ACCOUNT_KEY)?.let { return json.decodeFromString<AccountCache>(it).uid }
+        vault.get(ACCOUNT_KEY)?.let { cached ->
+            val uid = runCatching { json.decodeFromString<AccountCache>(cached).uid }.getOrNull()
+            if (!uid.isNullOrBlank() && uid != "null") return uid
+        }
         val data = apiGet<JsonObject>("/account/status")
         val uid = data["account"]?.jsonObject?.get("uid")?.jsonPrimitive?.content
-            ?: throw ConnectorException("Не удалось определить uid")
+            ?.takeIf { it.isNotBlank() && it != "null" }
+            ?: throw ConnectorException(YandexErrors.SESSION)
         vault.set(ACCOUNT_KEY, json.encodeToString(AccountCache.serializer(), AccountCache(uid)))
         return uid
     }
@@ -464,7 +480,8 @@ class YandexConnector @Inject constructor(
             contentType(ContentType.Application.FormUrlEncoded)
             setBody(FormDataContent(Parameters.build { fields.forEach { (k, v) -> append(k, v) } }))
         }
-        if (!res.status.isSuccess()) throw ConnectorException("Yandex API ${res.status.value}: ${res.bodyAsText().take(200)}")
+        val text = res.bodyAsText()
+        if (!res.status.isSuccess()) failApi(res.status.value, text)
     }
 
     private suspend inline fun <reified T> apiGet(path: String): T = queueMutex.withLock {
@@ -477,8 +494,8 @@ class YandexConnector @Inject constructor(
         unwrap(res.bodyAsText(), res.status.isSuccess(), res.status.value)
     }
 
-    private inline fun <reified T> unwrap(text: String, ok: Boolean, status: Int): T {
-        if (!ok) throw ConnectorException("Yandex API $status: ${text.take(200)}")
+    private suspend inline fun <reified T> unwrap(text: String, ok: Boolean, status: Int): T {
+        if (!ok) failApi(status, text)
         val parsed = json.parseToJsonElement(text)
         if (parsed is JsonObject && parsed.containsKey("result")) {
             return json.decodeFromString(parsed["result"]!!.toString())
@@ -486,8 +503,21 @@ class YandexConnector @Inject constructor(
         return json.decodeFromString(text)
     }
 
+    private suspend fun failApi(status: Int, text: String): Nothing {
+        if (YandexErrors.isAuthFailure(status, text)) {
+            vault.delete(VAULT_KEY)
+            vault.delete(ACCOUNT_KEY)
+        }
+        throw ConnectorException(YandexErrors.message(status, text))
+    }
+
     private suspend fun accessToken(): String {
         val t = loadTokens() ?: throw ConnectorException("Яндекс не подключён")
+        if (t.clientId != clientId) {
+            vault.delete(VAULT_KEY)
+            vault.delete(ACCOUNT_KEY)
+            throw ConnectorException(YandexErrors.SESSION)
+        }
         if (System.currentTimeMillis() < t.expiresAt - 60_000) return t.accessToken
         val refresh = t.refreshToken ?: throw ConnectorException("Яндекс: нет refresh token")
         val token = oauthForm<YandexTokenResponse>(
@@ -533,6 +563,8 @@ class YandexConnector @Inject constructor(
     companion object {
         private const val VAULT_KEY = "yandex_tokens"
         private const val ACCOUNT_KEY = "yandex_account"
+        const val MUSIC_CLIENT_ID = "23cabbbdc6cd418abb4b39c32c41195d"
+        const val MUSIC_CLIENT_SECRET = "53bc75238f0c4d08a118e51fe9203300"
     }
 }
 

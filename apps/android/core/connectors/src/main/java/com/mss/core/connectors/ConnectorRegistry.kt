@@ -34,4 +34,14 @@ class ConnectorRegistry @Inject constructor(
     }
 }
 
-class ConnectorException(message: String) : Exception(message)
+open class ConnectorException(message: String) : Exception(message)
+
+class VkAuthException(
+    message: String,
+    val captchaSid: String? = null,
+    val captchaImg: String? = null,
+    val robot: Boolean = false,
+    val passwordRequired: Boolean = false,
+    val need2fa: Boolean = false,
+    val phoneMask: String? = null,
+) : ConnectorException(message)

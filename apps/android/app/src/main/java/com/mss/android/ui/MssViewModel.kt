@@ -8,6 +8,7 @@ import com.mss.android.ui.navigation.parseMssLink
 import com.mss.core.connectors.AuthStatus
 import com.mss.core.connectors.SpotifyConnector
 import com.mss.core.connectors.SpotifyWebSession
+import com.mss.core.connectors.VkAuthException
 import com.mss.core.connectors.VkConnector
 import com.mss.core.connectors.YandexConnector
 import com.mss.core.downloads.DownloadScheduler
@@ -98,6 +99,25 @@ class MssViewModel @Inject constructor(
     val searchPlaylists: StateFlow<List<UnifiedPlaylist>> = _searchPlaylists
     private val _searchArtists = MutableStateFlow<List<UnifiedArtist>>(emptyList())
     val searchArtists: StateFlow<List<UnifiedArtist>> = _searchArtists
+    private val _similar = MutableStateFlow<List<UnifiedTrack>>(emptyList())
+    val similar: StateFlow<List<UnifiedTrack>> = _similar
+    private val _sources = MutableStateFlow(SourceStatuses())
+    val sources: StateFlow<SourceStatuses> = _sources
+    private val _vkLogin = MutableStateFlow(VkLoginUi())
+    val vkLogin: StateFlow<VkLoginUi> = _vkLogin
+
+    init {
+        refreshSources()
+        viewModelScope.launch { spotifyWeb.loggedIn.collect { refreshSources() } }
+    }
+
+    fun refreshSources() {
+        _sources.value = SourceStatuses(
+            yandex = yandex.authStatus(),
+            spotify = spotify.authStatus(),
+            vk = vk.authStatus(),
+        )
+    }
 
     fun setHomeSource(source: SourceId) {
         _homeSource.value = source
@@ -289,25 +309,117 @@ class MssViewModel @Inject constructor(
         if (track.source == SourceId.YANDEX && liked) yandex.dislike(track)
     }
 
-    fun connectSpotify(onUrl: (String) -> Unit) = onUrl(spotify.buildAuthorizeUrl())
-
-    fun completeSpotify(code: String, state: String) = launch { spotify.completeOAuth(code, state) }
-
     fun connectYandex() {
         viewModelScope.launch {
             runCatching {
                 yandex.login { _yandexPrompt.value = it }
+                refreshSources()
                 loadHome()
             }.onFailure { _error.value = it.message }
             _yandexPrompt.value = null
         }
     }
 
-    fun completeVk(url: String) = launch { vk.completeRedirect(url) }
-
-    fun vkAuthUrl() = vk.authorizeUrl()
+    fun cancelYandexLogin() {
+        yandex.cancelLogin()
+        _yandexPrompt.value = null
+    }
 
     fun showSpotifyLogin() = spotifyWeb.showLogin()
+
+    fun openVkLogin() {
+        vk.cancelLogin()
+        _vkLogin.value = VkLoginUi(open = true)
+    }
+
+    fun closeVkLogin() {
+        vk.cancelLogin()
+        _vkLogin.value = VkLoginUi()
+    }
+
+    fun setVkMethod(sms: Boolean) {
+        vk.cancelLogin()
+        _vkLogin.value = VkLoginUi(open = true, sms = sms)
+    }
+
+    fun submitVkPhone(phone: String, captchaKey: String? = null) = launchVk {
+        val mask = vk.startSms(phone, _vkLogin.value.captchaSid, captchaKey)
+        _vkLogin.value = _vkLogin.value.copy(
+            step = VkLoginStep.CODE,
+            phoneMask = mask,
+            captchaImg = null,
+            captchaSid = null,
+            error = null,
+        )
+    }
+
+    fun submitVkSms(code: String) = launchVk {
+        vk.confirmSms(code)
+        _vkLogin.value = VkLoginUi()
+        refreshSources()
+        loadHome()
+    }
+
+    fun submitVkPassword(username: String, password: String, code: String? = null, captchaKey: String? = null) = launchVk {
+        vk.loginWithPassword(username, password, code, captchaKey)
+        _vkLogin.value = VkLoginUi()
+        refreshSources()
+        loadHome()
+    }
+
+    fun completeVkId(url: String) = launchVk {
+        vk.completeWebLogin(url)
+        _vkLogin.value = VkLoginUi()
+        refreshSources()
+        loadHome()
+    }
+
+    private fun launchVk(block: suspend () -> Unit) {
+        viewModelScope.launch {
+            _vkLogin.value = _vkLogin.value.copy(busy = true, error = null)
+            runCatching { block() }.onFailure { e ->
+                val cur = _vkLogin.value
+                when (e) {
+                    is VkAuthException -> {
+                        if (e.robot) {
+                            _vkLogin.value = cur.copy(busy = false, step = VkLoginStep.VKID, error = e.message)
+                        } else if (e.passwordRequired) {
+                            _vkLogin.value = VkLoginUi(open = true, sms = false, error = e.message, busy = false)
+                        } else if (e.need2fa) {
+                            _vkLogin.value = cur.copy(
+                                busy = false,
+                                step = VkLoginStep.CODE,
+                                phoneMask = e.phoneMask,
+                                error = e.message,
+                            )
+                        } else if (!e.captchaImg.isNullOrBlank()) {
+                            _vkLogin.value = cur.copy(
+                                busy = false,
+                                step = VkLoginStep.CAPTCHA,
+                                captchaImg = e.captchaImg,
+                                captchaSid = e.captchaSid,
+                                error = e.message,
+                            )
+                        } else {
+                            _vkLogin.value = cur.copy(busy = false, error = e.message)
+                        }
+                    }
+                    else -> _vkLogin.value = cur.copy(busy = false, error = e.message)
+                }
+            }
+            if (_vkLogin.value.busy) _vkLogin.value = _vkLogin.value.copy(busy = false)
+        }
+    }
+
+    fun startSpotifyRadio(track: UnifiedTrack) = launch {
+        if (!spotifyWeb.loggedIn.value) {
+            showSpotifyLogin()
+            return@launch
+        }
+        val radio = spotify.trackRadio(track)
+        val rest = radio.tracks.filter { it.id != track.id }
+        play(listOf(track) + rest)
+    }
 
     fun setApiBase(url: String) = launch { repo.setApiBase(url) }
 
@@ -325,8 +437,14 @@ class MssViewModel @Inject constructor(
     }
 
     fun loadSimilar(track: UnifiedTrack) = launch {
+        val list = when (track.source) {
+            SourceId.YANDEX -> yandex.similarTracks(track.id)
+            SourceId.SPOTIFY -> runCatching { spotify.trackRadio(track).tracks.filter { it.id != track.id } }.getOrDefault(emptyList())
+            else -> emptyList()
+        }
+        _similar.value = list
+        _tracks.value = list
         _detailTitle.value = "Похожие"
-        _tracks.value = yandex.similarTracks(track.id)
     }
 
     fun loadLyrics(track: UnifiedTrack) = launch {
@@ -377,9 +495,9 @@ class MssViewModel @Inject constructor(
     fun setOnboarded() = launch { repo.prefs.setOnboarded(true) }
 
     fun connectorStatus(source: SourceId): AuthStatus = when (source) {
-        SourceId.YANDEX -> yandex.authStatus()
-        SourceId.SPOTIFY -> if (spotifyWeb.loggedIn.value) AuthStatus.CONNECTED else spotify.authStatus()
-        SourceId.VK -> vk.authStatus()
+        SourceId.YANDEX -> _sources.value.yandex
+        SourceId.SPOTIFY -> _sources.value.spotify
+        SourceId.VK -> _sources.value.vk
         else -> AuthStatus.DISCONNECTED
     }
 
@@ -390,6 +508,7 @@ class MssViewModel @Inject constructor(
             SourceId.VK -> vk.disconnect()
             else -> {}
         }
+        refreshSources()
     }
 
     fun applyDeepLink(url: String) {
@@ -431,3 +550,22 @@ class MssViewModel @Inject constructor(
 
     fun clearError() { _error.value = null }
 }
+
+data class SourceStatuses(
+    val yandex: AuthStatus = AuthStatus.DISCONNECTED,
+    val spotify: AuthStatus = AuthStatus.DISCONNECTED,
+    val vk: AuthStatus = AuthStatus.DISCONNECTED,
+)
+
+enum class VkLoginStep { FORM, CODE, CAPTCHA, VKID }
+
+data class VkLoginUi(
+    val open: Boolean = false,
+    val sms: Boolean = true,
+    val step: VkLoginStep = VkLoginStep.FORM,
+    val error: String? = null,
+    val phoneMask: String? = null,
+    val captchaImg: String? = null,
+    val captchaSid: String? = null,
+    val busy: Boolean = false,
+)
