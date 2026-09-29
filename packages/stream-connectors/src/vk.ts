@@ -14,6 +14,7 @@ import {
   mapVkTrack,
   parseVkAudioId,
   parseVkPlaylistId,
+  isVkAudioStub,
   unwrapAudio,
   type VkAudio,
   type VkPlaylist,
@@ -119,7 +120,10 @@ async function collectAudio(
       offset,
       count: Math.min(PAGE, limit - items.length),
     });
-    const batch = (page.items ?? []).map(unwrapAudio).filter((a): a is VkAudio => !!a);
+    const batch = (page.items ?? [])
+      .map(unwrapAudio)
+      .filter((a): a is VkAudio => !!a)
+      .filter((a) => !isVkAudioStub(a));
     items.push(...batch);
     if (!batch.length || items.length >= (page.count ?? items.length)) break;
     offset += batch.length;
@@ -155,7 +159,12 @@ export function createVkConnector(opts: VkConnectorOptions): VkConnector {
         auto_complete: 1,
         sort: 2,
       });
-      return (page.items ?? []).map(unwrapAudio).filter((a): a is VkAudio => !!a).slice(0, limit).map(mapVkTrack);
+      return (page.items ?? [])
+        .map(unwrapAudio)
+        .filter((a): a is VkAudio => !!a)
+        .filter((a) => !isVkAudioStub(a))
+        .slice(0, limit)
+        .map(mapVkTrack);
     },
     async searchArtists(query: string, limit: number): Promise<UnifiedArtist[]> {
       if (client.status !== 'connected') return [];
@@ -164,7 +173,13 @@ export function createVkConnector(opts: VkConnectorOptions): VkConnector {
         count: Math.min(Math.max(limit * 8, 20), 200),
         auto_complete: 1,
       });
-      return artistsFromTracks((page.items ?? []).map(unwrapAudio).filter((a): a is VkAudio => !!a), limit);
+      return artistsFromTracks(
+        (page.items ?? [])
+          .map(unwrapAudio)
+          .filter((a): a is VkAudio => !!a)
+          .filter((a) => !isVkAudioStub(a)),
+        limit,
+      );
     },
     async getArtistTracks(artistId: string, limit: number, artistName?: string): Promise<UnifiedTrack[]> {
       if (client.status !== 'connected') return [];

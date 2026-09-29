@@ -2,7 +2,7 @@
 export const VK_KATE_CLIENT_ID = '2685278';
 export const VK_KATE_CLIENT_SECRET = 'lxhD8OD7dMsqtXIm5IUAGS6Ok4UIAK';
 export const VK_KATE_USER_AGENT =
-  'KateMobileAndroid/99.2 lite-499 (Android 11; SDK 30; arm64-v8a; Xiaomi Redmi Note 8 Pro; ru)';
+  'KateMobileAndroid/56 lite-5474 (Android 9; SDK 28; arm64-v8a; Google Pixel 3; ru)';
 
 export const VK_HEADERS: Record<string, string> = {
   'User-Agent': VK_KATE_USER_AGENT,
@@ -562,7 +562,7 @@ export async function kateTokenFromAndroidToken(androidToken: string, signal?: A
     { signal, skipAppHeaders: true },
   );
   for (let i = 0; i < 12; i++) {
-    const check = await checkQr(session, signal, {}, false);
+    const check = await checkQr(session, signal, { web_auth: '0' }, true);
     if (check.status === 2) return check.token;
     if (check.status === 3) throw new VkAuthError('VK отклонил подтверждение входа');
     if (check.status === 4) throw new VkAuthError('Сессия входа истекла. Попробуйте ещё раз');
@@ -802,10 +802,8 @@ async function mintApprovedQr(fields: QrApprovedFields, signal: AbortSignal | un
       /* silent / materialize ниже */
     }
   }
-  if (fields.access || fields.silent) {
+  if (fields.silent) {
     return materializeKateToken({
-      access_token: fields.access,
-      user_id: fields.userId,
       silent_token: fields.silent,
       silent_token_uuid: fields.silentUuid,
       uuid: fields.uuid,
@@ -1032,6 +1030,7 @@ export async function exchangeSilentToken(silentToken: string, uuid: string): Pr
     access_token: anonym,
     token: silentToken,
     uuid,
+    client_id: VK_KATE_CLIENT_ID,
     v: AUTH_API_VERSION,
   });
   const r = json.response;

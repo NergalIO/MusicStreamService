@@ -45,6 +45,16 @@ export interface VkPlaylist {
   photo?: VkThumb;
 }
 
+/** Заглушка VK, когда токен не даёт реальный audio API (сторонние клиенты). */
+export function isVkAudioStub(a: VkAudio): boolean {
+  const title = (a.title ?? '').toLowerCase();
+  const artist = (a.artist ?? '').toLowerCase();
+  if (title.includes('доступно на vk.com') || title.includes('available on vk.com')) return true;
+  if (artist.includes('официальных приложениях') || artist.includes('official vk')) return true;
+  if (!a.url && title.includes('vk.com')) return true;
+  return false;
+}
+
 export function vkAudioKey(id: string): string {
   const parts = id.split('_');
   return parts.length >= 2 ? `${parts[0]}_${parts[1]}` : id;

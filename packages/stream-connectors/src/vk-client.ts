@@ -1,5 +1,6 @@
 import type { ExternalAccount, LoginMethod, LoginPrompt, LoginReply } from '@mss/shared';
 import type { AuthStatus, TokenVault } from './types.js';
+import { isVkAudioStub, unwrapAudio, type VkAudio } from './vk-mappers.js';
 import {
   VK_HEADERS,
   VK_KATE_CLIENT_ID,
@@ -43,6 +44,14 @@ const API_VERSION = '5.131';
 const VAULT_KEY = 'vk_tokens';
 const ACCOUNT_KEY = 'vk_account';
 const QR_POLL_MS = 2000;
+
+const VK_AUDIO_DENIED =
+  'VK не отдаёт музыку с этим способом входа. Отключите VK и войдите через «Пароль» (логин и пароль VK) — для Kate Mobile это надёжнее, чем QR/SMS.';
+
+interface VkAudioList {
+  count?: number;
+  items?: Array<VkAudio | { audio?: VkAudio }>;
+}
 
 const SCOPE = [
   'audio',
@@ -137,6 +146,8 @@ export class VkClient {
   private lastCall = 0;
   private tokens: StoredTokens | null = null;
   private kateUpgradeAttempted = false;
+  /** null — не проверяли, true/false — результат probe audio.search */
+  private audioSessionOk: boolean | null = null;
 
   constructor(private readonly opts: VkClientOptions) {
     this.restore();
@@ -155,6 +166,7 @@ export class VkClient {
     this.status = 'disconnected';
     this.cachedAccount = null;
     this.kateUpgradeAttempted = false;
+    this.audioSessionOk = null;
     this.opts.vault.delete(VAULT_KEY);
     this.opts.vault.delete(ACCOUNT_KEY);
   }
@@ -705,21 +717,38 @@ export class VkClient {
     }
   }
 
-  /** После VK ID без обмена audio.get отвечает «Invalid request», audio.search при этом может работать. */
-  private async verifyAudioAccess(signal?: AbortSignal): Promise<void> {
-    try {
-      await this.call('audio.get', { count: 1 });
+  /** Отсекает токены, при которых VK отдаёт только заглушку «Аудио доступно на vk.com». */
+  async requireWorkingAudio(signal?: AbortSignal): Promise<void> {
+    if (this.audioSessionOk === true) return;
+    if (this.audioSessionOk === false) throw new VkApiError(15, VK_AUDIO_DENIED);
+    if (await this.probeRealAudio()) {
+      this.audioSessionOk = true;
       return;
-    } catch (e) {
-      if (!(e instanceof VkApiError) || (e.code !== 8 && e.code !== 15)) throw e;
-      if (!(await this.tryUpgradeKateToken(signal))) {
-        throw new VkApiError(
-          e.code,
-          'VK выдал токен без доступа к музыке. Отключите VK в настройках и войдите снова (QR или пароль).',
-        );
-      }
     }
-    await this.call('audio.get', { count: 1 });
+    if ((await this.tryUpgradeKateToken(signal)) && (await this.probeRealAudio())) {
+      this.audioSessionOk = true;
+      return;
+    }
+    this.audioSessionOk = false;
+    throw new VkApiError(15, VK_AUDIO_DENIED);
+  }
+
+  private async probeRealAudio(): Promise<boolean> {
+    try {
+      const page = await this.invokeApi<VkAudioList>(
+        'audio.search',
+        { q: 'love', count: 30, auto_complete: 1, sort: 2 },
+        true,
+      );
+      const items = (page.items ?? []).map(unwrapAudio).filter((a): a is VkAudio => !!a);
+      return items.some((a) => !isVkAudioStub(a) && !!a.url);
+    } catch {
+      return false;
+    }
+  }
+
+  private async verifyAudioAccess(signal?: AbortSignal): Promise<void> {
+    await this.requireWorkingAudio(signal);
   }
 
   async fetchAccount(refresh = false): Promise<ExternalAccount | null> {
@@ -742,6 +771,15 @@ export class VkClient {
   }
 
   async call<T>(method: string, params: Record<string, string | number | undefined> = {}): Promise<T> {
+    return this.invokeApi<T>(method, params);
+  }
+
+  private async invokeApi<T>(
+    method: string,
+    params: Record<string, string | number | undefined> = {},
+    skipAudioGate = false,
+  ): Promise<T> {
+    if (!skipAudioGate && method.startsWith('audio.')) await this.requireWorkingAudio();
     if (!this.tokens) throw new Error('Войдите во VK заново в Настройках');
     let lastError: unknown;
     for (let attempt = 0; attempt < 4; attempt++) {
@@ -815,6 +853,8 @@ export class VkClient {
   private saveTokens(tokens: VkTokenResponse): void {
     this.tokens = { access_token: tokens.access_token, user_id: tokens.user_id };
     this.status = 'connected';
+    this.audioSessionOk = null;
+    this.kateUpgradeAttempted = false;
     this.opts.vault.set(VAULT_KEY, JSON.stringify(this.tokens));
   }
 

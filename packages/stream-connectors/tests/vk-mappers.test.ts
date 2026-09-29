@@ -1,5 +1,12 @@
 import { describe, expect, it } from 'vitest';
-import { artistsFromTracks, mapVkPlaylist, mapVkTrack, parseVkAudioId, vkTrackId } from '../src/vk-mappers.js';
+import {
+  artistsFromTracks,
+  isVkAudioStub,
+  mapVkPlaylist,
+  mapVkTrack,
+  parseVkAudioId,
+  vkTrackId,
+} from '../src/vk-mappers.js';
 import type { VkAudio } from '../src/vk-mappers.js';
 
 const sample: VkAudio = {
@@ -25,6 +32,19 @@ describe('vk mappers', () => {
     expect(t.playable).toBe(true);
     expect(t.explicit).toBe(true);
     expect(t.artists?.[0]).toEqual({ id: '9', name: 'Artist' });
+  });
+
+  it('detects vk.com placeholder stub', () => {
+    expect(
+      isVkAudioStub({
+        id: 1,
+        owner_id: 1,
+        artist: 'и в официальных приложениях ВКонтакте',
+        title: 'Аудио доступно на vk.com',
+        duration: 25,
+      }),
+    ).toBe(true);
+    expect(isVkAudioStub(sample)).toBe(false);
   });
 
   it('marks restricted tracks unplayable', () => {
