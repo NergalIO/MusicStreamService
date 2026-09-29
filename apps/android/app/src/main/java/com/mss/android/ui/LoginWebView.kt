@@ -5,6 +5,7 @@ import android.graphics.Color
 import android.os.Message
 import android.view.ViewGroup
 import android.webkit.CookieManager
+import android.webkit.PermissionRequest
 import android.webkit.WebChromeClient
 import android.webkit.WebSettings
 import android.webkit.WebView
@@ -72,5 +73,16 @@ class LoginPopupChrome(
     override fun onCloseWindow(window: WebView) {
         (window.parent as? FrameLayout)?.removeView(window)
         window.destroy()
+    }
+
+    /** Веб-плеер Spotify без Widevine (PROTECTED_MEDIA_ID) падает с «No supported keysystem». */
+    override fun onPermissionRequest(request: PermissionRequest) {
+        val host = request.origin?.host.orEmpty()
+        val drm = request.resources.filter { it == PermissionRequest.RESOURCE_PROTECTED_MEDIA_ID }
+        if (drm.isNotEmpty() && (host == "spotify.com" || host.endsWith(".spotify.com"))) {
+            request.grant(drm.toTypedArray())
+        } else {
+            request.deny()
+        }
     }
 }

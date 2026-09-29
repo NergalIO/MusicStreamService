@@ -84,7 +84,19 @@ class SpotifyWebSession @Inject constructor(
             restorePersistedCookies()
             CookieManager.getInstance().flush()
         }
-        if (hasPersistedSession() || hasLoginCookies()) _loggedIn.value = true
+        syncLoginState()
+    }
+
+    /** Анонимный веб-плеер тоже получает Bearer-токен, поэтому вход подтверждают только cookie sp_dc/sp_key. */
+    private fun syncLoginState() {
+        if (signedOut) return
+        if (hasLoginCookies()) {
+            markLoggedIn()
+        } else if (_loggedIn.value || hasPersistedSession()) {
+            vault.delete(FLAG_KEY)
+            _loggedIn.value = false
+            _remoteDevice.value = null
+        }
     }
 
     fun hasPersistedSession(): Boolean = vault.get(FLAG_KEY) == "1"
@@ -107,6 +119,9 @@ class SpotifyWebSession @Inject constructor(
     fun attach(view: WebView) {
         if (webView === view) return
         webView = view
+        if (view.context.applicationInfo.flags and android.content.pm.ApplicationInfo.FLAG_DEBUGGABLE != 0) {
+            WebView.setWebContentsDebuggingEnabled(true)
+        }
         CookieManager.getInstance().setAcceptCookie(true)
         CookieManager.getInstance().setAcceptThirdPartyCookies(view, true)
         view.settings.javaScriptEnabled = true
@@ -133,20 +148,20 @@ class SpotifyWebSession @Inject constructor(
                 val ver = h.entries.find { it.key.equals("spotify-app-version", true) }?.value
                 if (!signedOut && auth?.startsWith("Bearer ") == true && !client.isNullOrBlank()) {
                     headers = SpotifyWebHeaders(auth, client, ver.orEmpty())
-                    if (!_loggedIn.value) markLoggedIn()
+                    if (!_loggedIn.value && hasLoginCookies()) markLoggedIn()
                 }
                 return null
             }
 
             override fun onPageFinished(view: WebView?, url: String?) {
-                if (!signedOut && hasLoginCookies()) markLoggedIn()
+                if (url?.startsWith(HOME) == true || hasLoginCookies()) syncLoginState()
                 if (loginAgent) eval(FIT_MOBILE)
                 injectHelpers()
                 if (_loggedIn.value && !loginAgent) eval(SCAN_OPERATIONS)
             }
         }
         restorePersistedCookies()
-        if (!signedOut && (hasLoginCookies() || hasPersistedSession())) markLoggedIn()
+        syncLoginState()
         view.loadUrl(HOME)
         wake()
     }
