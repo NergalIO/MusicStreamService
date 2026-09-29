@@ -93,7 +93,11 @@ jobs:
           YANDEX_CLIENT_SECRET: ${{ secrets.YANDEX_CLIENT_SECRET }}
         run: |
           chmod +x gradlew
-          ARGS=(:app:assembleRelease --no-daemon)
+          # packageRelease и lintVital идут вместе. При -Xmx2g и 4 воркерах процесс упаковки убивается без внятной причины.
+          sed -i 's/^org.gradle.jvmargs=.*/org.gradle.jvmargs=-Xmx3g -XX:MaxMetaspaceSize=512m -XX:+HeapDumpOnOutOfMemoryError -Dfile.encoding=UTF-8/' gradle.properties
+          sed -i 's/^org.gradle.workers.max=.*/org.gradle.workers.max=2/' gradle.properties
+          grep -q '^kotlin.daemon.jvmargs=' gradle.properties || echo 'kotlin.daemon.jvmargs=-Xmx1g' >> gradle.properties
+          ARGS=(:app:assembleRelease --no-daemon --max-workers=2 --stacktrace)
           [ -n "$API_PUBLIC_URL" ] && ARGS+=("-PAPI_PUBLIC_URL=$API_PUBLIC_URL")
           [ -n "$SPOTIFY_CLIENT_ID" ] && ARGS+=("-PSPOTIFY_CLIENT_ID=$SPOTIFY_CLIENT_ID")
           [ -n "$YANDEX_CLIENT_ID" ] && ARGS+=("-PYANDEX_CLIENT_ID=$YANDEX_CLIENT_ID")

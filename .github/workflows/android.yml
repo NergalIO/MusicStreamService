@@ -2,6 +2,9 @@ name: Android
 
 on:
   push:
+    # Теги собирает release.yml. Повторный signed APK здесь только дублирует его и падает по памяти.
+    branches:
+      - '**'
     paths:
       - 'apps/android/**'
       - '.github/workflows/android.yml'
