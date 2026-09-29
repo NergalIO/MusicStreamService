@@ -1,5 +1,6 @@
 package com.mss.android
 
+import com.mss.android.ui.LibraryTab
 import com.mss.android.ui.navigation.parseMssLink
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertNotNull
@@ -25,7 +26,8 @@ class DeepLinkTest {
     fun parseLibraryUploads() {
         val action = parseMssLink("mss://library/uploads")
         assertNotNull(action)
-        assertEquals("library/uploads", action!!.route)
+        assertEquals("library", action!!.route)
+        assertEquals(LibraryTab.UPLOADS, action.libraryTab)
     }
 
     @Test
