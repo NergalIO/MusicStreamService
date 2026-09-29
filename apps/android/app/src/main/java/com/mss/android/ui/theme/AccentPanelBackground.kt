@@ -5,7 +5,6 @@ import androidx.compose.foundation.isSystemInDarkTheme
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.BoxScope
 import androidx.compose.foundation.layout.BoxWithConstraints
-import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.runtime.Composable
 import androidx.compose.ui.Modifier
@@ -13,7 +12,6 @@ import androidx.compose.ui.geometry.Offset
 import androidx.compose.ui.graphics.Brush
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.layout.ContentScale
-import androidx.compose.ui.zIndex
 import coil.compose.AsyncImage
 
 /** Фон нижней панели (мини-плеер): градиент акцента или обложки при «Динамическая». */
@@ -37,11 +35,11 @@ fun AccentPanelBackground(
                 model = coverUrl,
                 contentDescription = null,
                 contentScale = ContentScale.Crop,
-                modifier = Modifier.fillMaxSize().isolatedCoverBlur(radiusPx = 48f, scale = 1.35f, alpha = 0.5f),
+                modifier = Modifier.matchParentSize().isolatedCoverBlur(radiusPx = 48f, scale = 1.35f, alpha = 0.5f),
             )
             Box(
                 Modifier
-                    .fillMaxSize()
+                    .matchParentSize()
                     .background(
                         Brush.linearGradient(
                             colors = listOf(
@@ -56,7 +54,7 @@ fun AccentPanelBackground(
             )
             Box(
                 Modifier
-                    .fillMaxSize()
+                    .matchParentSize()
                     .background(
                         Brush.verticalGradient(
                             colors = listOf(
@@ -70,7 +68,7 @@ fun AccentPanelBackground(
         } else {
             Box(
                 Modifier
-                    .fillMaxSize()
+                    .matchParentSize()
                     .background(
                         Brush.linearGradient(
                             colors = listOf(
@@ -84,6 +82,6 @@ fun AccentPanelBackground(
                     ),
             )
         }
-        Box(Modifier.zIndex(1f)) { content() }
+        content()
     }
 }
