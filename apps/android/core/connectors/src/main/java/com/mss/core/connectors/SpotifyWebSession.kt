@@ -47,6 +47,7 @@ class SpotifyWebSession @Inject constructor() {
     val visibleForLogin: StateFlow<Boolean> = _visibleForLogin
 
     @Volatile private var hashes: Map<String, String> = emptyMap()
+    private var loginAgent = false
 
     fun isReady(): Boolean = webView != null && _loggedIn.value
 
@@ -72,8 +73,13 @@ class SpotifyWebSession @Inject constructor() {
         view.settings.domStorageEnabled = true
         view.settings.mediaPlaybackRequiresUserGesture = false
         view.settings.mixedContentMode = WebSettings.MIXED_CONTENT_COMPATIBILITY_MODE
-        view.settings.userAgentString =
-            "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/144.0.0.0 Safari/537.36"
+        view.settings.useWideViewPort = true
+        view.settings.loadWithOverviewMode = false
+        view.settings.setSupportZoom(false)
+        view.settings.builtInZoomControls = false
+        view.settings.displayZoomControls = false
+        view.settings.userAgentString = DESKTOP_UA
+        view.isHorizontalScrollBarEnabled = false
         view.addJavascriptInterface(JsBridge(), "MssSpotify")
         view.webViewClient = object : WebViewClient() {
             override fun shouldOverrideUrlLoading(view: WebView?, request: WebResourceRequest?): Boolean = false
@@ -90,10 +96,13 @@ class SpotifyWebSession @Inject constructor() {
             }
 
             override fun onPageFinished(view: WebView?, url: String?) {
-                val cookies = CookieManager.getInstance().getCookie("https://open.spotify.com/") ?: ""
+                val cookies = CookieManager.getInstance().getCookie("https://open.spotify.com/")
+                    ?: CookieManager.getInstance().getCookie("https://accounts.spotify.com/")
+                    ?: ""
                 _loggedIn.value = cookies.contains("sp_dc") || cookies.contains("sp_key")
+                if (loginAgent) eval(FIT_MOBILE)
                 injectHelpers()
-                if (_loggedIn.value) eval(SCAN_OPERATIONS)
+                if (_loggedIn.value && !loginAgent) eval(SCAN_OPERATIONS)
             }
         }
         view.loadUrl("https://open.spotify.com/")
@@ -101,21 +110,41 @@ class SpotifyWebSession @Inject constructor() {
 
     fun showLogin() {
         _visibleForLogin.value = true
-        eval("window.location.href='https://open.spotify.com/'")
+        if (loginAgent) {
+            eval("window.location.href='$LOGIN_URL'")
+            return
+        }
+        loginAgent = true
+        applyAgent(mobile = true, url = LOGIN_URL)
     }
 
     fun hideLogin() {
         _visibleForLogin.value = false
+        if (!loginAgent) return
+        loginAgent = false
+        applyAgent(mobile = false, url = "https://open.spotify.com/")
+    }
+
+    private fun applyAgent(mobile: Boolean, url: String) {
+        val view = webView ?: return
+        main.post {
+            view.settings.userAgentString = if (mobile) MOBILE_UA else DESKTOP_UA
+            view.settings.loadWithOverviewMode = false
+            view.isHorizontalScrollBarEnabled = false
+            view.loadUrl(url)
+        }
     }
 
     fun logout() {
         _visibleForLogin.value = false
         _loggedIn.value = false
+        loginAgent = false
         headers = null
         hashes = emptyMap()
         main.post {
             CookieManager.getInstance().removeAllCookies(null)
             CookieManager.getInstance().flush()
+            webView?.settings?.userAgentString = DESKTOP_UA
             webView?.loadUrl("https://open.spotify.com/")
         }
     }
@@ -217,6 +246,24 @@ class SpotifyWebSession @Inject constructor() {
     }
 
     companion object {
+        private const val DESKTOP_UA =
+            "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/144.0.0.0 Safari/537.36"
+        private const val MOBILE_UA =
+            "Mozilla/5.0 (Linux; Android 14; Pixel 8) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/144.0.0.0 Mobile Safari/537.36"
+        private const val LOGIN_URL =
+            "https://accounts.spotify.com/login?continue=https%3A%2F%2Fopen.spotify.com%2F"
+        private const val FIT_MOBILE = """
+          (function(){
+            let m = document.querySelector('meta[name="viewport"]');
+            if (!m) {
+              m = document.createElement('meta');
+              m.setAttribute('name', 'viewport');
+              (document.head || document.documentElement).appendChild(m);
+            }
+            m.setAttribute('content', 'width=device-width, initial-scale=1, maximum-scale=1');
+          })();
+        """
+
         private const val HELPERS = """
           const q = (s) => document.querySelector(s);
           const sleep = (ms) => new Promise((r) => setTimeout(r, ms));

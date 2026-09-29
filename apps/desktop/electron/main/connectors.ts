@@ -12,7 +12,7 @@ import { spotifyPathfinder, spotifySpclient } from './spotify-pathfinder.js';
 import { isSpotifyLoggedIn, spotifyWebLogout } from './spotify-web-session.js';
 import { yandexCustomOAuthEnabled } from './user-client-secrets.js';
 import { tokenVault } from './token-vault.js';
-import { openKateOAuthWindow } from './vk-oauth.js';
+import { openKateOAuthWindow, showVkLoginWindow } from './vk-oauth.js';
 
 export const connectorRegistry = new ConnectorRegistry();
 let yandex: YandexConnector | null = null;
@@ -93,6 +93,7 @@ function registerVk(): void {
       onLoginPrompt: (prompt, signal) => waitForLogin(prompt, signal),
       onLoginPromptUpdate: pushLoginPrompt,
       openKateOAuth: (url, signal) => openKateOAuthWindow(url, signal),
+      focusVkLogin: () => showVkLoginWindow(),
     }),
   );
 }

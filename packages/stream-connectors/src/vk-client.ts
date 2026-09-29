@@ -110,6 +110,8 @@ export interface VkClientOptions {
   onLoginPromptUpdate?: (prompt: LoginPrompt) => void;
   /** Окно Kate OAuth (VK ID), если SMS API отвечает flood/капчей. */
   openKateOAuth?: (url: string, signal?: AbortSignal) => Promise<string>;
+  /** Показать уже открытое окно, не начиная новую навигацию. */
+  focusVkLogin?: () => void;
 }
 
 function sleep(ms: number): Promise<void> {
@@ -294,10 +296,10 @@ export class VkClient {
             return { kind: 'done' };
           }
         }
-        throw new VkAuthError('Окно закрыто. Нажмите «Продолжить», чтобы открыть снова');
+        throw new VkAuthError('Окно закрыто. Нажмите «Открыть окно VK», чтобы открыть снова');
       }
       if (raced.kind === 'closed') {
-        throw new VkAuthError('Окно закрыто. Нажмите «Продолжить», чтобы открыть снова');
+        throw new VkAuthError('Окно закрыто. Нажмите «Открыть окно VK», чтобы открыть снова');
       }
       throw new Error('Отменено');
     } finally {
@@ -322,16 +324,29 @@ export class VkClient {
         const stopAttempt = () => attempt.abort();
         local.signal.addEventListener('abort', stopAttempt);
         try {
-          const replyP = this.prompt({ step: 'sms', method: 'sms', error }, attempt.signal)
-            .then((r) => ({ kind: 'reply' as const, r }))
-            .catch((e: unknown) => ({ kind: 'aborted' as const, e }));
+          const ask = () =>
+            this.prompt({ step: 'sms', method: 'sms', error }, attempt.signal)
+              .then((r) => ({ kind: 'reply' as const, r }))
+              .catch((e: unknown) => ({ kind: 'aborted' as const, e }));
 
+          let replyP = ask();
           const oauthP = this.loginSmsViaOAuth(attempt.signal)
             .then((result) => ({ kind: 'oauth' as const, result }))
             .catch((e: unknown) => ({ kind: 'oauth-err' as const, e }));
 
-          const raced = await Promise.race([replyP, oauthP]);
+          let raced: Awaited<typeof replyP> | Awaited<typeof oauthP> = await Promise.race([replyP, oauthP]);
           error = undefined;
+
+          // «Открыть окно» приходит, пока vk.com ещё грузится. Ответ не должен
+          // абортить окно: close() посреди loadURL даёт ERR_FAILED и на Windows
+          // закрывает родительское окно вместе с приложением.
+          while (raced.kind === 'reply') {
+            const next = this.switched(raced.r, 'sms');
+            if (next) return { kind: 'switch', method: next };
+            this.opts.focusVkLogin?.();
+            replyP = ask();
+            raced = await Promise.race([replyP, oauthP]);
+          }
 
           if (raced.kind === 'oauth') {
             if (raced.result) return raced.result;
@@ -346,7 +361,7 @@ export class VkClient {
               step: 'sms',
               method: 'sms',
               error: /отмен/i.test(message)
-                ? 'Окно закрыто. Нажмите «Продолжить», чтобы открыть снова'
+                ? 'Окно закрыто. Нажмите «Открыть окно VK», чтобы открыть снова'
                 : message,
             });
             const reply = await replyP;
@@ -363,8 +378,6 @@ export class VkClient {
             if (parent.aborted || local.signal.aborted) throw new Error('Отменено');
             continue;
           }
-          const next = this.switched(raced.r, 'sms');
-          if (next) return { kind: 'switch', method: next };
         } finally {
           local.signal.removeEventListener('abort', stopAttempt);
           attempt.abort();

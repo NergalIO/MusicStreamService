@@ -27,6 +27,14 @@ class VkAuthTest {
     }
 
     @Test
+    fun mobileAuthorizeUsesPhoneLayout() {
+        val url = VkAuth.mobileAuthorizeUrl()
+        org.junit.Assert.assertTrue(url.contains("display=mobile"))
+        org.junit.Assert.assertTrue(url.contains("client_id=${VkAuth.ANDROID_CLIENT_ID}"))
+        org.junit.Assert.assertTrue(url.contains("blank.html"))
+    }
+
+    @Test
     fun otpAlreadySentDetectsSms() {
         org.junit.Assert.assertTrue(VkAuth.otpAlreadySent("sms"))
         org.junit.Assert.assertFalse(VkAuth.otpAlreadySent("password"))

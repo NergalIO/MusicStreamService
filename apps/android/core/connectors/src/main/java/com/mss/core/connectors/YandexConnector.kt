@@ -54,8 +54,10 @@ class YandexConnector @Inject constructor(
     override val id = SourceId.YANDEX
     override val displayName = "Яндекс Музыка"
 
-    private val clientId = BuildConfig.YANDEX_CLIENT_ID.ifBlank { MUSIC_CLIENT_ID }
-    private val clientSecret = BuildConfig.YANDEX_CLIENT_SECRET.ifBlank { MUSIC_CLIENT_SECRET }
+    // Свой OAuth-клиент («Music Stream Service») зарегистрирован только на API Яндекс ID
+    // и не получает каталог музыки. Полные треки выдаёт клиент приложения Яндекс.Музыка.
+    private val clientId = MUSIC_CLIENT_ID
+    private val clientSecret = MUSIC_CLIENT_SECRET
     private val json = Json { ignoreUnknownKeys = true }
     private val http = HttpClient(OkHttp)
     private val queueMutex = Mutex()
@@ -80,6 +82,7 @@ class YandexConnector @Inject constructor(
                 "client_id" to clientId,
                 "device_id" to randomHex(8),
                 "device_name" to "MusicStreamService Android",
+                "scope" to MUSIC_SCOPE,
             ),
         )
         val prompt = DeviceCodePrompt(
@@ -106,6 +109,12 @@ class YandexConnector @Inject constructor(
                         "client_secret" to clientSecret,
                     ),
                 )
+                val granted = token.scope.orEmpty()
+                if (granted.isNotBlank() && !granted.contains("music:")) {
+                    throw ConnectorException(
+                        "Яндекс выдал доступ только к ID, без Музыки. Подтвердите вход кодом на ya.ru/device",
+                    )
+                }
                 saveTokens(
                     YandexTokens(
                         accessToken = token.accessToken,
@@ -565,6 +574,7 @@ class YandexConnector @Inject constructor(
         private const val ACCOUNT_KEY = "yandex_account"
         const val MUSIC_CLIENT_ID = "23cabbbdc6cd418abb4b39c32c41195d"
         const val MUSIC_CLIENT_SECRET = "53bc75238f0c4d08a118e51fe9203300"
+        const val MUSIC_SCOPE = "login:info music:content music:read music:write"
     }
 }
 
@@ -590,6 +600,7 @@ private data class YandexTokenResponse(
     @SerialName("access_token") val accessToken: String,
     @SerialName("refresh_token") val refreshToken: String? = null,
     @SerialName("expires_in") val expiresIn: Int,
+    val scope: String? = null,
 )
 
 @Serializable

@@ -95,7 +95,12 @@ class PlayerController @Inject constructor(
         }
     }
 
-    fun exoPlayer(): ExoPlayer = exoA
+    /** Кто сейчас играет: MediaSession переподключается только если меняется экземпляр. */
+    var onActivePlayerChanged: ((ExoPlayer) -> Unit)? = null
+
+    fun exoPlayer(): ExoPlayer = active
+
+    fun sessionPlayer(): Player = active
 
     fun audioSessionId(): Int = active.audioSessionId
 
@@ -312,31 +317,34 @@ class PlayerController @Inject constructor(
                     .build(),
             )
             .build()
+        if (!fade) {
+            active.setMediaItem(item)
+            active.prepare()
+            active.play()
+            applyLoudness(active, track)
+            _state.value = _state.value.copy(current = track, playing = true)
+            return
+        }
         val incoming = if (active === exoA) exoB else exoA
         incoming.setMediaItem(item)
         incoming.prepare()
         incoming.play()
         applyLoudness(incoming, track)
-        if (fade) {
-            incoming.volume = 0f
-            active.volume = _state.value.volume
-            scope.launch {
-                val steps = 20
-                val step = fadeMs / steps
-                repeat(steps) { i ->
-                    delay(step.toLong())
-                    val t = (i + 1) / steps.toFloat()
-                    incoming.volume = t * _state.value.volume
-                    active.volume = (1 - t) * _state.value.volume
-                }
-                active.pause()
-                active = incoming
-                active.volume = _state.value.volume
+        incoming.volume = 0f
+        active.volume = _state.value.volume
+        scope.launch {
+            val steps = 20
+            val step = fadeMs / steps
+            repeat(steps) { i ->
+                delay(step.toLong())
+                val t = (i + 1) / steps.toFloat()
+                incoming.volume = t * _state.value.volume
+                active.volume = (1 - t) * _state.value.volume
             }
-        } else {
             active.pause()
-            incoming.volume = _state.value.volume
             active = incoming
+            active.volume = _state.value.volume
+            onActivePlayerChanged?.invoke(active)
         }
         _state.value = _state.value.copy(current = track, playing = true)
     }

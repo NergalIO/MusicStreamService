@@ -52,6 +52,15 @@ object VkAuth {
     const val BROWSER_UA =
         "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/128.0.0.0 Safari/537.36"
     const val ID_LOGIN = "https://id.vk.com/"
+    const val MOBILE_UA =
+        "Mozilla/5.0 (Linux; Android 14; Pixel 8) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/144.0.0.0 Mobile Safari/537.36"
+
+    /** Мобильная страница входа: SMS-поле на ширине экрана. Kate в вебе отвечает «direct auth». */
+    fun mobileAuthorizeUrl(): String {
+        val redirect = java.net.URLEncoder.encode("https://oauth.vk.com/blank.html", Charsets.UTF_8)
+        return "https://oauth.vk.com/authorize?client_id=$ANDROID_CLIENT_ID&scope=all" +
+            "&redirect_uri=$redirect&display=mobile&response_type=token&revoke=1&v=$AUTH_API"
+    }
 
     private val json = Json { ignoreUnknownKeys = true }
     private val http = HttpClient(OkHttp) {

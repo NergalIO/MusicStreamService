@@ -6,6 +6,19 @@ const PARTITION = 'persist:vk-web-login';
 const ANDROID_CLIENT_ID = '2274003';
 const FALLBACK_STARTS = ['https://vk.com/', 'https://m.vk.com/login', 'https://id.vk.com/', 'https://vk.com/login'];
 
+let activeLogin: BrowserWindow | null = null;
+
+/** Поднять уже открытое окно входа. Повторный loadURL во время загрузки роняет процесс. */
+export function showVkLoginWindow(): void {
+  const win = activeLogin;
+  if (!win || win.isDestroyed()) return;
+  if (win.isMinimized()) win.restore();
+  win.show();
+  win.setAlwaysOnTop(true);
+  win.focus();
+  win.setAlwaysOnTop(false);
+}
+
 function chromeUa(): string {
   const chrome = process.versions.chrome || '128.0.0.0';
   if (process.platform === 'darwin') {
@@ -15,10 +28,6 @@ function chromeUa(): string {
     return `Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/${chrome} Safari/537.36`;
   }
   return `Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/${chrome} Safari/537.36`;
-}
-
-function parentWindow(): BrowserWindow | undefined {
-  return BrowserWindow.getAllWindows().find((win) => !win.isDestroyed() && win.isVisible()) ?? BrowserWindow.getAllWindows()[0];
 }
 
 function isDirectAuthAuthorize(url: string): boolean {
@@ -130,14 +139,11 @@ export function openKateOAuthWindow(url: string, signal?: AbortSignal): Promise<
   const ses = electronSession.fromPartition(PARTITION);
   ses.setUserAgent(ua);
 
-  const parent = parentWindow();
   const win = new BrowserWindow({
     width: 420,
     height: 740,
-    parent,
-    modal: !!parent,
     autoHideMenuBar: true,
-    show: false,
+    show: true,
     title: 'Вход во VK',
     webPreferences: {
       partition: PARTITION,
@@ -146,7 +152,14 @@ export function openKateOAuthWindow(url: string, signal?: AbortSignal): Promise<
       sandbox: false,
     },
   });
+  activeLogin = win;
+  win.on('closed', () => {
+    if (activeLogin === win) activeLogin = null;
+  });
   win.webContents.setUserAgent(ua);
+  win.webContents.on('will-prevent-unload', (event) => {
+    event.preventDefault();
+  });
 
   return new Promise((resolve, reject) => {
     let settled = false;
@@ -172,10 +185,64 @@ export function openKateOAuthWindow(url: string, signal?: AbortSignal): Promise<
       finish(() => resolve(tokensToRedirect(tokens)));
       return true;
     };
+    let navGen = 0;
+    let navChain: Promise<void> = Promise.resolve();
+    const navigate = (nextUrl: string, opts?: { fallback?: boolean }) => {
+      const gen = ++navGen;
+      navChain = navChain.then(
+        () =>
+          new Promise<void>((done) => {
+            const start = () => {
+              if (settled || win.isDestroyed() || gen !== navGen) {
+                done();
+                return;
+              }
+              void win.loadURL(nextUrl, { userAgent: ua }).then(
+                () => done(),
+                (err: unknown) => {
+                  done();
+                  if (settled || win.isDestroyed() || gen !== navGen) return;
+                  log.error('[vk-oauth] load failed', err);
+                  if (!opts?.fallback) return;
+                  const fallback = FALLBACK_STARTS.find((candidate) => !tried.has(candidate));
+                  if (!fallback) {
+                    if (!win.isVisible()) win.show();
+                    return;
+                  }
+                  tried.add(fallback);
+                  setTimeout(() => navigate(fallback, { fallback: true }), 50);
+                },
+              );
+            };
+            if (win.isDestroyed()) {
+              done();
+              return;
+            }
+            if (win.webContents.isLoading()) {
+              let released = false;
+              const release = () => {
+                if (released) return;
+                released = true;
+                done();
+              };
+              win.webContents.once('did-stop-loading', () => {
+                setTimeout(() => {
+                  if (released) return;
+                  start();
+                }, 50);
+              });
+              win.once('closed', release);
+              win.webContents.stop();
+              return;
+            }
+            start();
+          }),
+      );
+    };
     const blockAuthorize = (nextUrl: string, event?: { preventDefault: () => void }) => {
       if (!isDirectAuthAuthorize(nextUrl)) return false;
       event?.preventDefault();
-      if (!win.isDestroyed()) void win.loadURL('https://vk.com/', { userAgent: ua });
+      navigate('https://vk.com/', { fallback: true });
       return true;
     };
     const scrapeToken = async (href: string): Promise<{ access_token?: string; silent_token?: string; uuid?: string } | null> => {
@@ -235,7 +302,7 @@ export function openKateOAuthWindow(url: string, signal?: AbortSignal): Promise<
           'String(document.body && document.body.innerText || "").slice(0, 800)',
         )) as unknown;
         if (typeof body === 'string' && /direct auth|incorrect app/i.test(body)) {
-          void win.loadURL('https://id.vk.com/', { userAgent: ua });
+          navigate('https://id.vk.com/', { fallback: true });
           return;
         }
       } catch {
@@ -259,23 +326,8 @@ export function openKateOAuthWindow(url: string, signal?: AbortSignal): Promise<
       }
       if (confirm && !openedConfirm && looksLoggedIn(href) && !/qr\.vk\./i.test(host)) {
         openedConfirm = true;
-        void win.loadURL(confirm, { userAgent: ua }).catch((err: unknown) => {
-          log.warn('[vk-oauth] confirm load failed', err);
-        });
+        navigate(confirm);
       }
-    };
-
-    const loadStart = (nextUrl: string) => {
-      void win.loadURL(nextUrl, { userAgent: ua }).catch((err: unknown) => {
-        log.error('[vk-oauth] load failed', err);
-        const fallback = FALLBACK_STARTS.find((candidate) => !tried.has(candidate));
-        if (fallback && !settled && !win.isDestroyed()) {
-          tried.add(fallback);
-          loadStart(fallback);
-          return;
-        }
-        if (!win.isDestroyed() && !win.isVisible()) win.show();
-      });
     };
 
     signal?.addEventListener('abort', onAbort);
@@ -335,12 +387,6 @@ export function openKateOAuthWindow(url: string, signal?: AbortSignal): Promise<
     win.webContents.on('did-fail-load', (_event, code, desc, failedUrl, isMainFrame) => {
       if (!isMainFrame || settled || win.isDestroyed()) return;
       log.error('[vk-oauth] did-fail-load', code, desc, failedUrl);
-      if (confirm && failedUrl.startsWith(confirm.split('?')[0] ?? confirm)) return;
-      const fallback = FALLBACK_STARTS.find((candidate) => !tried.has(candidate));
-      if (fallback) {
-        tried.add(fallback);
-        loadStart(fallback);
-      }
     });
     win.webContents.on('did-finish-load', () => {
       if (win.isDestroyed()) return;
@@ -357,7 +403,7 @@ export function openKateOAuthWindow(url: string, signal?: AbortSignal): Promise<
       finish(() => reject(new Error('Отменено')));
     });
 
-    loadStart(start);
+    navigate(start, { fallback: true });
     win.once('ready-to-show', () => {
       if (!win.isDestroyed()) win.show();
     });

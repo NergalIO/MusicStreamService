@@ -12,6 +12,7 @@ android {
     defaultConfig {
         minSdk = 26
         buildConfigField("String", "SPOTIFY_CLIENT_ID", "\"${gradleProp("SPOTIFY_CLIENT_ID", "")}\"")
+        // Свой клиент даёт только API Яндекс ID. Музыка входит клиентом Яндекс.Музыки в YandexConnector.
         buildConfigField("String", "YANDEX_CLIENT_ID", "\"${gradleProp("YANDEX_CLIENT_ID", "23cabbbdc6cd418abb4b39c32c41195d")}\"")
         buildConfigField("String", "YANDEX_CLIENT_SECRET", "\"${gradleProp("YANDEX_CLIENT_SECRET", "53bc75238f0c4d08a118e51fe9203300")}\"")
     }

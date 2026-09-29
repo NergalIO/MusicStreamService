@@ -4,7 +4,6 @@ import android.annotation.SuppressLint
 import android.net.Uri
 import android.view.View
 import android.webkit.WebView
-import androidx.browser.customtabs.CustomTabsIntent
 import androidx.compose.foundation.background
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
@@ -47,7 +46,6 @@ import androidx.compose.runtime.snapshotFlow
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
-import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.platform.LocalView
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
@@ -73,6 +71,7 @@ import com.mss.android.ui.library.PlaylistHub
 import com.mss.android.ui.library.UploadsScreen
 import com.mss.android.ui.lobby.LobbyScreen
 import com.mss.android.ui.more.MoreHub
+import com.mss.android.ui.more.YandexLoginDialog
 import com.mss.android.ui.navigation.Routes
 import com.mss.android.ui.navigation.parseMssLink
 import com.mss.android.ui.player.LobbyBar
@@ -161,24 +160,11 @@ private fun MainShell(vm: MssViewModel, nav: NavHostController) {
     val error by vm.error.collectAsState()
     val notice by vm.notice.collectAsState()
     val prompt by vm.yandexPrompt.collectAsState()
-    val ctx = LocalContext.current
     val onboarded by vm.onboarded.collectAsState()
     val lobby by vm.lobbyState.collectAsState()
 
     prompt?.let { p ->
-        AlertDialog(
-            onDismissRequest = { vm.cancelYandexLogin() },
-            title = { Text("Яндекс Музыка") },
-            text = { Text("Код ${p.userCode}\nОткройте ${p.verificationUrl}") },
-            confirmButton = {
-                Button(onClick = {
-                    CustomTabsIntent.Builder().build().launchUrl(ctx, Uri.parse(p.verificationUrl))
-                }) { Text("Открыть") }
-            },
-            dismissButton = {
-                Button(onClick = { vm.cancelYandexLogin() }) { Text("Отмена") }
-            },
-        )
+        YandexLoginDialog(p, onCancel = { vm.cancelYandexLogin() })
     }
     if (!onboarded) {
         AlertDialog(

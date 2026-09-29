@@ -165,17 +165,18 @@ fun HubRow(
     title: String,
     subtitle: String,
     icon: ImageVector,
-    onClick: (() -> Unit)? = null,
     action: String? = null,
     onAction: (() -> Unit)? = null,
+    onClick: (() -> Unit)? = null,
 ) {
+    val rowClick = onClick ?: onAction
     Row(
         Modifier
             .padding(horizontal = 16.dp, vertical = 4.dp)
             .fillMaxWidth()
             .clip(RoundedCornerShape(12.dp))
             .background(MaterialTheme.colorScheme.surface)
-            .then(if (onClick != null && onAction == null) Modifier.clickable(onClick = onClick) else Modifier)
+            .then(if (rowClick != null) Modifier.clickable(onClick = rowClick) else Modifier)
             .padding(horizontal = 12.dp, vertical = 12.dp),
         verticalAlignment = Alignment.CenterVertically,
         horizontalArrangement = Arrangement.spacedBy(12.dp),
