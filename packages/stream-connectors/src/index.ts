@@ -1,3 +1,5 @@
+export * from './lyrics.js';
+export * from './spotify-lyrics.js';
 export * from './types.js';
 export * from './registry.js';
 export * from './spotify.js';

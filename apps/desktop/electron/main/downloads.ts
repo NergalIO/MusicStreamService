@@ -73,6 +73,13 @@ export function downloadKey(track: Pick<UnifiedTrack, 'source' | 'id'>): string 
   return `${track.source}:${String(track.id).split(':')[0]}`;
 }
 
+export function downloadPathFor(source: UnifiedTrack['source'], trackId: string): string | null {
+  const key = `${source}:${String(trackId).split(':')[0]}`;
+  const record = load().items[key];
+  if (!record?.path || !fs.existsSync(record.path)) return null;
+  return record.path;
+}
+
 /** Файлы из индекса загрузок можно отдавать через mss-stream://file, даже если папка вне userData. */
 export function isDownloadedFile(filePath: string): boolean {
   const resolved = path.resolve(filePath);

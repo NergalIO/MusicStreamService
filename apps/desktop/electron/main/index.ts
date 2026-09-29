@@ -38,6 +38,7 @@ import { disposeDiscordPresence, initDiscordPresence } from './discord-presence.
 import { disposeGlobalShortcuts, initGlobalShortcuts } from './global-shortcuts.js';
 import { registerDownloadsIpc } from './downloads.js';
 import { registerConnectorIpc } from './ipc-connectors.js';
+import { registerTrackLyricsIpc } from './track-lyrics.js';
 import { disposeMedia, initMedia, showTrayHint } from './media.js';
 import { initUpdater } from './updater.js';
 import {
@@ -248,6 +249,7 @@ app.whenReady().then(async () => {
   registerLocalTracksIpc();
   registerLobbyIpc();
   registerConnectorIpc();
+  registerTrackLyricsIpc();
   registerDownloadsIpc();
   registerWindowControls();
   registerAppSettingsIpc();

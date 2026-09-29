@@ -1,4 +1,4 @@
-import type { UnifiedTrack } from '@mss/shared';
+import type { SourceId, UnifiedTrack } from '@mss/shared';
 import { useQuery } from '@tanstack/react-query';
 import { Loader2 } from 'lucide-react';
 import { useEffect, useMemo, useRef } from 'react';
@@ -8,11 +8,13 @@ import { usePlaybackStore } from '@/store/playback-store';
 
 const LEAD_MS = 250;
 
+const LYRICS_SOURCES = new Set<SourceId>(['yandex', 'spotify', 'local']);
+
 export function LyricsView({ track }: { track: UnifiedTrack }) {
-  const supported = track.source === 'yandex';
+  const supported = LYRICS_SOURCES.has(track.source);
   const { data, isLoading, isError } = useQuery({
     queryKey: ['lyrics', track.source, track.id],
-    queryFn: () => window.electronAPI.yandex.lyrics(track.id),
+    queryFn: () => window.electronAPI.lyrics.get(track.source, track.id),
     enabled: supported,
     staleTime: Infinity,
     retry: false,
@@ -38,7 +40,7 @@ export function LyricsView({ track }: { track: UnifiedTrack }) {
     el?.scrollIntoView({ block: 'center', behavior: 'smooth' });
   }, [active]);
 
-  if (!supported) return <Empty text="Тексты песен пока доступны только для треков Яндекс Музыки" />;
+  if (!supported) return <Empty text="Тексты песен недоступны для этого источника" />;
   if (isLoading)
     return (
       <div className="flex h-full items-center justify-center text-muted">
@@ -46,7 +48,13 @@ export function LyricsView({ track }: { track: UnifiedTrack }) {
       </div>
     );
   if (isError) return <Empty text="Не удалось загрузить текст" />;
-  if (!data || !data.lines.some((l) => l.text.trim())) return <Empty text="У этого трека нет текста" />;
+  if (!data || !data.lines.some((l) => l.text.trim())) {
+    const empty =
+      track.source === 'local'
+        ? 'Нет текста. Положите .lrc или .txt рядом с файлом трека (или скачанной копией).'
+        : 'У этого трека нет текста';
+    return <Empty text={empty} />;
+  }
 
   return (
     <div

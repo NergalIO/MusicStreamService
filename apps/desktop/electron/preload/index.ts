@@ -14,6 +14,7 @@ import type {
   PlaybackReport,
   PlaylistWithTracks,
   Quality,
+  SourceId,
   TrackLyrics,
   UnifiedAlbum,
   UnifiedArtist,
@@ -206,6 +207,10 @@ const api = {
   relay: {
     provideFile: (sessionId: string) => ipcRenderer.invoke('relay:provideFile', sessionId) as Promise<void>,
     onEvent: (cb: (payload: unknown) => void) => subscribe('relay:event', cb),
+  },
+  lyrics: {
+    get: (source: SourceId, trackId: string) =>
+      ipcRenderer.invoke('lyrics:get', source, trackId) as Promise<TrackLyrics | null>,
   },
   offline: {
     list: () => ipcRenderer.invoke('offline:list') as Promise<{ trackId: string; path: string }[]>,

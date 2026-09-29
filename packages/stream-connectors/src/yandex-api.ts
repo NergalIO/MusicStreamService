@@ -5,7 +5,6 @@ import type {
   ExternalAccount,
   FeedBlock,
   FeedItem,
-  LyricsLine,
   PlaybackReport,
   PlaylistWithTracks,
   TrackLyrics,
@@ -16,6 +15,7 @@ import type {
   WaveFeedbackType,
   WaveSettings,
 } from '@mss/shared';
+import { parseLrc } from './lyrics.js';
 import { ANDROID_SIGN_KEY, YandexApiError, type YandexClient } from './yandex-client.js';
 import {
   mapAlbum,
@@ -36,19 +36,6 @@ interface RotorResponse {
   radioSessionId?: string;
   batchId: string;
   sequence?: { track?: YTrack }[];
-}
-
-export function parseLrc(lrc: string): LyricsLine[] {
-  const lines: LyricsLine[] = [];
-  for (const raw of lrc.split(/\r?\n/)) {
-    const stamps = [...raw.matchAll(/\[(\d+):(\d+(?:\.\d+)?)\]/g)];
-    if (!stamps.length) continue;
-    const text = raw.replace(/\[[^\]]*\]/g, '').trim();
-    for (const s of stamps) {
-      lines.push({ timeMs: Math.round((Number(s[1]) * 60 + Number(s[2])) * 1000), text });
-    }
-  }
-  return lines.sort((a, b) => a.timeMs - b.timeMs);
 }
 
 function signTrack(trackId: string): { ts: number; sign: string } {
