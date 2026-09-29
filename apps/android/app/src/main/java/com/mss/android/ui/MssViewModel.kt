@@ -63,7 +63,7 @@ class MssViewModel @Inject constructor(
     }.stateIn(viewModelScope, SharingStarted.Eagerly, false)
     val downloadRecords = downloads.records
     val playbackSettings = repo.playbackSettings.stateIn(viewModelScope, SharingStarted.Eagerly, PlaybackSettings())
-    val apiBase = repo.apiBase.stateIn(viewModelScope, SharingStarted.Eagerly, "http://10.0.2.2:3001")
+    val apiBase = repo.apiBase.stateIn(viewModelScope, SharingStarted.Eagerly, "")
     val searchHistory = repo.searchHistory.stateIn(viewModelScope, SharingStarted.Eagerly, emptyList())
     val onboarded = repo.onboarded.stateIn(viewModelScope, SharingStarted.Eagerly, false)
     val needFile = presence.needFile

@@ -169,7 +169,7 @@ location /MusicStreamService/ {
 
 ## 8. GitHub Releases (клиенты)
 
-1. Secrets в GitHub Actions (Windows CI): `API_PUBLIC_URL`, `SPOTIFY_CLIENT_ID`, `YANDEX_CLIENT_ID`, `YANDEX_CLIENT_SECRET`, `DISCORD_CLIENT_ID` (те же ключи, что в корневом `.env` для dev).
+1. Secrets в GitHub Actions: `API_PUBLIC_URL` (Windows installer и Android APK), `SPOTIFY_CLIENT_ID`, `YANDEX_CLIENT_ID`, `YANDEX_CLIENT_SECRET`, `DISCORD_CLIENT_ID` (те же ключи, что в корневом `.env` для dev).
 2. Secrets для **подписанного Android APK**: `MSS_KEYSTORE_BASE64` (keystore в Base64), `MSS_KEYSTORE_PASSWORD`, `MSS_KEY_ALIAS`, `MSS_KEY_PASSWORD`, `OFFLINE_HKDF_SECRET`. Как создать ключ — [`apps/android/README.md`](../apps/android/README.md).
 3. `git tag v0.1.0 && git push origin v0.1.0` — CI выставит версию пакетов/API/desktop/APK по тегу (`scripts/sync-version-from-tag.cjs`) и приложит `MusicStreamService-setup.exe` + `mss-android.apk` к GitHub Release.
 4. Пользователям нужен **новый** `.exe` / `.apk` с Releases; `.env` на ПК для OAuth не обязателен, если сборка с secrets.

@@ -11,9 +11,11 @@ import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.WindowInsets
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
-import androidx.compose.foundation.layout.height
+import androidx.compose.foundation.layout.offset
+import androidx.compose.ui.zIndex
 import androidx.compose.foundation.layout.ime
 import androidx.compose.foundation.layout.padding
+import androidx.compose.foundation.layout.statusBarsPadding
 import androidx.compose.foundation.layout.systemBars
 import androidx.compose.foundation.layout.union
 import androidx.compose.material.icons.Icons
@@ -71,6 +73,7 @@ import com.mss.android.ui.library.PlaylistHub
 import com.mss.android.ui.library.UploadsScreen
 import com.mss.android.ui.lobby.LobbyScreen
 import com.mss.android.ui.more.MoreHub
+import com.mss.android.ui.more.VkIdOverlay
 import com.mss.android.ui.more.YandexLoginDialog
 import com.mss.android.ui.navigation.Routes
 import com.mss.android.ui.navigation.parseMssLink
@@ -82,7 +85,9 @@ import com.mss.android.ui.settings.SettingsScreen
 import com.mss.android.ui.stats.StatsScreen
 import com.mss.android.ui.stats.SubScreen
 import com.mss.android.ui.wave.WaveScreen
+import com.mss.android.ui.theme.COVER_ACCENT
 import com.mss.android.ui.theme.MssTheme
+import com.mss.android.ui.theme.rememberCoverHsl
 import com.mss.core.model.SourceId
 import com.mss.core.model.sourceFrom
 import kotlinx.coroutines.flow.filterNotNull
@@ -97,7 +102,11 @@ fun MssApp(
     val nav = rememberNavController()
     val spotifyLoggedIn by vm.spotifyWeb.loggedIn.collectAsState()
     val spotifyLogin by vm.spotifyWeb.visibleForLogin.collectAsState()
+    val vkLogin by vm.vkLogin.collectAsState()
+    val yandexPrompt by vm.yandexPrompt.collectAsState()
     val settings by vm.playbackSettings.collectAsState()
+    val player by vm.playerState.collectAsState()
+    val cover = if (settings.accent == COVER_ACCENT) rememberCoverHsl(player.current?.coverUrl) else null
     LaunchedEffect(spotifyLoggedIn) {
         if (spotifyLoggedIn) vm.spotifyWeb.hideLogin()
     }
@@ -112,41 +121,76 @@ fun MssApp(
         nav.navigate(action.route)
     }
 
-    MssTheme(accent = settings.accent) {
+    val spotifyVisible = spotifyLogin && !spotifyLoggedIn
+    MssTheme(accent = settings.accent, cover = cover) {
         Box(Modifier.fillMaxSize()) {
-            if (session == null) {
-                LoginScreen()
-            } else {
-                MainShell(vm, nav)
+            SpotifyWebLayer(
+                vm,
+                visible = spotifyVisible,
+                modifier = Modifier
+                    .zIndex(if (spotifyVisible) 2f else 0f)
+                    .offset(x = if (spotifyVisible) 0.dp else 4000.dp),
+            )
+            Box(Modifier.fillMaxSize().zIndex(if (spotifyVisible) 0f else 1f)) {
+                if (session == null) {
+                    LoginScreen()
+                } else {
+                    MainShell(vm, nav)
+                }
             }
-            SpotifyWebLayer(vm, visible = spotifyLogin && !spotifyLoggedIn)
+            if (vkLogin.open && vkLogin.step == VkLoginStep.VKID) {
+                VkIdOverlay(
+                    error = vkLogin.error,
+                    onClose = { vm.closeVkLogin() },
+                    onDone = { vm.completeVkId(it) },
+                    modifier = Modifier.zIndex(3f),
+                )
+            }
+            yandexPrompt?.let { prompt ->
+                YandexLoginDialog(prompt, onCancel = { vm.cancelYandexLogin() }, modifier = Modifier.zIndex(3f))
+            }
         }
     }
 }
 
 @SuppressLint("SetJavaScriptEnabled")
 @Composable
-private fun SpotifyWebLayer(vm: MssViewModel, visible: Boolean) {
-    Box(Modifier.fillMaxWidth().then(if (visible) Modifier.fillMaxSize() else Modifier.height(0.dp))) {
+private fun SpotifyWebLayer(vm: MssViewModel, visible: Boolean, modifier: Modifier = Modifier) {
+    Box(modifier.fillMaxSize()) {
         AndroidView(
             factory = { ctx ->
-                WebView(ctx).also { view ->
+                android.widget.FrameLayout(ctx).also { frame ->
+                    frame.setBackgroundColor(android.graphics.Color.WHITE)
+                    val view = WebView(ctx)
+                    frame.addView(
+                        view,
+                        android.widget.FrameLayout.LayoutParams(
+                            android.view.ViewGroup.LayoutParams.MATCH_PARENT,
+                            android.view.ViewGroup.LayoutParams.MATCH_PARENT,
+                        ),
+                    )
                     view.importantForAccessibility = View.IMPORTANT_FOR_ACCESSIBILITY_NO
                     vm.spotifyWeb.attach(view)
+                    view.webChromeClient = LoginPopupChrome(frame, view.settings.userAgentString)
                 }
             },
-            update = { view ->
+            update = { frame ->
+                val view = frame.getChildAt(0) as? WebView ?: return@AndroidView
                 view.importantForAccessibility = View.IMPORTANT_FOR_ACCESSIBILITY_NO
-                view.visibility = if (visible) View.VISIBLE else View.INVISIBLE
+                view.visibility = View.VISIBLE
                 view.isFocusable = visible
                 view.isFocusableInTouchMode = visible
+                if (visible) {
+                    view.requestLayout()
+                    view.invalidate()
+                }
             },
             modifier = Modifier.fillMaxSize(),
         )
         if (visible) {
             Button(
                 onClick = { vm.spotifyWeb.hideLogin() },
-                modifier = Modifier.align(Alignment.TopEnd).padding(16.dp),
+                modifier = Modifier.align(Alignment.TopEnd).statusBarsPadding().padding(16.dp),
             ) { Text("Скрыть Spotify") }
         }
     }
@@ -159,13 +203,9 @@ private fun MainShell(vm: MssViewModel, nav: NavHostController) {
     val route = back?.destination?.route ?: Routes.HOME
     val error by vm.error.collectAsState()
     val notice by vm.notice.collectAsState()
-    val prompt by vm.yandexPrompt.collectAsState()
     val onboarded by vm.onboarded.collectAsState()
     val lobby by vm.lobbyState.collectAsState()
 
-    prompt?.let { p ->
-        YandexLoginDialog(p, onCancel = { vm.cancelYandexLogin() })
-    }
     if (!onboarded) {
         AlertDialog(
             onDismissRequest = { vm.setOnboarded() },

@@ -21,7 +21,7 @@ class SettingsViewModel @Inject constructor(
     val player: PlayerController,
 ) : ViewModel() {
     val playbackSettings = repo.playbackSettings.stateIn(viewModelScope, SharingStarted.Eagerly, PlaybackSettings())
-    val apiBase = repo.apiBase.stateIn(viewModelScope, SharingStarted.Eagerly, "http://10.0.2.2:3001")
+    val apiBase = repo.apiBase.stateIn(viewModelScope, SharingStarted.Eagerly, "")
     private val _apk = MutableStateFlow<SiteDownloads?>(null)
     val apk: StateFlow<SiteDownloads?> = _apk
 

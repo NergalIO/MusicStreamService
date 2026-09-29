@@ -117,7 +117,7 @@ function WavePageShell({
   return (
     <div
       ref={audioRef}
-      className="wave-audio-root relative -mx-8 -mt-6 min-h-[calc(100dvh-68px)] px-8 pb-16 pt-6"
+      className="wave-audio-root relative min-h-[max(100%,calc(100dvh-4.25rem))] w-full px-8 pb-16 pt-6"
     >
       <div className="pointer-events-none absolute inset-0 overflow-hidden" aria-hidden>
         <WaveBackdropVisual palette={boosted} coverUrl={coverUrl} colorKey={colorKey} />

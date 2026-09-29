@@ -79,6 +79,8 @@ class SpotifyWebSession @Inject constructor() {
         view.settings.builtInZoomControls = false
         view.settings.displayZoomControls = false
         view.settings.userAgentString = DESKTOP_UA
+        view.setBackgroundColor(android.graphics.Color.WHITE)
+        view.setLayerType(WebView.LAYER_TYPE_HARDWARE, null)
         view.isHorizontalScrollBarEnabled = false
         view.addJavascriptInterface(JsBridge(), "MssSpotify")
         view.webViewClient = object : WebViewClient() {

@@ -25,6 +25,7 @@ import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.collectAsState
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
@@ -57,9 +58,10 @@ fun LoginScreen(vm: AuthViewModel = hiltViewModel()) {
     val url by vm.apiBase.collectAsState()
     val busy by vm.busy.collectAsState()
     var api by remember { mutableStateOf(url) }
+    LaunchedEffect(url) { api = url }
     val window = rememberMssWindow()
     val submit = {
-        if (!busy) vm.login(email, password, register)
+        if (!busy) vm.login(email, password, register, api)
     }
 
     Column(
@@ -139,7 +141,7 @@ fun LoginScreen(vm: AuthViewModel = hiltViewModel()) {
                         modifier = Modifier.fillMaxWidth(),
                         keyboardOptions = KeyboardOptions(imeAction = ImeAction.Next),
                     )
-                    TextButton({ vm.setApiBase(api) }) { Text("Сохранить URL") }
+                    TextButton({ vm.setApiBase(api.trim()) }) { Text("Сохранить URL") }
                     MssField(
                         email, { email = it },
                         placeholder = "Email",
@@ -155,11 +157,8 @@ fun LoginScreen(vm: AuthViewModel = hiltViewModel()) {
                         keyboardActions = KeyboardActions(onDone = { submit() }),
                     )
                     Button(
-                        onClick = {
-                            vm.setApiBase(api)
-                            submit()
-                        },
-                        enabled = !busy && email.isNotBlank() && password.isNotBlank(),
+                        onClick = { submit() },
+                        enabled = !busy && email.isNotBlank() && password.isNotBlank() && api.isNotBlank(),
                         modifier = Modifier.fillMaxWidth(),
                     ) {
                         Text(if (register) "Регистрация" else "Войти")

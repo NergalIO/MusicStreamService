@@ -27,6 +27,7 @@ dependencies {
     implementation(libs.media3.exoplayer.hls)
     api(libs.media3.session)
     implementation(libs.media3.ui)
+    implementation("com.google.guava:guava:33.3.1-android")
     implementation(libs.kotlinx.coroutines.android)
     implementation(libs.hilt.android)
     ksp(libs.hilt.compiler)

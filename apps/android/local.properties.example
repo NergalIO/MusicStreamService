@@ -1,4 +1,6 @@
 sdk.dir=C\:\\Users\\YourUser\\AppData\\Local\\Android\\Sdk
+# Публичный URL API (как API_PUBLIC_URL на сервере). В CI release подставляется из секретов.
+API_PUBLIC_URL=
 SPOTIFY_CLIENT_ID=
 YANDEX_CLIENT_ID=
 YANDEX_CLIENT_SECRET=

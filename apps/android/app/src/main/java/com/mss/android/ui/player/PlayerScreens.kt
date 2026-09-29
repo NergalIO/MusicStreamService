@@ -73,7 +73,10 @@ import coil.compose.AsyncImage
 import com.mss.android.ui.MssViewModel
 import com.mss.android.ui.components.Cover
 import com.mss.android.ui.components.TrackRow
+import com.mss.android.ui.theme.AccentPanelBackground
+import com.mss.android.ui.theme.COVER_ACCENT
 import com.mss.android.ui.theme.MssTheme
+import com.mss.android.ui.theme.rememberCoverHsl
 import com.mss.core.model.LobbyDto
 import com.mss.core.model.SourceId
 import com.mss.core.model.UnifiedTrack
@@ -100,48 +103,57 @@ fun LobbyBar(lobby: LobbyDto?, onOpen: () -> Unit) {
 
 @Composable
 fun MiniPlayer(vm: MssViewModel, onOpen: () -> Unit) {
+    val settings by vm.playbackSettings.collectAsState()
     val state by vm.playerState.collectAsState()
     val track = state.current ?: return
     val scheme = MaterialTheme.colorScheme
     val progress = if (state.durationMs == 0L) 0f else (state.positionMs / state.durationMs.toFloat()).coerceIn(0f, 1f)
-    Column(Modifier.fillMaxWidth().background(scheme.surfaceContainer)) {
-        Box(Modifier.fillMaxWidth().height(2.dp).background(scheme.onSurface.copy(alpha = 0.12f))) {
-            Box(Modifier.fillMaxHeight().fillMaxWidth(progress).background(scheme.onSurface))
-        }
-        Row(
-            Modifier.fillMaxWidth().height(64.dp).clickable(onClick = onOpen).padding(horizontal = 12.dp),
-            verticalAlignment = Alignment.CenterVertically,
-            horizontalArrangement = Arrangement.spacedBy(12.dp),
-        ) {
-            Cover(track.coverUrl, Modifier.size(44.dp))
-            Column(Modifier.weight(1f)) {
-                Text(track.title, maxLines = 1, overflow = TextOverflow.Ellipsis, style = MaterialTheme.typography.bodyLarge)
-                Text(track.artist, style = MaterialTheme.typography.bodySmall, color = scheme.onSurfaceVariant, maxLines = 1, overflow = TextOverflow.Ellipsis)
+    AccentPanelBackground(accent = settings.accent, coverUrl = track.coverUrl, modifier = Modifier.fillMaxWidth()) {
+        Column(Modifier.fillMaxWidth()) {
+            Box(Modifier.fillMaxWidth().height(2.dp).background(scheme.onSurface.copy(alpha = 0.10f))) {
+                Box(Modifier.fillMaxHeight().fillMaxWidth(progress).background(scheme.primary))
             }
-            IconButton({ vm.player.prev() }) {
-                Icon(Icons.Default.SkipPrevious, "Предыдущий", tint = scheme.onSurface.copy(alpha = 0.85f))
-            }
-            Box(
-                Modifier
-                    .size(48.dp)
-                    .semantics { contentDescription = if (state.playing) "Пауза" else "Играть" }
-                    .clickable { vm.player.toggle() },
-                contentAlignment = Alignment.Center,
+            Row(
+                Modifier.fillMaxWidth().height(64.dp).clickable(onClick = onOpen).padding(horizontal = 12.dp),
+                verticalAlignment = Alignment.CenterVertically,
+                horizontalArrangement = Arrangement.spacedBy(12.dp),
             ) {
-                Box(
-                    Modifier.size(36.dp).clip(CircleShape).background(scheme.onSurface),
-                    contentAlignment = Alignment.Center,
-                ) {
-                    Icon(
-                        if (state.playing) Icons.Default.Pause else Icons.Default.PlayArrow,
-                        contentDescription = null,
-                        tint = scheme.surfaceContainer,
-                        modifier = Modifier.size(20.dp),
+                Cover(track.coverUrl, Modifier.size(44.dp))
+                Column(Modifier.weight(1f)) {
+                    Text(track.title, maxLines = 1, overflow = TextOverflow.Ellipsis, style = MaterialTheme.typography.bodyLarge)
+                    Text(
+                        track.artist,
+                        style = MaterialTheme.typography.bodySmall,
+                        color = scheme.onSurfaceVariant,
+                        maxLines = 1,
+                        overflow = TextOverflow.Ellipsis,
                     )
                 }
-            }
-            IconButton({ vm.player.next() }) {
-                Icon(Icons.Default.SkipNext, "Следующий", tint = scheme.onSurface.copy(alpha = 0.85f))
+                IconButton({ vm.player.prev() }) {
+                    Icon(Icons.Default.SkipPrevious, "Предыдущий", tint = scheme.onSurface.copy(alpha = 0.85f))
+                }
+                Box(
+                    Modifier
+                        .size(48.dp)
+                        .semantics { contentDescription = if (state.playing) "Пауза" else "Играть" }
+                        .clickable { vm.player.toggle() },
+                    contentAlignment = Alignment.Center,
+                ) {
+                    Box(
+                        Modifier.size(36.dp).clip(CircleShape).background(scheme.primary),
+                        contentAlignment = Alignment.Center,
+                    ) {
+                        Icon(
+                            if (state.playing) Icons.Default.Pause else Icons.Default.PlayArrow,
+                            contentDescription = null,
+                            tint = scheme.onPrimary,
+                            modifier = Modifier.size(20.dp),
+                        )
+                    }
+                }
+                IconButton({ vm.player.next() }) {
+                    Icon(Icons.Default.SkipNext, "Следующий", tint = scheme.onSurface.copy(alpha = 0.85f))
+                }
             }
         }
     }
@@ -150,7 +162,9 @@ fun MiniPlayer(vm: MssViewModel, onOpen: () -> Unit) {
 @Composable
 fun NowPlayingScreen(vm: MssViewModel, onBack: () -> Unit = {}, onArtist: (String) -> Unit = {}) {
     val settings by vm.playbackSettings.collectAsState()
-    MssTheme(accent = settings.accent, dark = true) {
+    val state by vm.playerState.collectAsState()
+    val cover = if (settings.accent == COVER_ACCENT) rememberCoverHsl(state.current?.coverUrl) else null
+    MssTheme(accent = settings.accent, dark = true, cover = cover) {
         NowPlayingBody(vm, onBack, onArtist)
     }
 }

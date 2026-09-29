@@ -393,24 +393,63 @@ class YandexConnector @Inject constructor(
 
     override suspend fun resolvePlaybackUrl(track: UnifiedTrack): String {
         val trackId = trackBaseId(track.id)
+        if (trackId.all { it.isDigit() }) {
+            val fromFile = runCatching { resolveViaFileInfo(trackId) }.getOrNull()
+            if (fromFile != null && !fromFile.second) return fromFile.first
+            val fromDownload = runCatching { resolveViaDownloadInfo(trackId) }.getOrNull()
+            if (fromDownload != null && !fromDownload.second) return fromDownload.first
+            return fromFile?.first ?: fromDownload?.first ?: throw ConnectorException("Яндекс не выдал файл трека")
+        }
+        return resolveViaDownloadInfo(trackId).first
+    }
+
+    private suspend fun resolveViaFileInfo(trackId: String): Pair<String, Boolean> {
+        val quality = "lossless"
+        val codecs = listOf("mp3", "aac")
+        val transport = "raw"
+        val ts = System.currentTimeMillis() / 1000
+        val sign = YandexCrypto.signFileInfo(ts, trackId, quality, codecs.joinToString(""), transport)
+        val data = apiGet<JsonObject>(
+            "/get-file-info?ts=$ts&trackId=${encode(trackId)}&quality=$quality" +
+                "&codecs=${encode(codecs.joinToString(","))}&transports=$transport&sign=${encode(sign)}",
+            client = WEB_CLIENT,
+        )
+        val info = data["downloadInfo"]?.jsonObject ?: throw ConnectorException("get-file-info: пустой ответ")
+        val url = info.optStr("url")
+            ?: info["urls"]?.jsonArray?.firstOrNull()?.jsonPrimitive?.contentOrNull
+            ?: throw ConnectorException("get-file-info: пустой ответ")
+        val preview = info.optStr("quality")?.contains("preview") == true
+        return url to preview
+    }
+
+    private suspend fun resolveViaDownloadInfo(trackId: String): Pair<String, Boolean> {
         val ts = System.currentTimeMillis() / 1000
         val sign = YandexCrypto.signTrack(trackId, ts)
         val items = apiGet<JsonArray>(
             "/tracks/${encode(trackId)}/download-info?can_use_streaming=true&ts=$ts&sign=${encode(sign)}",
         )
-        val entry = items.firstOrNull {
-            val codec = it.jsonObject["codec"]?.jsonPrimitive?.content
-            (codec == "mp3" || codec == "aac") && it.jsonObject["downloadInfoUrl"] != null
-        } ?: throw ConnectorException("download-info: нет формата")
-        val infoUrl = entry.jsonObject["downloadInfoUrl"]!!.jsonPrimitive.content
+        val entry = items.map { it.jsonObject }
+            .filter {
+                val codec = it.optStr("codec")
+                val container = it.optStr("container")
+                (codec == "mp3" || codec == "aac") && it["downloadInfoUrl"] != null && container != "hls"
+            }
+            .sortedWith(
+                compareBy<JsonObject> { it.optStr("preview") == "true" }
+                    .thenByDescending { it.optStr("bitrateInKbps")?.toIntOrNull() ?: 0 },
+            )
+            .firstOrNull()
+            ?: throw ConnectorException("download-info: нет формата")
+        val infoUrl = entry["downloadInfoUrl"]!!.jsonPrimitive.content
         val xml = http.get(infoUrl).bodyAsText()
         fun tag(name: String) = Regex("<$name>([^<]+)</$name>").find(xml)?.groupValues?.get(1)
         val host = tag("host") ?: throw ConnectorException("Yandex storage")
         val path = tag("path") ?: throw ConnectorException("Yandex storage")
         val s = tag("s") ?: throw ConnectorException("Yandex storage")
         val linkTs = tag("ts") ?: throw ConnectorException("Yandex storage")
-        val signPath = YandexCrypto.signDirectLink(path.substringAfter("/get/"), s, linkTs)
-        return "https://$host/get/$path/$signPath/$linkTs/mp3"
+        val codec = entry.optStr("codec") ?: "mp3"
+        val preview = entry.optStr("preview") == "true"
+        return YandexCrypto.directUrl(host, codec, path, s, linkTs) to preview
     }
 
     suspend fun tracksByIds(ids: List<String>): List<UnifiedTrack> {
@@ -493,11 +532,11 @@ class YandexConnector @Inject constructor(
         if (!res.status.isSuccess()) failApi(res.status.value, text)
     }
 
-    private suspend inline fun <reified T> apiGet(path: String): T = queueMutex.withLock {
+    private suspend inline fun <reified T> apiGet(path: String, client: String = ANDROID_CLIENT): T = queueMutex.withLock {
         val token = accessToken()
         val res = http.get("https://api.music.yandex.net$path") {
             header(HttpHeaders.Authorization, "OAuth $token")
-            header("X-Yandex-Music-Client", "YandexMusicAndroid/24023621")
+            header("X-Yandex-Music-Client", client)
             header("Accept-Language", "ru")
         }
         unwrap(res.bodyAsText(), res.status.isSuccess(), res.status.value)
@@ -575,6 +614,8 @@ class YandexConnector @Inject constructor(
         const val MUSIC_CLIENT_ID = "23cabbbdc6cd418abb4b39c32c41195d"
         const val MUSIC_CLIENT_SECRET = "53bc75238f0c4d08a118e51fe9203300"
         const val MUSIC_SCOPE = "login:info music:content music:read music:write"
+        private const val ANDROID_CLIENT = "YandexMusicAndroid/24023621"
+        private const val WEB_CLIENT = "YandexMusicWebNext/1.0.0"
     }
 }
 
@@ -607,6 +648,8 @@ private data class YandexTokenResponse(
 private data class AccountCache(val uid: String)
 
 private fun encode(v: String) = java.net.URLEncoder.encode(v, Charsets.UTF_8)
+
+private fun JsonObject.optStr(key: String): String? = this[key]?.jsonPrimitive?.contentOrNull
 
 private fun randomHex(bytes: Int): String {
     val buf = ByteArray(bytes)

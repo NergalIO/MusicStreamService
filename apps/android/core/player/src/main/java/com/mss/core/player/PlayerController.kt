@@ -4,11 +4,14 @@ import android.content.Context
 import android.content.Intent
 import android.media.audiofx.Equalizer
 import android.os.Build
+import android.os.Looper
 import androidx.media3.common.AudioAttributes
 import androidx.media3.common.C
 import androidx.media3.common.MediaItem
 import androidx.media3.common.MediaMetadata
+import androidx.media3.common.PlaybackException
 import androidx.media3.common.Player
+import androidx.media3.common.util.UnstableApi
 import androidx.media3.exoplayer.ExoPlayer
 import com.mss.core.connectors.SpotifyWebSession
 import com.mss.core.connectors.YandexConnector
@@ -48,6 +51,7 @@ data class PlayerUiState(
 
 enum class RepeatMode { OFF, ALL, ONE }
 
+@OptIn(UnstableApi::class)
 @Singleton
 class PlayerController @Inject constructor(
     @ApplicationContext private val context: Context,
@@ -65,6 +69,16 @@ class PlayerController @Inject constructor(
     private var eqB: Equalizer? = null
     private val _state = MutableStateFlow(PlayerUiState())
     val state: StateFlow<PlayerUiState> = _state.asStateFlow()
+    private val nowPlaying = NowPlayingPlayer(
+        Looper.getMainLooper(),
+        object : NowPlayingPlayer.Controls {
+            override fun play() = resume()
+            override fun pause() = this@PlayerController.pause()
+            override fun next() = this@PlayerController.next()
+            override fun previous() = skipPrevious()
+            override fun seekTo(positionMs: Long) = this@PlayerController.seekTo(positionMs)
+        },
+    )
 
     private var queue: MutableList<UnifiedTrack> = mutableListOf()
     private var index = 0
@@ -75,32 +89,46 @@ class PlayerController @Inject constructor(
     private var waveBatchId: String? = null
     private var loadingWave = false
     private var preloadedNext = false
+    private var playGen = 0
+    private var consecutiveErrors = 0
+    private var awaitingStart = false
 
     init {
         listOf(exoA, exoB).forEach { player ->
             player.addListener(object : Player.Listener {
                 override fun onIsPlayingChanged(isPlaying: Boolean) {
-                    if (player === active && !usingSpotify) {
-                        _state.value = _state.value.copy(playing = isPlaying)
+                    if (player !== active || usingSpotify) return
+                    if (isPlaying) {
+                        consecutiveErrors = 0
+                        awaitingStart = false
+                        _state.value = _state.value.copy(playing = true)
+                    } else if (!awaitingStart && (!player.playWhenReady || player.playbackState == Player.STATE_IDLE || player.playbackState == Player.STATE_ENDED)) {
+                        _state.value = _state.value.copy(playing = false)
                     }
                 }
 
                 override fun onPlaybackStateChanged(playbackState: Int) {
-                    if (player === active && playbackState == Player.STATE_ENDED) onEnded()
+                    if (player !== active) return
+                    if (playbackState == Player.STATE_ENDED) onEnded()
+                }
+
+                override fun onPlayerError(error: PlaybackException) {
+                    if (player !== active || usingSpotify) return
+                    failPlayback(playGen)
                 }
             })
         }
         scope.launch {
             preferences.playbackSettings.collect { applySettings(it) }
         }
+        scope.launch {
+            state.collect { nowPlaying.publish(it) }
+        }
     }
-
-    /** Кто сейчас играет: MediaSession переподключается только если меняется экземпляр. */
-    var onActivePlayerChanged: ((ExoPlayer) -> Unit)? = null
 
     fun exoPlayer(): ExoPlayer = active
 
-    fun sessionPlayer(): Player = active
+    fun sessionPlayer(): Player = nowPlaying
 
     fun audioSessionId(): Int = active.audioSessionId
 
@@ -157,6 +185,8 @@ class PlayerController @Inject constructor(
     }
 
     fun pause() {
+        awaitingStart = false
+        playGen += 1
         if (usingSpotify) spotifyWeb.pause() else active.pause()
         _state.value = _state.value.copy(playing = false)
     }
@@ -185,10 +215,15 @@ class PlayerController @Inject constructor(
 
     fun prev() {
         if (queue.isEmpty()) return
-        if (active.currentPosition > 3000) {
-            if (usingSpotify) spotifyWeb.seek(0) else active.seekTo(0)
+        if (_state.value.positionMs > 3000) {
+            seekTo(0)
             return
         }
+        skipPrevious()
+    }
+
+    private fun skipPrevious() {
+        if (queue.isEmpty()) return
         index = if (index > 0) index - 1 else 0
         playCurrent(crossfade = false)
     }
@@ -245,7 +280,7 @@ class PlayerController @Inject constructor(
         } else {
             pos = active.currentPosition
             dur = active.duration.coerceAtLeast(0)
-            playing = active.isPlaying
+            playing = awaitingStart || active.isPlaying || (active.playWhenReady && active.playbackState == Player.STATE_BUFFERING)
         }
         playedMs = maxOf(playedMs, pos)
         _state.value = _state.value.copy(positionMs = pos, durationMs = dur, playing = playing)
@@ -271,37 +306,72 @@ class PlayerController @Inject constructor(
     }
 
     private fun pauseSleep() {
+        awaitingStart = false
+        playGen += 1
         if (usingSpotify) spotifyWeb.pause() else active.pause()
         _state.value = _state.value.copy(sleepEndsAt = null, sleepUntilTrackEnd = false, playing = false)
     }
 
     private fun playCurrent(crossfade: Boolean) {
         val track = queue.getOrNull(index) ?: return
-        _state.value = _state.value.copy(current = track, queue = queue.toList(), index = index)
+        val gen = ++playGen
+        awaitingStart = true
+        _state.value = _state.value.copy(current = track, queue = queue.toList(), index = index, playing = true)
         playedMs = 0
         preloadedNext = false
         ensurePlaybackService()
         startTicker()
+        if (!track.playable) {
+            failPlayback(gen)
+            return
+        }
         scope.launch {
-            runCatching {
-                when (val resolved = resolver.resolve(track)) {
-                    is ResolvedPlayback.SpotifyWeb -> {
-                        usingSpotify = true
-                        active.pause()
-                        spotifyWeb.play(resolved.trackId)
-                        _state.value = _state.value.copy(playing = true)
-                    }
-                    is ResolvedPlayback.Url -> {
-                        usingSpotify = false
-                        val settings = preferences.loadPlaybackSettings()
-                        val fade = crossfade && settings.crossfadeMs > 0 && track.source != SourceId.SPOTIFY
-                        playUrl(track, resolved.url, fade, settings.crossfadeMs)
-                    }
+            val resolved = runCatching { resolver.resolve(track) }.getOrElse {
+                failPlayback(gen)
+                return@launch
+            }
+            if (gen != playGen) return@launch
+            when (resolved) {
+                is ResolvedPlayback.SpotifyWeb -> {
+                    usingSpotify = true
+                    active.pause()
+                    spotifyWeb.play(resolved.trackId)
+                    awaitingStart = false
+                    _state.value = _state.value.copy(playing = true)
+                }
+                is ResolvedPlayback.Url -> {
+                    usingSpotify = false
+                    val settings = preferences.loadPlaybackSettings()
+                    val fade = crossfade && settings.crossfadeMs > 0 && track.source != SourceId.SPOTIFY
+                    playUrl(track, resolved.url, fade, settings.crossfadeMs)
+                    awaitingStart = false
+                    notifyWaveStarted(track)
                 }
             }
         }
         preloadNext()
         maybeLoadWave()
+    }
+
+    /** Битый файл волны не должен оставлять плеер на паузе: берём следующий трек. */
+    private fun failPlayback(gen: Int) {
+        if (gen != playGen) return
+        consecutiveErrors += 1
+        if (consecutiveErrors < 5 && index + 1 < queue.size) {
+            index += 1
+            playCurrent(crossfade = false)
+            return
+        }
+        awaitingStart = false
+        active.pause()
+        _state.value = _state.value.copy(playing = false)
+    }
+
+    private fun notifyWaveStarted(track: UnifiedTrack) {
+        if (!_state.value.radio || track.source != SourceId.YANDEX) return
+        val sid = waveSessionId ?: return
+        val bid = waveBatchId ?: return
+        scope.launch { runCatching { yandex.waveFeedback(sid, bid, "trackStarted", track) } }
     }
 
     private fun playUrl(track: UnifiedTrack, url: String, fade: Boolean, fadeMs: Int) {
@@ -344,7 +414,6 @@ class PlayerController @Inject constructor(
             active.pause()
             active = incoming
             active.volume = _state.value.volume
-            onActivePlayerChanged?.invoke(active)
         }
         _state.value = _state.value.copy(current = track, playing = true)
     }

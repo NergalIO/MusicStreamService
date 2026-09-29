@@ -92,7 +92,8 @@ class MssPreferences @Inject constructor(
     fun connectorVault(): TokenVault = secureVault
 
     companion object {
-        const val DEFAULT_API_BASE = "http://10.0.2.2:3001"
+        /** Пусто в локальной debug-сборке; в CI release — из `API_PUBLIC_URL`. */
+        val DEFAULT_API_BASE: String = BuildConfig.BAKED_API_PUBLIC_URL
         private val KEY_API_BASE = stringPreferencesKey("api_base")
         private val KEY_SESSION = stringPreferencesKey("session")
         private val KEY_DEVICE_ID = stringPreferencesKey("device_id")

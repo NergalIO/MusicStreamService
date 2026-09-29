@@ -7,8 +7,6 @@ import android.app.PendingIntent
 import android.content.Intent
 import android.content.pm.ServiceInfo
 import android.os.Build
-import androidx.media3.common.ForwardingPlayer
-import androidx.media3.common.Player
 import androidx.media3.common.util.UnstableApi
 import androidx.media3.session.DefaultMediaNotificationProvider
 import androidx.media3.session.MediaSession
@@ -37,21 +35,15 @@ class PlaybackService : MediaSessionService {
                 .setChannelId(channelId)
                 .setChannelName(R.string.playback_channel)
                 .build()
-                .also { it.setSmallIcon(android.R.drawable.ic_media_play) },
+                .also { it.setSmallIcon(R.drawable.ic_stat_playback) },
         )
-        bindSession(controller.sessionPlayer())
-        controller.onActivePlayerChanged = { bindSession(it) }
-        ensureForeground()
-    }
-
-    private fun bindSession(player: Player) {
-        val next = MediaSession.Builder(this, QueuePlayer(player, controller))
+        val session = MediaSession.Builder(this, controller.sessionPlayer())
             .setId("mss-playback")
             .setSessionActivity(launchIntent())
             .build()
-        val previous = mediaSession
-        mediaSession = next
-        previous?.release()
+        mediaSession = session
+        addSession(session)
+        ensureForeground()
     }
 
     private fun launchIntent(): PendingIntent {
@@ -70,7 +62,7 @@ class PlaybackService : MediaSessionService {
         val notification = Notification.Builder(this, "mss_playback")
             .setContentTitle("MusicStreamService")
             .setContentText(getString(R.string.playback_channel))
-            .setSmallIcon(android.R.drawable.ic_media_play)
+            .setSmallIcon(R.drawable.ic_stat_playback)
             .setContentIntent(launchIntent())
             .setOngoing(true)
             .build()
@@ -84,56 +76,15 @@ class PlaybackService : MediaSessionService {
     override fun onGetSession(controllerInfo: MediaSession.ControllerInfo): MediaSession? = mediaSession
 
     override fun onDestroy() {
-        controller.onActivePlayerChanged = null
-        mediaSession?.release()
+        mediaSession?.let { session ->
+            removeSession(session)
+            session.release()
+        }
         mediaSession = null
         super.onDestroy()
     }
 
     companion object {
         const val FOREGROUND_ID = 1001
-    }
-}
-
-@UnstableApi
-private class QueuePlayer(
-    player: Player,
-    private val host: PlayerController,
-) : ForwardingPlayer(player) {
-    override fun seekToNext() {
-        host.next()
-    }
-
-    override fun seekToPrevious() {
-        host.prev()
-    }
-
-    override fun seekToNextMediaItem() {
-        host.next()
-    }
-
-    override fun seekToPreviousMediaItem() {
-        host.prev()
-    }
-
-    override fun hasNextMediaItem(): Boolean = host.state.value.queue.size > 1
-
-    override fun hasPreviousMediaItem(): Boolean = host.state.value.index > 0 || (host.state.value.current != null)
-
-    override fun isCommandAvailable(command: Int): Boolean {
-        return command == Player.COMMAND_SEEK_TO_NEXT ||
-            command == Player.COMMAND_SEEK_TO_PREVIOUS ||
-            command == Player.COMMAND_SEEK_TO_NEXT_MEDIA_ITEM ||
-            command == Player.COMMAND_SEEK_TO_PREVIOUS_MEDIA_ITEM ||
-            super.isCommandAvailable(command)
-    }
-
-    override fun getAvailableCommands(): Player.Commands {
-        return super.getAvailableCommands().buildUpon()
-            .add(Player.COMMAND_SEEK_TO_NEXT)
-            .add(Player.COMMAND_SEEK_TO_PREVIOUS)
-            .add(Player.COMMAND_SEEK_TO_NEXT_MEDIA_ITEM)
-            .add(Player.COMMAND_SEEK_TO_PREVIOUS_MEDIA_ITEM)
-            .build()
     }
 }

@@ -24,6 +24,9 @@ import com.mss.android.ui.components.MssChip
 import com.mss.android.ui.components.MssField
 import com.mss.android.ui.components.SettingsRow
 import com.mss.android.ui.components.SettingsSection
+import com.mss.android.ui.theme.ACCENTS
+import com.mss.android.ui.theme.AccentSwatches
+import com.mss.android.ui.theme.COVER_ACCENT
 import com.mss.android.ui.theme.ChipFlow
 import com.mss.core.model.Quality
 
@@ -85,14 +88,15 @@ fun SettingsScreen(vm: SettingsViewModel = hiltViewModel()) {
                 Switch(settings.visualizer, { vm.savePlayback(settings.copy(visualizer = it)) })
             }
         }
-        SettingsSection("Внешний вид") {
-            SettingsRow("Акцент") {
-                ChipFlow {
-                    listOf("violet" to "Фиолет", "teal" to "Бирюза", "amber" to "Янтарь").forEach { (id, label) ->
-                        MssChip(settings.accent == id, label) { vm.savePlayback(settings.copy(accent = id)) }
-                    }
-                }
-            }
+        SettingsSection(
+            "Внешний вид",
+            if (settings.accent == COVER_ACCENT) {
+                "Подстраивается под обложку играющего трека"
+            } else {
+                ACCENTS.find { it.id == settings.accent }?.label ?: "Фиолетовый"
+            },
+        ) {
+            AccentSwatches(settings.accent, onSelect = { id -> vm.savePlayback(settings.copy(accent = id)) })
         }
         SettingsSection("Таймер сна") {
             SettingsRow("Остановить воспроизведение") {

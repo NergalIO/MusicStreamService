@@ -4,7 +4,6 @@ import android.annotation.SuppressLint
 import android.content.ClipData
 import android.content.ClipboardManager
 import android.content.Context
-import android.webkit.CookieManager
 import android.webkit.WebView
 import android.webkit.WebViewClient
 import androidx.compose.foundation.background
@@ -33,31 +32,27 @@ import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import androidx.compose.ui.viewinterop.AndroidView
-import androidx.compose.ui.window.Dialog
-import androidx.compose.ui.window.DialogProperties
+import com.mss.android.ui.LoginPopupChrome
+import com.mss.android.ui.prepareLogin
 import com.mss.core.model.DeviceCodePrompt
 
 @SuppressLint("SetJavaScriptEnabled")
 @Composable
-fun YandexLoginDialog(prompt: DeviceCodePrompt, onCancel: () -> Unit) {
+fun YandexLoginDialog(prompt: DeviceCodePrompt, onCancel: () -> Unit, modifier: Modifier = Modifier) {
     var copied by remember(prompt.userCode) { mutableStateOf(false) }
     val ctx = LocalContext.current
     val copy = {
         copyCode(ctx, prompt.userCode)
         copied = true
     }
-    Dialog(
-        onDismissRequest = onCancel,
-        properties = DialogProperties(usePlatformDefaultWidth = false, decorFitsSystemWindows = false),
+    Column(
+        modifier
+            .fillMaxSize()
+            .background(MaterialTheme.colorScheme.background)
+            .statusBarsPadding()
+            .imePadding()
+            .navigationBarsPadding(),
     ) {
-        Column(
-            Modifier
-                .fillMaxSize()
-                .background(MaterialTheme.colorScheme.background)
-                .statusBarsPadding()
-                .imePadding()
-                .navigationBarsPadding(),
-        ) {
             Row(
                 Modifier.fillMaxWidth().padding(horizontal = 8.dp, vertical = 4.dp),
                 verticalAlignment = Alignment.CenterVertically,
@@ -89,40 +84,40 @@ fun YandexLoginDialog(prompt: DeviceCodePrompt, onCancel: () -> Unit) {
             TextButton(onClick = copy, modifier = Modifier.padding(horizontal = 8.dp)) {
                 Text(if (copied) "Код скопирован" else "Скопировать код")
             }
-            AndroidView(
-                factory = { viewCtx ->
-                    WebView(viewCtx).apply {
-                        CookieManager.getInstance().setAcceptCookie(true)
-                        CookieManager.getInstance().setAcceptThirdPartyCookies(this, true)
-                        settings.javaScriptEnabled = true
-                        settings.domStorageEnabled = true
-                        settings.useWideViewPort = true
-                        settings.loadWithOverviewMode = false
-                        settings.setSupportZoom(false)
-                        settings.builtInZoomControls = false
-                        settings.displayZoomControls = false
-                        settings.userAgentString = MOBILE_UA
-                        isVerticalScrollBarEnabled = true
-                        isHorizontalScrollBarEnabled = false
-                        isFocusable = true
-                        isFocusableInTouchMode = true
-                        webViewClient = object : WebViewClient() {
-                            override fun onPageFinished(view: WebView?, url: String?) {
-                                val target = view ?: return
-                                val script = fillDeviceCode(prompt.userCode)
-                                target.evaluateJavascript(script, null)
-                                target.postDelayed({ target.evaluateJavascript(script, null) }, 700)
-                                target.postDelayed({ target.evaluateJavascript(script, null) }, 1800)
-                            }
+        AndroidView(
+            factory = { viewCtx ->
+                android.widget.FrameLayout(viewCtx).apply {
+                    setBackgroundColor(android.graphics.Color.WHITE)
+                    val web = WebView(viewCtx)
+                    addView(
+                        web,
+                        android.widget.FrameLayout.LayoutParams(
+                            android.view.ViewGroup.LayoutParams.MATCH_PARENT,
+                            android.view.ViewGroup.LayoutParams.MATCH_PARENT,
+                        ),
+                    )
+                    web.prepareLogin(MOBILE_UA)
+                    web.webViewClient = object : WebViewClient() {
+                        override fun onPageFinished(view: WebView?, url: String?) {
+                            val target = view ?: return
+                            val script = fillDeviceCode(prompt.userCode)
+                            target.evaluateJavascript(script, null)
+                            target.postDelayed({ target.evaluateJavascript(script, null) }, 700)
+                            target.postDelayed({ target.evaluateJavascript(script, null) }, 1800)
                         }
-                        loadUrl("https://ya.ru/device")
-                        requestFocus()
                     }
-                },
-                modifier = Modifier.fillMaxWidth().weight(1f),
-                onRelease = { it.destroy() },
-            )
-        }
+                    web.webChromeClient = LoginPopupChrome(this, MOBILE_UA)
+                    web.loadUrl("https://ya.ru/device")
+                    web.requestFocus()
+                }
+            },
+            modifier = Modifier.fillMaxWidth().weight(1f),
+            onRelease = { frame ->
+                for (i in frame.childCount - 1 downTo 0) {
+                    (frame.getChildAt(i) as? WebView)?.destroy()
+                }
+            },
+        )
     }
 }
 

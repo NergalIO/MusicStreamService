@@ -11,7 +11,7 @@ Kotlin + Jetpack Compose клиент с MSS API, коннекторами Yande
 ## Настройка
 
 1. Скопируйте `local.properties.example` → `local.properties` и укажите `sdk.dir`.
-2. Опционально: `SPOTIFY_CLIENT_ID`, `YANDEX_CLIENT_ID` / `YANDEX_CLIENT_SECRET`, `OFFLINE_HKDF_SECRET` (должен совпадать с API).
+2. Опционально: `API_PUBLIC_URL` (базовый URL API на экране входа), `SPOTIFY_CLIENT_ID`, `YANDEX_CLIENT_ID` / `YANDEX_CLIENT_SECRET`, `OFFLINE_HKDF_SECRET` (должен совпадать с API). В GitHub Actions release APK собирается с `secrets.API_PUBLIC_URL` (тот же секрет, что для Windows).
 3. Сборка: `gradlew.bat :app:assembleDebug` (из `apps/android`).
 4. Deep links: `mss://track|album|playlist|artist|wave|search|library|stats|settings|lobby|similar`, Spotify OAuth `mss://spotify/callback`.
 

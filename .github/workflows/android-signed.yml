@@ -49,12 +49,14 @@ jobs:
       - name: Write Gradle local.properties
         working-directory: apps/android
         env:
+          API_PUBLIC_URL: ${{ secrets.API_PUBLIC_URL }}
           SPOTIFY_CLIENT_ID: ${{ secrets.SPOTIFY_CLIENT_ID }}
           YANDEX_CLIENT_ID: ${{ secrets.YANDEX_CLIENT_ID }}
           YANDEX_CLIENT_SECRET: ${{ secrets.YANDEX_CLIENT_SECRET }}
           OFFLINE_HKDF_SECRET: ${{ secrets.OFFLINE_HKDF_SECRET }}
         run: |
           {
+            echo "API_PUBLIC_URL=${API_PUBLIC_URL}"
             echo "SPOTIFY_CLIENT_ID=${SPOTIFY_CLIENT_ID}"
             echo "YANDEX_CLIENT_ID=${YANDEX_CLIENT_ID}"
             echo "YANDEX_CLIENT_SECRET=${YANDEX_CLIENT_SECRET}"
@@ -85,15 +87,21 @@ jobs:
           MSS_KEY_ALIAS: ${{ secrets.MSS_KEY_ALIAS }}
           MSS_KEY_PASSWORD: ${{ secrets.MSS_KEY_PASSWORD }}
           MSS_REQUIRE_RELEASE_SIGNING: ${{ inputs.require_signing && '1' || '0' }}
+          API_PUBLIC_URL: ${{ secrets.API_PUBLIC_URL }}
           SPOTIFY_CLIENT_ID: ${{ secrets.SPOTIFY_CLIENT_ID }}
           YANDEX_CLIENT_ID: ${{ secrets.YANDEX_CLIENT_ID }}
           YANDEX_CLIENT_SECRET: ${{ secrets.YANDEX_CLIENT_SECRET }}
         run: |
           chmod +x gradlew
           ARGS=(:app:assembleRelease --no-daemon)
+          [ -n "$API_PUBLIC_URL" ] && ARGS+=("-PAPI_PUBLIC_URL=$API_PUBLIC_URL")
           [ -n "$SPOTIFY_CLIENT_ID" ] && ARGS+=("-PSPOTIFY_CLIENT_ID=$SPOTIFY_CLIENT_ID")
           [ -n "$YANDEX_CLIENT_ID" ] && ARGS+=("-PYANDEX_CLIENT_ID=$YANDEX_CLIENT_ID")
           [ -n "$YANDEX_CLIENT_SECRET" ] && ARGS+=("-PYANDEX_CLIENT_SECRET=$YANDEX_CLIENT_SECRET")
+          if [ "${{ inputs.require_signing }}" = "true" ] && [ -z "$API_PUBLIC_URL" ]; then
+            echo "Secret API_PUBLIC_URL is required for signed release APK (same as desktop installer)."
+            exit 1
+          fi
           ./gradlew "${ARGS[@]}"
 
       - name: Verify APK signature

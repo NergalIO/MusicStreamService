@@ -14,12 +14,10 @@ class YandexCryptoTest {
     }
 
     @Test
-    fun directLinkSignUsesSalt() {
-        val hex = YandexCrypto.signDirectLink("file.mp3", "secret", "99")
-        assertEquals(64, hex.length)
-        assertEquals(
-            YandexCrypto.hmacHex(YandexCrypto.DIRECT_LINK_SALT, YandexCrypto.DIRECT_LINK_SALT + "file.mp3secret99"),
-            hex,
-        )
+    fun directUrlUsesMd5LikeDesktop() {
+        val url = YandexCrypto.directUrl("storage.example", "mp3", "/foo/bar.mp3", "secret", "99")
+        val hash = YandexCrypto.md5Hex(YandexCrypto.DIRECT_LINK_SALT + "foo/bar.mp3" + "secret")
+        assertEquals("https://storage.example/get-mp3/$hash/99/foo/bar.mp3", url)
+        assertEquals(32, hash.length)
     }
 }

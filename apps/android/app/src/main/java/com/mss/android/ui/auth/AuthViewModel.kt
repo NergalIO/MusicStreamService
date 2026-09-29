@@ -17,7 +17,7 @@ class AuthViewModel @Inject constructor(
     private val repo: MssRepository,
 ) : ViewModel() {
     val session = repo.session.stateIn(viewModelScope, SharingStarted.Eagerly, null)
-    val apiBase = repo.apiBase.stateIn(viewModelScope, SharingStarted.Eagerly, "http://10.0.2.2:3001")
+    val apiBase = repo.apiBase.stateIn(viewModelScope, SharingStarted.Eagerly, "")
 
     private val _error = MutableStateFlow<String?>(null)
     val error: StateFlow<String?> = _error
@@ -32,11 +32,17 @@ class AuthViewModel @Inject constructor(
 
     fun enterUiPreview() = viewModelScope.launch { repo.enterUiPreview() }
 
-    fun login(email: String, password: String, register: Boolean) {
+    fun login(email: String, password: String, register: Boolean, apiBaseUrl: String) {
         viewModelScope.launch {
             _error.value = null
+            val base = apiBaseUrl.trim().trimEnd('/')
+            if (!base.startsWith("http://") && !base.startsWith("https://")) {
+                _error.value = "Укажите адрес сервера, например https://example.com/MusicStreamService"
+                return@launch
+            }
             _busy.value = true
             runCatching {
+                repo.setApiBase(base)
                 if (register) {
                     val pending = repo.register(email, password)
                     _authVerify.value = true
