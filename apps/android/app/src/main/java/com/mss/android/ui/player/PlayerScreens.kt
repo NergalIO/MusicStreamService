@@ -6,6 +6,7 @@ import android.os.Looper
 import android.os.SystemClock
 import androidx.compose.animation.Crossfade
 import androidx.compose.animation.core.FastOutSlowInEasing
+import androidx.compose.animation.core.animate
 import androidx.compose.animation.core.animateFloatAsState
 import androidx.compose.animation.core.tween
 import androidx.compose.foundation.gestures.animateScrollBy
@@ -34,9 +35,14 @@ import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.filled.KeyboardArrowRight
+import androidx.compose.material.icons.filled.Album
+import androidx.compose.material.icons.filled.Download
 import androidx.compose.material.icons.filled.Favorite
 import androidx.compose.material.icons.filled.FavoriteBorder
 import androidx.compose.material.icons.filled.KeyboardArrowDown
+import androidx.compose.material.icons.filled.MoreVert
+import androidx.compose.material.icons.filled.Person
+import androidx.compose.material.icons.filled.Send
 import androidx.compose.material.icons.filled.Pause
 import androidx.compose.material.icons.filled.PlayArrow
 import androidx.compose.material.icons.filled.Radio
@@ -47,6 +53,8 @@ import androidx.compose.material.icons.filled.SkipNext
 import androidx.compose.material.icons.filled.SkipPrevious
 import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.CircularProgressIndicator
+import androidx.compose.material3.DropdownMenu
+import androidx.compose.material3.DropdownMenuItem
 import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
 import androidx.compose.material3.LinearProgressIndicator
@@ -66,6 +74,7 @@ import androidx.compose.runtime.mutableLongStateOf
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.rememberCoroutineScope
+import androidx.compose.runtime.rememberUpdatedState
 import androidx.compose.runtime.snapshotFlow
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
@@ -80,6 +89,8 @@ import androidx.compose.ui.input.nestedscroll.NestedScrollSource
 import androidx.compose.ui.input.nestedscroll.nestedScroll
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.platform.LocalContext
+import androidx.compose.ui.platform.LocalDensity
+import androidx.compose.ui.unit.Velocity
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.draw.clipToBounds
 import androidx.compose.ui.graphics.Brush
@@ -237,10 +248,18 @@ private fun SpotifyDeviceDialog(vm: MssViewModel, onClose: () -> Unit) {
 }
 
 @Composable
-fun MiniPlayer(vm: MssViewModel, onOpen: () -> Unit, below: @Composable () -> Unit = {}) {
+fun MiniPlayer(
+    vm: MssViewModel,
+    onOpen: () -> Unit,
+    onArtist: (UnifiedTrack) -> Unit = {},
+    onAlbum: (UnifiedTrack) -> Unit = {},
+    onSimilar: (UnifiedTrack) -> Unit = {},
+    below: @Composable () -> Unit = {},
+) {
     val settings by vm.playbackSettings.collectAsState()
     val state by vm.playerState.collectAsState()
     val liked by vm.likedIds.collectAsState()
+    val canSuggest by vm.canSuggestToLobby.collectAsState()
     val scheme = MaterialTheme.colorScheme
     val track = state.current
     if (track == null) {
@@ -278,6 +297,7 @@ fun MiniPlayer(vm: MssViewModel, onOpen: () -> Unit, below: @Composable () -> Un
                         tint = if (isLiked) scheme.primary else scheme.onSurface.copy(alpha = 0.85f),
                     )
                 }
+                MiniPlayerMenu(vm, track, canSuggest, onArtist, onAlbum, onSimilar)
                 IconButton({ vm.player.prev() }) {
                     Icon(Icons.Default.SkipPrevious, "Предыдущий", tint = scheme.onSurface.copy(alpha = 0.85f))
                 }
@@ -305,6 +325,66 @@ fun MiniPlayer(vm: MssViewModel, onOpen: () -> Unit, below: @Composable () -> Un
                 }
             }
             below()
+        }
+    }
+}
+
+@Composable
+private fun MiniPlayerMenu(
+    vm: MssViewModel,
+    track: UnifiedTrack,
+    canSuggest: Boolean,
+    onArtist: (UnifiedTrack) -> Unit,
+    onAlbum: (UnifiedTrack) -> Unit,
+    onSimilar: (UnifiedTrack) -> Unit,
+) {
+    var open by remember { mutableStateOf(false) }
+    Box {
+        IconButton({ open = true }, Modifier.size(36.dp)) {
+            Icon(Icons.Default.MoreVert, "Ещё", tint = MaterialTheme.colorScheme.onSurface.copy(alpha = 0.85f))
+        }
+        DropdownMenu(open, { open = false }) {
+            DropdownMenuItem(
+                text = { Text("Скачать") },
+                onClick = { open = false; vm.download(track) },
+                leadingIcon = { Icon(Icons.Default.Download, null) },
+            )
+            DropdownMenuItem(
+                text = { Text("Похожие") },
+                onClick = { open = false; onSimilar(track) },
+            )
+            when (track.source) {
+                SourceId.YANDEX -> DropdownMenuItem(
+                    text = { Text("Волна по треку") },
+                    onClick = { open = false; vm.startWave(WaveSettings(seed = "track:${track.id}", seedTitle = track.title)) },
+                    leadingIcon = { Icon(Icons.Default.Radio, null) },
+                )
+                SourceId.SPOTIFY -> DropdownMenuItem(
+                    text = { Text("Радио по треку") },
+                    onClick = { open = false; vm.startSpotifyRadio(track) },
+                    leadingIcon = { Icon(Icons.Default.Radio, null) },
+                )
+                else -> {}
+            }
+            DropdownMenuItem(
+                text = { Text("К исполнителю") },
+                onClick = { open = false; onArtist(track) },
+                leadingIcon = { Icon(Icons.Default.Person, null) },
+            )
+            if (!track.album.isNullOrBlank() || !track.albumId.isNullOrBlank()) {
+                DropdownMenuItem(
+                    text = { Text("К альбому") },
+                    onClick = { open = false; onAlbum(track) },
+                    leadingIcon = { Icon(Icons.Default.Album, null) },
+                )
+            }
+            if (canSuggest) {
+                DropdownMenuItem(
+                    text = { Text("Предложить в лобби") },
+                    onClick = { open = false; vm.suggestToLobby(track) },
+                    leadingIcon = { Icon(Icons.Default.Send, null) },
+                )
+            }
         }
     }
 }
@@ -338,7 +418,41 @@ private fun NowPlayingBody(
     val similar by vm.similar.collectAsState()
     val canSuggest by vm.canSuggestToLobby.collectAsState()
     val track = state.current
-    Box(Modifier.fillMaxSize()) {
+    var dragY by remember { mutableFloatStateOf(0f) }
+    val dismissThreshold = with(LocalDensity.current) { 120.dp.toPx() }
+    val currentOnBack by rememberUpdatedState(onBack)
+    val dismissScroll = remember {
+        object : NestedScrollConnection {
+            override fun onPreScroll(available: Offset, source: NestedScrollSource): Offset {
+                if (available.y >= 0f || dragY <= 0f) return Offset.Zero
+                val used = maxOf(available.y, -dragY)
+                dragY += used
+                return Offset(0f, used)
+            }
+
+            override fun onPostScroll(consumed: Offset, available: Offset, source: NestedScrollSource): Offset {
+                if (source != NestedScrollSource.UserInput || available.y <= 0f) return Offset.Zero
+                dragY += available.y
+                return Offset(0f, available.y)
+            }
+
+            override suspend fun onPreFling(available: Velocity): Velocity {
+                if (dragY <= 0f) return Velocity.Zero
+                if (dragY > dismissThreshold || available.y > 1800f) {
+                    currentOnBack()
+                } else {
+                    animate(dragY, 0f) { value, _ -> dragY = value }
+                }
+                return available
+            }
+        }
+    }
+    Box(
+        Modifier
+            .fillMaxSize()
+            .nestedScroll(dismissScroll)
+            .graphicsLayer { translationY = dragY },
+    ) {
         PlayerBackdrop(track?.coverUrl)
         if (track == null) {
             Column(

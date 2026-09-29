@@ -328,7 +328,7 @@ private fun pageSnap(raw: String?): PageSnap {
 }
 
 private fun vkConnectScript(appId: String): String = """
-  fetch('https://login.vk.com/?act=connect_internal', {
+  fetch((/(^|\.)vk\.ru$/.test(location.hostname) ? 'https://login.vk.ru' : 'https://login.vk.com') + '/?act=connect_internal', {
     method: 'POST',
     credentials: 'include',
     headers: { 'Content-Type': 'application/x-www-form-urlencoded' },
@@ -359,6 +359,11 @@ private fun vkWebCookies(): String {
         "https://vk.com/",
         "https://m.vk.com/",
         "https://oauth.vk.com/",
+        "https://login.vk.ru/",
+        "https://id.vk.ru/",
+        "https://vk.ru/",
+        "https://m.vk.ru/",
+        "https://oauth.vk.ru/",
     ).mapNotNull { cookies.getCookie(it)?.takeIf(String::isNotBlank) }
         .joinToString("; ")
 }

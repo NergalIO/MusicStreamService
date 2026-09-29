@@ -14,7 +14,6 @@ import com.mss.core.connectors.VkConnector
 import com.mss.core.connectors.YandexConnector
 import com.mss.core.downloads.DownloadScheduler
 import com.mss.core.lobby.LobbyClient
-import com.mss.core.model.CatalogArtistDto
 import com.mss.core.model.DeviceCodePrompt
 import com.mss.core.model.FeedBlock
 import com.mss.core.model.HomeShelves
@@ -38,6 +37,7 @@ import com.mss.core.player.PlayerController
 import dagger.hilt.android.lifecycle.HiltViewModel
 import javax.inject.Inject
 import kotlinx.coroutines.async
+import kotlinx.coroutines.awaitAll
 import kotlinx.coroutines.coroutineScope
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.SharingStarted
@@ -96,8 +96,6 @@ class MssViewModel @Inject constructor(
     val shelves: StateFlow<HomeShelves?> = _shelves
     private val _feed = MutableStateFlow<List<FeedBlock>>(emptyList())
     val feed: StateFlow<List<FeedBlock>> = _feed
-    private val _artists = MutableStateFlow<List<CatalogArtistDto>>(emptyList())
-    val artists: StateFlow<List<CatalogArtistDto>> = _artists
     private val _lyrics = MutableStateFlow(LyricsUi())
     val lyrics: StateFlow<LyricsUi> = _lyrics
     private val _yandexPrompt = MutableStateFlow<DeviceCodePrompt?>(null)
@@ -124,6 +122,13 @@ class MssViewModel @Inject constructor(
     val sources: StateFlow<SourceStatuses> = _sources
     private val _vkLogin = MutableStateFlow(VkLoginUi())
     val vkLogin: StateFlow<VkLoginUi> = _vkLogin
+    private val _library = MutableStateFlow(LibraryUi())
+    val library: StateFlow<LibraryUi> = _library
+    private val _libraryTab = MutableStateFlow(LibraryTab.TRACKS)
+    val libraryTab: StateFlow<LibraryTab> = _libraryTab
+    private val _librarySource = MutableStateFlow<SourceId?>(null)
+    val librarySource: StateFlow<SourceId?> = _librarySource
+    val playHistory = repo.prefs.playHistory.stateIn(viewModelScope, SharingStarted.Eagerly, emptyList())
     @Volatile private var vkCookieProbe = false
 
     init {
@@ -140,6 +145,11 @@ class MssViewModel @Inject constructor(
             ) { id, ids -> id != null && id in ids }
                 .distinctUntilChanged()
                 .collect { player.setLiked(it) }
+        }
+        viewModelScope.launch {
+            player.state.map { it.current }
+                .distinctUntilChanged { a, b -> a?.source == b?.source && a?.id == b?.id }
+                .collect { track -> if (track != null) runCatching { repo.prefs.addPlayHistory(track) } }
         }
     }
 
@@ -243,24 +253,69 @@ class MssViewModel @Inject constructor(
         }
     }
 
-    fun loadLikes() = launch {
-        _tracks.value = repo.mssLikes()
-        loadLikesIds()
-    }
-
     fun loadPlaylists() = launch { _playlists.value = repo.mssPlaylists() }
 
-    fun loadArtists() = launch { _artists.value = repo.artists() }
+    fun setLibraryTab(tab: LibraryTab) { _libraryTab.value = tab }
 
-    fun loadUploads() = launch { _tracks.value = repo.uploads() }
+    fun setLibrarySource(source: SourceId?) { _librarySource.value = source }
 
-    fun loadOffline() {
-        _tracks.value = downloads.records.value.map { it.track }
+    fun loadLibrary(force: Boolean = false) {
+        val current = _library.value
+        if (current.loading || (current.loaded && !force)) return
+        _library.value = current.copy(loading = true)
+        viewModelScope.launch {
+            val connected = LIBRARY_SOURCES.filter { sourceConnected(it) }
+            val (perSource, uploads) = coroutineScope {
+                val uploads = async { runCatching { repo.uploads() } }
+                val perSource = connected.map { src ->
+                    async { Triple(src, runCatching { libraryLikes(src) }, runCatching { libraryPlaylists(src) }) }
+                }.awaitAll()
+                perSource to uploads.await()
+            }
+            val errors = perSource.mapNotNull { (src, likes, playlists) ->
+                (likes.exceptionOrNull() ?: playlists.exceptionOrNull())?.let { src to (it.message ?: "Не удалось загрузить") }
+            }.toMap()
+            val likes = perSource.associate { (src, result, _) -> src to result.getOrDefault(emptyList()) }
+            _library.value = LibraryUi(
+                likes = likes,
+                playlists = perSource.associate { (src, _, result) -> src to result.getOrDefault(emptyList()) },
+                uploads = uploads.getOrDefault(_library.value.uploads),
+                connected = connected,
+                errors = errors,
+                loading = false,
+                loaded = true,
+            )
+            val ids = likes.values.flatten().map { it.id }.toSet()
+            _likedIds.value = if (errors.isEmpty()) ids else _likedIds.value + ids
+        }
     }
 
-    fun loadHistory() {
-        _tracks.value = player.state.value.queue
+    private suspend fun libraryLikes(source: SourceId): List<UnifiedTrack> = when (source) {
+        SourceId.LOCAL -> repo.mssLikes()
+        SourceId.YANDEX -> yandex.savedTracks(LIBRARY_LIKES_LIMIT)
+        SourceId.SPOTIFY -> spotify.savedTracks(LIBRARY_LIKES_LIMIT)
+        SourceId.VK -> vk.savedTracks(LIBRARY_LIKES_LIMIT)
     }
+
+    private suspend fun libraryPlaylists(source: SourceId): List<UnifiedPlaylist> = when (source) {
+        SourceId.LOCAL -> repo.mssPlaylists()
+        SourceId.YANDEX -> yandex.listPlaylists()
+        SourceId.SPOTIFY -> spotify.listPlaylists()
+        SourceId.VK -> vk.listPlaylists()
+    }
+
+    private fun reloadLibraryUploads() = launch {
+        val uploads = repo.uploads()
+        _library.value = _library.value.copy(uploads = uploads)
+    }
+
+    private fun reloadLibraryMssPlaylists() = launch {
+        val playlists = repo.mssPlaylists()
+        _playlists.value = playlists
+        _library.value = _library.value.copy(playlists = _library.value.playlists + (SourceId.LOCAL to playlists))
+    }
+
+    fun clearPlayHistory() = launch { repo.prefs.clearPlayHistory() }
 
     fun openMssPlaylist(id: String) = launch {
         val (meta, tracks) = repo.playlistDetail(id)
@@ -558,13 +613,13 @@ class MssViewModel @Inject constructor(
     }
 
     fun createPlaylist(name: String) = launch {
-        repo.createPlaylist(name)
-        loadPlaylists()
+        repo.createPlaylist(name.trim())
+        reloadLibraryMssPlaylists()
     }
 
     fun deletePlaylist(id: String) = launch {
         repo.deletePlaylist(id)
-        loadPlaylists()
+        reloadLibraryMssPlaylists()
     }
 
     fun activatePromo(code: String) = launch {
@@ -585,6 +640,12 @@ class MssViewModel @Inject constructor(
         val liked = track.id in _likedIds.value
         repo.toggleLike(track, !liked)
         _likedIds.value = if (liked) _likedIds.value - track.id else _likedIds.value + track.id
+        val lib = _library.value
+        if (lib.loaded) {
+            val list = lib.likes[track.source].orEmpty().filterNot { it.id == track.id }
+            val next = if (liked) list else listOf(track) + list
+            _library.value = lib.copy(likes = lib.likes + (track.source to next))
+        }
         if (track.source == SourceId.YANDEX && liked) yandex.dislike(track)
     }
 
@@ -803,7 +864,7 @@ class MssViewModel @Inject constructor(
 
     fun registerUpload(uri: Uri, title: String, artist: String) = launch {
         repo.registerLocalFile(uri, title, artist)
-        loadUploads()
+        reloadLibraryUploads()
     }
 
     fun createLobby(title: String, pub: Boolean) = launch { lobby.create(title, pub) }
@@ -848,6 +909,7 @@ class MssViewModel @Inject constructor(
 
     fun applyDeepLink(url: String) {
         val action = parseMssLink(url) ?: return
+        action.libraryTab?.let { _libraryTab.value = it }
         viewModelScope.launch {
             runCatching {
                 if (action.playSource != null && action.playId != null) {
@@ -907,6 +969,29 @@ class MssViewModel @Inject constructor(
     fun clearError() { _error.value = null }
     fun clearNotice() { _notice.value = null }
 }
+
+private val LIBRARY_SOURCES = listOf(SourceId.LOCAL, SourceId.YANDEX, SourceId.SPOTIFY, SourceId.VK)
+private const val LIBRARY_LIKES_LIMIT = 300
+
+enum class LibraryTab(val title: String) {
+    TRACKS("Треки"),
+    PLAYLISTS("Плейлисты"),
+    ARTISTS("Исполнители"),
+    ALBUMS("Альбомы"),
+    DOWNLOADS("Скачанное"),
+    UPLOADS("Мои файлы"),
+    HISTORY("История"),
+}
+
+data class LibraryUi(
+    val likes: Map<SourceId, List<UnifiedTrack>> = emptyMap(),
+    val playlists: Map<SourceId, List<UnifiedPlaylist>> = emptyMap(),
+    val uploads: List<UnifiedTrack> = emptyList(),
+    val connected: List<SourceId> = listOf(SourceId.LOCAL),
+    val errors: Map<SourceId, String> = emptyMap(),
+    val loading: Boolean = false,
+    val loaded: Boolean = false,
+)
 
 data class LyricsUi(
     val key: String = "",

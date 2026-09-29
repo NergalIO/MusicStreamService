@@ -1,5 +1,6 @@
 package com.mss.android.ui.navigation
 
+import com.mss.android.ui.LibraryTab
 import com.mss.core.model.UnifiedArtist
 import com.mss.core.model.UnifiedTrack
 
@@ -8,6 +9,7 @@ data class DeepLinkAction(
     val playSource: String? = null,
     val playId: String? = null,
     val inviteCode: String? = null,
+    val libraryTab: LibraryTab? = null,
 )
 
 fun parseMssLink(url: String): DeepLinkAction? {
@@ -42,14 +44,19 @@ fun parseMssLink(url: String): DeepLinkAction? {
         }
         "wave" -> DeepLinkAction(Routes.WAVE)
         "search" -> DeepLinkAction(Routes.SEARCH)
-        "library" -> when (parts.firstOrNull()) {
-            "uploads" -> DeepLinkAction(Routes.UPLOADS)
-            "downloads" -> DeepLinkAction(Routes.DOWNLOADS)
-            "offline" -> DeepLinkAction(Routes.OFFLINE)
-            "likes" -> DeepLinkAction(Routes.LIKES)
-            "playlists" -> DeepLinkAction(Routes.PLAYLISTS)
-            else -> DeepLinkAction(Routes.LIBRARY)
-        }
+        "library" -> DeepLinkAction(
+            Routes.LIBRARY,
+            libraryTab = when (parts.firstOrNull()) {
+                "uploads" -> LibraryTab.UPLOADS
+                "downloads", "offline" -> LibraryTab.DOWNLOADS
+                "likes" -> LibraryTab.TRACKS
+                "playlists" -> LibraryTab.PLAYLISTS
+                "artists" -> LibraryTab.ARTISTS
+                "albums" -> LibraryTab.ALBUMS
+                "history" -> LibraryTab.HISTORY
+                else -> null
+            },
+        )
         "stats" -> DeepLinkAction(if (parts.firstOrNull() == "wrapped") Routes.WRAPPED else Routes.STATS)
         "settings" -> DeepLinkAction(Routes.SETTINGS)
         "lobby" -> DeepLinkAction(Routes.LOBBY, inviteCode = parts.firstOrNull() ?: codeFromQuery)
@@ -72,13 +79,6 @@ object Routes {
     const val LOBBY = "lobby"
     const val LOBBY_ROOM = "lobby/{id}"
     const val NOW_PLAYING = "nowplaying"
-    const val LIKES = "library/likes"
-    const val PLAYLISTS = "library/playlists"
-    const val ARTISTS = "library/artists"
-    const val UPLOADS = "library/uploads"
-    const val DOWNLOADS = "library/downloads"
-    const val OFFLINE = "library/offline"
-    const val HISTORY = "library/history"
     const val MSS_PLAYLIST = "playlists/{id}"
     const val EXT_PLAYLIST = "playlist/{source}/{id}"
     const val ALBUM = "album/{source}/{id}"

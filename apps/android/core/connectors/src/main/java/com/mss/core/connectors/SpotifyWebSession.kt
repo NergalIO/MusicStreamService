@@ -76,6 +76,7 @@ class SpotifyWebSession @Inject constructor(
     private val httpWaiters = ConcurrentHashMap<String, CompletableDeferred<Pair<Int, String>>>()
     private val deviceWaiters = ConcurrentHashMap<String, CompletableDeferred<String>>()
     private val playWaiters = ConcurrentHashMap<String, CompletableDeferred<Unit>>()
+    private val imageWaiters = ConcurrentHashMap<String, CompletableDeferred<String>>()
     private val pageMutex = Mutex()
     /** id этого веб-плеера в Spotify Connect (из адресов connect-state), нужен для быстрого старта. */
     private val deviceIds = java.util.Collections.synchronizedSet(linkedSetOf<String>())
@@ -278,6 +279,44 @@ class SpotifyWebSession @Inject constructor(
         } finally {
             httpWaiters.remove(id)
         }
+    }
+
+    /**
+     * Скачивает картинку через страницу веб-плеера: у Chromium своя сеть, и она доходит до CDN Spotify там,
+     * где прямой запрос приложения не проходит. i.scdn.co отдаёт CORS `*`, так что fetch читает тело.
+     */
+    suspend fun fetchImage(url: String): ByteArray? {
+        if (webView == null || _visibleForLogin.value || !url.startsWith("https://")) return null
+        val id = httpIds.incrementAndGet().toString()
+        val done = CompletableDeferred<String>()
+        imageWaiters[id] = done
+        eval(
+            """
+            (async () => {
+              try {
+                const res = await fetch(${JSONObject.quote(url)}, { credentials: 'omit' });
+                if (!res.ok) throw new Error(String(res.status));
+                const blob = await res.blob();
+                const data = await new Promise((resolve, reject) => {
+                  const reader = new FileReader();
+                  reader.onload = () => resolve(String(reader.result).split(',')[1] || '');
+                  reader.onerror = () => reject(reader.error);
+                  reader.readAsDataURL(blob);
+                });
+                MssSpotify.onImage('$id', data);
+              } catch (e) {
+                MssSpotify.onImage('$id', '');
+              }
+            })();
+            """.trimIndent(),
+        )
+        val base64 = try {
+            withTimeoutOrNull(15_000) { done.await() }
+        } finally {
+            imageWaiters.remove(id)
+        } ?: return null
+        if (base64.isEmpty()) return null
+        return runCatching { android.util.Base64.decode(base64, android.util.Base64.DEFAULT) }.getOrNull()
     }
 
     fun logout() {
@@ -621,6 +660,11 @@ class SpotifyWebSession @Inject constructor(
             val waiter = playWaiters.remove(id) ?: return
             if (error.isNotBlank()) waiter.completeExceptionally(ConnectorException(error))
             else waiter.complete(Unit)
+        }
+
+        @JavascriptInterface
+        fun onImage(id: String, base64: String) {
+            imageWaiters.remove(id)?.complete(base64)
         }
 
         @JavascriptInterface

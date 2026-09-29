@@ -68,11 +68,7 @@ import com.mss.android.ui.catalog.AlbumScreen
 import com.mss.android.ui.catalog.ArtistScreen
 import com.mss.android.ui.catalog.CatalogList
 import com.mss.android.ui.home.HomeScreen
-import com.mss.android.ui.library.ArtistHub
-import com.mss.android.ui.library.DownloadsScreen
-import com.mss.android.ui.library.LibraryHub
-import com.mss.android.ui.library.PlaylistHub
-import com.mss.android.ui.library.UploadsScreen
+import com.mss.android.ui.library.LibraryScreen
 import com.mss.android.ui.lobby.LobbyScreen
 import com.mss.android.ui.more.MoreHub
 import com.mss.android.ui.more.VkIdOverlay
@@ -80,6 +76,7 @@ import com.mss.android.ui.more.YandexLoginDialog
 import com.mss.android.ui.navigation.Routes
 import com.mss.android.ui.navigation.parseMssLink
 import com.mss.android.ui.player.LobbyBar
+import com.mss.android.ui.components.SpotifyCoverHealth
 import com.mss.android.ui.player.MiniPlayer
 import com.mss.android.ui.player.NowPlayingScreen
 import com.mss.android.ui.search.SearchScreen
@@ -217,6 +214,7 @@ private fun MainShell(vm: MssViewModel, nav: NavHostController) {
     val route = back?.destination?.route ?: Routes.HOME
     val error by vm.error.collectAsState()
     val notice by vm.notice.collectAsState()
+    val coversBlocked by SpotifyCoverHealth.unreachable.collectAsState()
     val onboarded by vm.onboarded.collectAsState()
     val lobby by vm.lobbyState.collectAsState()
 
@@ -230,7 +228,7 @@ private fun MainShell(vm: MssViewModel, nav: NavHostController) {
     }
 
     val hideTop = route in setOf(Routes.HOME, Routes.SEARCH, Routes.LIBRARY, Routes.MORE, Routes.NOW_PLAYING) ||
-        route.startsWith("source/") || route.startsWith("artist/")
+        route.startsWith("source/")
     ApplySystemBars(darkBackground = isSystemInDarkTheme() || route == Routes.NOW_PLAYING)
     val scheme = MaterialTheme.colorScheme
 
@@ -260,7 +258,13 @@ private fun MainShell(vm: MssViewModel, nav: NavHostController) {
             if (route != Routes.NOW_PLAYING) {
                 Column {
                     LobbyBar(lobby) { nav.navigate(Routes.LOBBY) }
-                    MiniPlayer(vm, onOpen = { nav.navigate(Routes.NOW_PLAYING) }) {
+                    MiniPlayer(
+                        vm,
+                        onOpen = { nav.navigate(Routes.NOW_PLAYING) },
+                        onArtist = { track -> nav.navigate(Routes.artist(track)) },
+                        onAlbum = { track -> nav.navigate(Routes.album(track)) },
+                        onSimilar = { track -> nav.navigate(Routes.similar(track.source.name.lowercase(), track.id)) },
+                    ) {
                         NavigationBar(containerColor = Color.Transparent, tonalElevation = 0.dp) {
                             listOf(
                                 Triple(Routes.HOME, "Главная", Icons.Default.Home),
@@ -268,11 +272,13 @@ private fun MainShell(vm: MssViewModel, nav: NavHostController) {
                                 Triple(Routes.LIBRARY, "Медиатека", Icons.Default.LibraryMusic),
                                 Triple(Routes.MORE, "Ещё", Icons.Default.MoreHoriz),
                             ).forEach { (r, label, icon) ->
-                                val selected = route == r || (r == Routes.LIBRARY && route.startsWith("library"))
+                                val selected = route == r || (r != Routes.HOME && back != null && nav.inStack(r))
                                 NavigationBarItem(
                                     selected = selected,
                                     onClick = {
-                                        if (r == Routes.HOME) {
+                                        if (r != Routes.HOME && nav.inStack(r)) {
+                                            nav.popBackStack(r, inclusive = false)
+                                        } else if (r == Routes.HOME) {
                                             val startId = nav.graph.findStartDestination().id
                                             if (!nav.popBackStack(startId, inclusive = false)) {
                                                 nav.navigate(Routes.HOME) { launchSingleTop = true }
@@ -349,18 +355,32 @@ private fun MainShell(vm: MssViewModel, nav: NavHostController) {
                     }
                 }
             }
+            if (coversBlocked && error == null && notice == null) {
+                Row(
+                    Modifier
+                        .padding(horizontal = 16.dp, vertical = 8.dp)
+                        .fillMaxWidth()
+                        .clip(RoundedCornerShape(12.dp))
+                        .background(MaterialTheme.colorScheme.tertiary.copy(alpha = 0.14f))
+                        .padding(start = 12.dp),
+                    verticalAlignment = Alignment.CenterVertically,
+                ) {
+                    Text(
+                        "Обложки Spotify не загружаются: ваша сеть блокирует Spotify. Включите VPN.",
+                        color = MaterialTheme.colorScheme.onSurface,
+                        modifier = Modifier.weight(1f),
+                        style = MaterialTheme.typography.bodySmall,
+                        maxLines = 3,
+                        overflow = TextOverflow.Ellipsis,
+                    )
+                    IconButton({ SpotifyCoverHealth.dismiss() }) { Icon(Icons.Default.Close, "Закрыть") }
+                }
+            }
             NavHost(nav, Routes.HOME, Modifier.weight(1f).fillMaxWidth()) {
                 composable(Routes.HOME) { HomeScreen(vm, nav) }
                 composable(Routes.SEARCH) { SearchScreen(vm, nav) }
-                composable(Routes.LIBRARY) { LibraryHub(nav) }
+                composable(Routes.LIBRARY) { LibraryScreen(vm, nav) }
                 composable(Routes.MORE) { MoreHub(vm, nav) }
-                composable(Routes.LIKES) { LaunchedEffect(Unit) { vm.loadLikes() }; CatalogList(vm, nav) }
-                composable(Routes.PLAYLISTS) { LaunchedEffect(Unit) { vm.loadPlaylists() }; PlaylistHub(vm, nav) }
-                composable(Routes.ARTISTS) { LaunchedEffect(Unit) { vm.loadArtists() }; ArtistHub(vm, nav) }
-                composable(Routes.UPLOADS) { UploadsScreen(vm, nav) }
-                composable(Routes.DOWNLOADS) { DownloadsScreen(vm) }
-                composable(Routes.OFFLINE) { LaunchedEffect(Unit) { vm.loadOffline() }; CatalogList(vm, nav) }
-                composable(Routes.HISTORY) { LaunchedEffect(Unit) { vm.loadHistory() }; CatalogList(vm, nav) }
                 composable(Routes.STATS) { StatsScreen(vm) }
                 composable(Routes.WRAPPED) { StatsScreen(vm, initialPeriod = "year") }
                 composable(Routes.SUBSCRIPTION) { SubScreen(vm) }
@@ -432,6 +452,9 @@ private fun MainShell(vm: MssViewModel, nav: NavHostController) {
     }
 }
 
+private fun NavHostController.inStack(route: String): Boolean =
+    runCatching { getBackStackEntry(route) }.isSuccess
+
 @Composable
 private fun ApplySystemBars(darkBackground: Boolean) {
     val view = LocalView.current
@@ -455,5 +478,7 @@ private fun titleFor(route: String) = when {
     route == Routes.NOW_PLAYING -> "Сейчас играет"
     route == Routes.LOBBY -> "Лобби"
     route == Routes.WAVE -> "Волна"
+    route.startsWith("artist/") -> "Исполнитель"
+    route.startsWith("album/") -> "Альбом"
     else -> "MusicStreamService"
 }

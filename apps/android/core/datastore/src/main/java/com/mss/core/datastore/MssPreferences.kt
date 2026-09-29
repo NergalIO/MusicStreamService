@@ -7,6 +7,7 @@ import androidx.datastore.preferences.core.stringPreferencesKey
 import androidx.datastore.preferences.preferencesDataStore
 import com.mss.core.model.AuthSession
 import com.mss.core.model.PlaybackSettings
+import com.mss.core.model.UnifiedTrack
 import dagger.hilt.android.qualifiers.ApplicationContext
 import javax.inject.Inject
 import javax.inject.Singleton
@@ -41,6 +42,23 @@ class MssPreferences @Inject constructor(
 
     val searchHistory: Flow<List<String>> = context.dataStore.data.map { prefs ->
         prefs[KEY_SEARCH]?.let { json.decodeFromString<List<String>>(it) } ?: emptyList()
+    }
+
+    val playHistory: Flow<List<UnifiedTrack>> = context.dataStore.data.map { prefs ->
+        prefs[KEY_PLAY_HISTORY]?.let { runCatching { json.decodeFromString<List<UnifiedTrack>>(it) }.getOrNull() } ?: emptyList()
+    }
+
+    suspend fun addPlayHistory(track: UnifiedTrack) {
+        val entry = track.copy(streamUrl = null)
+        context.dataStore.edit { prefs ->
+            val current = prefs[KEY_PLAY_HISTORY]?.let { runCatching { json.decodeFromString<List<UnifiedTrack>>(it) }.getOrNull() }.orEmpty()
+            val next = (listOf(entry) + current.filterNot { it.source == entry.source && it.id == entry.id }).take(PLAY_HISTORY_LIMIT)
+            prefs[KEY_PLAY_HISTORY] = json.encodeToString(next)
+        }
+    }
+
+    suspend fun clearPlayHistory() {
+        context.dataStore.edit { it.remove(KEY_PLAY_HISTORY) }
     }
 
     suspend fun setApiBaseUrl(url: String) {
@@ -100,6 +118,8 @@ class MssPreferences @Inject constructor(
         private val KEY_PLAYBACK = stringPreferencesKey("playback")
         private val KEY_SEARCH = stringPreferencesKey("search_history")
         private val KEY_ONBOARDED = booleanPreferencesKey("onboarded")
+        private val KEY_PLAY_HISTORY = stringPreferencesKey("play_history")
+        private const val PLAY_HISTORY_LIMIT = 200
     }
 }
 

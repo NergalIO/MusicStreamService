@@ -90,14 +90,26 @@ async function tokensFromConnectInternal(
   ses: Session,
   appId: string,
 ): Promise<{ access_token?: string; silent_token?: string; uuid?: string; user_id?: number } | null> {
+  for (const domain of ['vk.ru', 'vk.com']) {
+    const tokens = await tokensFromConnectInternalAt(ses, appId, domain);
+    if (tokens) return tokens;
+  }
+  return null;
+}
+
+async function tokensFromConnectInternalAt(
+  ses: Session,
+  appId: string,
+  domain: string,
+): Promise<{ access_token?: string; silent_token?: string; uuid?: string; user_id?: number } | null> {
   try {
-    const res = await ses.fetch('https://login.vk.com/?act=connect_internal', {
+    const res = await ses.fetch(`https://login.${domain}/?act=connect_internal`, {
       method: 'POST',
       headers: {
         'Content-Type': 'application/x-www-form-urlencoded',
-        Origin: 'https://id.vk.com',
-        Referer: 'https://id.vk.com/',
-        'X-Origin': 'https://id.vk.com',
+        Origin: `https://id.${domain}`,
+        Referer: `https://id.${domain}/`,
+        'X-Origin': `https://id.${domain}`,
       },
       body: new URLSearchParams({
         app_id: appId,
@@ -123,7 +135,7 @@ async function tokensFromConnectInternal(
       user_id: typeof nested.user_id === 'number' ? nested.user_id : undefined,
     };
   } catch (err) {
-    log.warn('[vk-oauth] connect_internal failed', err);
+    log.warn(`[vk-oauth] connect_internal (${domain}) failed`, err);
     return null;
   }
 }

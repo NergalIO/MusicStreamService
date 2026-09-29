@@ -215,25 +215,28 @@ object VkAuth {
         ua: String = MOBILE_UA,
     ): VkOAuthPayload? {
         if (cookies.isEmpty()) return null
-        val obj = runCatching {
-            postForm(
-                "https://login.vk.com/?act=connect_internal",
-                mapOf("app_id" to appId, "oauth_version" to "1", "version" to "1"),
-                cookies = cookies.toMutableMap(),
-                ua = ua,
-                origin = "https://id.vk.com",
+        for (domain in listOf("vk.ru", "vk.com")) {
+            val obj = runCatching {
+                postForm(
+                    "https://login.$domain/?act=connect_internal",
+                    mapOf("app_id" to appId, "oauth_version" to "1", "version" to "1"),
+                    cookies = cookies.toMutableMap(),
+                    ua = ua,
+                    origin = "https://id.$domain",
+                )
+            }.getOrNull() ?: continue
+            val nested = obj["data"]?.jsonObject ?: obj
+            val access = nested.str("access_token")
+            val silent = nested.str("silent_token")
+            if (access.isNullOrBlank() && silent.isNullOrBlank()) continue
+            return VkOAuthPayload(
+                accessToken = access,
+                userId = nested["user_id"]?.jsonPrimitive?.longOrNull ?: nested.str("user_id")?.toLongOrNull(),
+                silentToken = silent,
+                uuid = nested.str("uuid") ?: nested.str("silent_token_uuid"),
             )
-        }.getOrNull() ?: return null
-        val nested = obj["data"]?.jsonObject ?: obj
-        val access = nested.str("access_token")
-        val silent = nested.str("silent_token")
-        if (access.isNullOrBlank() && silent.isNullOrBlank()) return null
-        return VkOAuthPayload(
-            accessToken = access,
-            userId = nested["user_id"]?.jsonPrimitive?.longOrNull ?: nested.str("user_id")?.toLongOrNull(),
-            silentToken = silent,
-            uuid = nested.str("uuid") ?: nested.str("silent_token_uuid"),
-        )
+        }
+        return null
     }
 
     suspend fun loginPassword(
