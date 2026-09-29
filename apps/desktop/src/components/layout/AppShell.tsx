@@ -101,7 +101,7 @@ export function AppShell() {
             <ScrollContainerContext.Provider value={scrollRef}>
               <main
                 ref={scrollRef}
-                className={nowPlayingOpen ? 'min-h-0 flex-1 overflow-hidden' : 'min-h-0 flex-1 overflow-y-auto'}
+                className={nowPlayingOpen ? 'min-h-0 flex-1 overflow-hidden' : 'min-h-0 flex-1 overflow-y-auto overflow-x-hidden'}
               >
                 <AnimatePresence mode="wait" initial={false}>
                   <motion.div

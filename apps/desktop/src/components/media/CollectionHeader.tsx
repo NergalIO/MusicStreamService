@@ -34,7 +34,7 @@ export function CollectionHeader({
   return (
     <header className="relative -mx-8 -mt-6 mb-8 px-8 pb-8 pt-10">
       <div
-        className="pointer-events-none absolute inset-0 opacity-60 transition-colors duration-700"
+        className="pointer-events-none absolute inset-y-0 left-1/2 w-screen -translate-x-1/2 opacity-60 transition-colors duration-700"
         style={{ background: `linear-gradient(to bottom, rgb(${color} / 0.55), transparent)` }}
       />
       <div className="relative flex flex-col items-center gap-8 md:flex-row md:items-end">
