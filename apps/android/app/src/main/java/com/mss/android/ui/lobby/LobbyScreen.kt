@@ -63,6 +63,13 @@ fun LobbyScreen(nav: NavHostController, vm: LobbyViewModel = hiltViewModel()) {
         } else {
             Text("${lobby!!.title} · код ${lobby!!.inviteCode}", maxLines = 2, overflow = TextOverflow.Ellipsis)
             Text("Участников: ${lobby!!.members.size}")
+            if (!vm.isHost()) {
+                Text(
+                    "Найдите трек в поиске или медиатеке и в меню нажмите «Предложить». DJ увидит заявку здесь.",
+                    style = MaterialTheme.typography.bodySmall,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                )
+            }
             lobby!!.queue.forEach { item ->
                 Row(
                     Modifier.fillMaxWidth(),

@@ -1,4 +1,4 @@
-import type { LobbyDto, LobbySummaryDto, UnifiedTrack } from '@mss/shared';
+import type { LobbyDto, LobbySummaryDto } from '@mss/shared';
 import { useMutation, useQueryClient } from '@tanstack/react-query';
 import { Copy, DoorOpen, Radio, Users } from 'lucide-react';
 import { useEffect, useMemo, useState } from 'react';
@@ -16,16 +16,14 @@ import {
   fetchLobby,
   joinLobby,
   rejectSuggestion,
-  suggestTrack,
 } from '@/lib/lobby-api';
+import { copyTextWithToast } from '@/lib/clipboard';
 import { isLobbyListenPaused, resumeLobbyListen } from '@/lib/lobby-listen';
 import { disconnectLobbySession, enterLobbySession, leaveCurrentLobby } from '@/lib/lobby-session';
 import { useLobbyStore } from '@/store/lobby-store';
-import { usePlayerStore } from '@/store/player-store';
 
 function copyCode(code: string): void {
-  void navigator.clipboard.writeText(code);
-  toast.success('Код скопирован');
+  copyTextWithToast(code, 'Код скопирован');
 }
 
 export function LobbyPage() {
@@ -38,7 +36,6 @@ export function LobbyPage() {
   const wsStatus = useLobbyStore((s) => s.wsStatus);
   const [joinCode, setJoinCode] = useState(search.get('code') ?? '');
   const [publicRoom, setPublicRoom] = useState(true);
-  const current = usePlayerStore((s) => s.current);
   const queryClient = useQueryClient();
 
   const enterLobby = (dto: LobbyDto) => {
@@ -68,15 +65,6 @@ export function LobbyPage() {
     mutationFn: (room: LobbySummaryDto) => joinLobby(room.inviteCode),
     onSuccess: enterLobby,
     onError: (e) => toast.error(e instanceof Error ? e.message : 'Не удалось войти'),
-  });
-
-  const suggestMut = useMutation({
-    mutationFn: (track: UnifiedTrack) => {
-      if (!lobby) throw new Error('Нет лобби');
-      return suggestTrack(lobby.id, track);
-    },
-    onSuccess: () => toast.success('Трек предложен DJ'),
-    onError: (e) => toast.error(e instanceof Error ? e.message : 'Ошибка'),
   });
 
   useEffect(() => {
@@ -231,18 +219,10 @@ export function LobbyPage() {
       )}
 
       {role === 'guest' && (
-        <div className="space-y-2">
-          <p className="text-sm text-muted">
-            Предложение — это просьба DJ включить трек. Оно не запускает ваш плеер в эфире.
-          </p>
-          <Button
-            variant="secondary"
-            onClick={() => current && suggestMut.mutate(current)}
-            disabled={!current || suggestMut.isPending}
-          >
-            {current ? `Предложить «${current.title}»` : 'Сначала откройте трек в плеере'}
-          </Button>
-        </div>
+        <p className="text-sm text-muted">
+          Найдите трек в поиске или медиатеке и в меню трека нажмите «Предложить». Это заявка DJ, ваш плеер в эфире не
+          запускается.
+        </p>
       )}
 
       {role === 'host' && suggestions.length > 0 && (

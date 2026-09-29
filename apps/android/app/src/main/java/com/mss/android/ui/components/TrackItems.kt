@@ -18,6 +18,7 @@ import androidx.compose.material.icons.filled.FavoriteBorder
 import androidx.compose.material.icons.filled.GraphicEq
 import androidx.compose.material.icons.filled.MoreVert
 import androidx.compose.material.icons.filled.MusicNote
+import androidx.compose.material.icons.filled.Send
 import androidx.compose.material3.DropdownMenu
 import androidx.compose.material3.DropdownMenuItem
 import androidx.compose.material3.Icon
@@ -123,7 +124,13 @@ fun TrackRow(
                 onQueue?.let { DropdownMenuItem(text = { Text("В очередь") }, onClick = { menu = false; it() }) }
                 onSimilar?.let { DropdownMenuItem(text = { Text("Похожие") }, onClick = { menu = false; it() }) }
                 onWave?.let { DropdownMenuItem(text = { Text("Волна по треку") }, onClick = { menu = false; it() }) }
-                onSuggest?.let { DropdownMenuItem(text = { Text("Предложить в лобби") }, onClick = { menu = false; it() }) }
+                onSuggest?.let {
+                    DropdownMenuItem(
+                        text = { Text("Предложить") },
+                        onClick = { menu = false; it() },
+                        leadingIcon = { Icon(Icons.Default.Send, null) },
+                    )
+                }
             }
         }
     }

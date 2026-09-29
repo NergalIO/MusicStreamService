@@ -37,6 +37,7 @@ import javax.inject.Inject
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.SharingStarted
 import kotlinx.coroutines.flow.StateFlow
+import kotlinx.coroutines.flow.combine
 import kotlinx.coroutines.flow.stateIn
 import kotlinx.coroutines.launch
 
@@ -56,6 +57,10 @@ class MssViewModel @Inject constructor(
     val session = repo.session.stateIn(viewModelScope, SharingStarted.Eagerly, null)
     val playerState = player.state.stateIn(viewModelScope, SharingStarted.Eagerly, player.state.value)
     val lobbyState = lobby.lobby.stateIn(viewModelScope, SharingStarted.Eagerly, null)
+    val canSuggestToLobby: StateFlow<Boolean> = combine(lobby.lobby, session) { room, sess ->
+        val uid = sess?.user?.id
+        room != null && uid != null && room.hostUserId != uid
+    }.stateIn(viewModelScope, SharingStarted.Eagerly, false)
     val downloadRecords = downloads.records
     val playbackSettings = repo.playbackSettings.stateIn(viewModelScope, SharingStarted.Eagerly, PlaybackSettings())
     val apiBase = repo.apiBase.stateIn(viewModelScope, SharingStarted.Eagerly, "http://10.0.2.2:3001")
@@ -69,6 +74,8 @@ class MssViewModel @Inject constructor(
     val playlists: StateFlow<List<UnifiedPlaylist>> = _playlists
     private val _error = MutableStateFlow<String?>(null)
     val error: StateFlow<String?> = _error
+    private val _notice = MutableStateFlow<String?>(null)
+    val notice: StateFlow<String?> = _notice
     private val _authVerify = MutableStateFlow(false)
     val authVerify: StateFlow<Boolean> = _authVerify
     private val _authInfo = MutableStateFlow<String?>(null)
@@ -482,7 +489,12 @@ class MssViewModel @Inject constructor(
 
     fun leaveLobby() = launch { lobby.leave() }
 
-    fun suggestToLobby(track: UnifiedTrack) = launch { lobby.suggest(track) }
+    fun suggestToLobby(track: UnifiedTrack) = launch {
+        val uid = session.value?.user?.id
+        if (!lobby.isListener(uid)) error("Предложить трек может слушатель эфира")
+        lobby.suggest(track)
+        _notice.value = "Трек предложен DJ"
+    }
 
     fun acceptLobby(itemId: String) = launch { lobby.accept(itemId) }
 
@@ -541,6 +553,7 @@ class MssViewModel @Inject constructor(
     private fun launch(block: suspend () -> Unit) {
         viewModelScope.launch {
             _error.value = null
+            _notice.value = null
             runCatching { block() }.onFailure { e ->
                 if (session.value?.accessToken == "preview") return@launch
                 _error.value = e.message
@@ -549,6 +562,7 @@ class MssViewModel @Inject constructor(
     }
 
     fun clearError() { _error.value = null }
+    fun clearNotice() { _notice.value = null }
 }
 
 data class SourceStatuses(

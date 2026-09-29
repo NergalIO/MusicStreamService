@@ -59,6 +59,7 @@ fun HomeScreen(vm: MssViewModel, nav: NavHostController) {
     val liked by vm.likedIds.collectAsState()
     val player by vm.playerState.collectAsState()
     val sources by vm.sources.collectAsState()
+    val canSuggest by vm.canSuggestToLobby.collectAsState()
     val window = rememberMssWindow()
     LaunchedEffect(source) { vm.loadHome() }
     val empty = shelves == null && feed.isEmpty() && playlists.isEmpty() && tracks.isEmpty()
@@ -115,6 +116,7 @@ fun HomeScreen(vm: MssViewModel, nav: NavHostController) {
                         onPlay = { vm.play(list.map { it.toUnifiedTrack() }, i) },
                         onLike = { vm.toggleLike(track) },
                         onDownload = { vm.download(track) },
+                        onSuggest = if (canSuggest) ({ vm.suggestToLobby(track) }) else null,
                         active = currentKey == "${track.source}:${track.id}",
                     )
                 }
@@ -128,6 +130,7 @@ fun HomeScreen(vm: MssViewModel, nav: NavHostController) {
                         onPlay = { vm.play(list.map { it.toUnifiedTrack() }, i) },
                         onLike = { vm.toggleLike(track) },
                         onDownload = { vm.download(track) },
+                        onSuggest = if (canSuggest) ({ vm.suggestToLobby(track) }) else null,
                         active = currentKey == "${track.source}:${track.id}",
                     )
                 }
@@ -195,7 +198,7 @@ fun HomeScreen(vm: MssViewModel, nav: NavHostController) {
                 onSimilar = { nav.navigate(Routes.similar(track.source.name.lowercase(), track.id)) },
                 onQueue = { vm.player.enqueue(track) },
                 onWave = { vm.startWave(WaveSettings(seed = "track:${track.id}", seedTitle = track.title)) },
-                onSuggest = { vm.suggestToLobby(track) },
+                onSuggest = if (canSuggest) ({ vm.suggestToLobby(track) }) else null,
                 active = currentKey == "${track.source}:${track.id}",
             )
         }

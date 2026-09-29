@@ -1,6 +1,6 @@
 import type { UnifiedTrack } from '@mss/shared';
 import { useVirtualizer } from '@tanstack/react-virtual';
-import { ArrowDown, ArrowUp, GripVertical, Heart, MoreHorizontal, Music, Play, Search, X } from 'lucide-react';
+import { ArrowDown, ArrowUp, GripVertical, Heart, MoreHorizontal, Music, Pause, Play, Search, X } from 'lucide-react';
 import { Fragment, memo, useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from 'react';
 import { Link } from 'react-router-dom';
 import { useScrollContainer } from '@/components/layout/scroll-context';
@@ -129,7 +129,13 @@ const TrackRow = memo(function TrackRow({
         isCurrent && 'bg-foreground/[0.04]',
         selected && 'bg-primary/15 hover:bg-primary/20',
         dragging && 'opacity-40',
-        showAlbum ? 'grid-cols-[2rem_minmax(0,1fr)_minmax(0,0.7fr)_auto]' : 'grid-cols-[2rem_minmax(0,1fr)_auto]',
+        showAlbum
+          ? showCover
+            ? 'grid-cols-[2.5rem_minmax(0,1fr)_minmax(0,0.7fr)_auto]'
+            : 'grid-cols-[2rem_minmax(0,1fr)_minmax(0,0.7fr)_auto]'
+          : showCover
+            ? 'grid-cols-[2.5rem_minmax(0,1fr)_auto]'
+            : 'grid-cols-[2rem_minmax(0,1fr)_auto]',
       )}
     >
       {draggable && (
@@ -144,37 +150,73 @@ const TrackRow = memo(function TrackRow({
           className={cn('pointer-events-none absolute inset-x-2 h-0.5 rounded bg-primary', dropMark === 'above' ? '-top-px' : '-bottom-px')}
         />
       )}
-      <div className="flex h-8 w-8 items-center justify-center text-sm tabular-nums text-muted">
-        {isCurrent && !showCover ? (
-          <button type="button" onClick={togglePlay} className="flex h-8 w-8 items-center justify-center" aria-label={playing ? 'Пауза' : 'Играть'}>
-            <NowPlayingBars playing={playing} />
-          </button>
-        ) : (
-          <>
-            {numbered && !showCover && <span className="group-hover:hidden">{index + 1}</span>}
-            {showCover && (
-              <div className="relative h-10 w-10 group-hover:hidden">
-                <Artwork src={track.coverUrl} className="h-10 w-10" rounded="rounded-md" iconSize={14} />
-                {isCurrent && (
-                  <div className="absolute inset-0 flex items-center justify-center rounded-md bg-background/55">
-                    <NowPlayingBars playing={playing} />
-                  </div>
-                )}
+      <div className={cn('flex items-center justify-center text-sm tabular-nums text-muted', showCover ? 'h-10 w-10' : 'h-8 w-8')}>
+        {showCover ? (
+          <div className="relative h-10 w-10">
+            <Artwork src={track.coverUrl} className="h-10 w-10" rounded="rounded-md" iconSize={14} />
+            {isCurrent && (
+              <div className="pointer-events-none absolute inset-0 flex items-center justify-center rounded-md bg-background/55 group-hover:opacity-0">
+                <NowPlayingBars playing={playing} />
               </div>
             )}
             <button
               type="button"
               disabled={disabled}
-              onClick={() => (isCurrent ? togglePlay() : onPlay(index))}
+              onClick={(e) => {
+                e.stopPropagation();
+                if (isCurrent) togglePlay();
+                else onPlay(index);
+              }}
+              title={disabled ? track.unplayableReason : isCurrent && playing ? 'Пауза' : 'Слушать'}
+              aria-label={isCurrent && playing ? `Пауза «${track.title}»` : `Слушать «${track.title}»`}
+              className="absolute inset-0 hidden items-center justify-center rounded-md bg-black/50 text-white group-hover:flex focus-visible:flex disabled:opacity-40"
+            >
+              {isCurrent && playing ? <Pause size={16} fill="currentColor" /> : <Play size={16} fill="currentColor" className="ml-px" />}
+            </button>
+          </div>
+        ) : isCurrent ? (
+          <>
+            <button
+              type="button"
+              onClick={(e) => {
+                e.stopPropagation();
+                togglePlay();
+              }}
+              className="flex h-8 w-8 items-center justify-center group-hover:hidden"
+              aria-label={playing ? 'Пауза' : 'Играть'}
+            >
+              <NowPlayingBars playing={playing} />
+            </button>
+            <button
+              type="button"
+              onClick={(e) => {
+                e.stopPropagation();
+                togglePlay();
+              }}
+              className="hidden h-8 w-8 items-center justify-center group-hover:flex"
+              aria-label={playing ? 'Пауза' : 'Играть'}
+            >
+              {playing ? <Pause size={16} fill="currentColor" /> : <Play size={16} fill="currentColor" className="ml-px" />}
+            </button>
+          </>
+        ) : (
+          <>
+            {numbered && <span className="group-hover:hidden">{index + 1}</span>}
+            <button
+              type="button"
+              disabled={disabled}
+              onClick={(e) => {
+                e.stopPropagation();
+                onPlay(index);
+              }}
               title={disabled ? track.unplayableReason : 'Слушать'}
               aria-label={`Слушать «${track.title}»`}
               className={cn(
                 'items-center justify-center text-foreground disabled:opacity-40',
-                numbered || showCover ? 'hidden group-hover:flex' : 'flex',
-                showCover && 'h-10 w-10',
+                numbered ? 'hidden group-hover:flex' : 'flex',
               )}
             >
-              <Play size={16} fill="currentColor" />
+              <Play size={16} fill="currentColor" className="ml-px" />
             </button>
           </>
         )}
@@ -538,7 +580,13 @@ export function TrackList<T extends ListTrack>({
           role="row"
           className={cn(
             'mb-1 grid gap-3 border-b border-border px-3 pb-2 text-[11px] font-medium uppercase tracking-wider text-muted',
-            album ? 'grid-cols-[2rem_minmax(0,1fr)_minmax(0,0.7fr)_auto]' : 'grid-cols-[2rem_minmax(0,1fr)_auto]',
+            album
+              ? cover
+                ? 'grid-cols-[2.5rem_minmax(0,1fr)_minmax(0,0.7fr)_auto]'
+                : 'grid-cols-[2rem_minmax(0,1fr)_minmax(0,0.7fr)_auto]'
+              : cover
+                ? 'grid-cols-[2.5rem_minmax(0,1fr)_auto]'
+                : 'grid-cols-[2rem_minmax(0,1fr)_auto]',
           )}
         >
           <span className="text-center">#</span>

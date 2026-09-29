@@ -5,6 +5,7 @@ import { openPlaylistPicker } from '@/components/tracks/PlaylistPicker';
 import type { MenuItem, MenuSpec } from '@/components/ui/context-menu';
 import { apiFetch } from '@/lib/api';
 import { artistPath, type ArtistGroup } from '@/lib/artists';
+import { copyTextWithToast } from '@/lib/clipboard';
 import { formatTrackCount } from '@/lib/format';
 import { albumLink, mssAlbumUrl, mssPlaylistUrl, playlistPath } from '@/lib/links';
 import { playCollection, startWave } from '@/lib/player-actions';
@@ -131,16 +132,17 @@ export function albumMenu(album: UnifiedAlbum): MenuSpec {
           icon: Copy,
           label: 'Скопировать ссылку',
           action: () =>
-            void navigator.clipboard.writeText(
+            copyTextWithToast(
               album.source === 'spotify'
                 ? `https://open.spotify.com/album/${album.id}`
                 : `https://music.yandex.ru/album/${album.id}`,
+              'Ссылка скопирована',
             ),
         },
         {
           icon: Link2,
           label: 'Скопировать ссылку MSS',
-          action: () => void navigator.clipboard.writeText(mssAlbumUrl(album)).then(() => toast('Ссылка скопирована')),
+          action: () => copyTextWithToast(mssAlbumUrl(album), 'Ссылка скопирована'),
         },
       ],
     ],
@@ -191,7 +193,7 @@ export function playlistMenu(playlist: UnifiedPlaylist): MenuSpec {
         {
           icon: Link2,
           label: 'Скопировать ссылку MSS',
-          action: () => void navigator.clipboard.writeText(mssPlaylistUrl(playlist)).then(() => toast('Ссылка скопирована')),
+          action: () => copyTextWithToast(mssPlaylistUrl(playlist), 'Ссылка скопирована'),
         },
       ],
     ],
@@ -226,7 +228,7 @@ export function artistMenu(group: ArtistGroup): MenuSpec {
         : [],
       [
         { icon: MicVocal, label: 'Открыть страницу', action: (nav) => nav(artistPath(group.name, group.refs)) },
-        { icon: Copy, label: 'Скопировать имя', action: () => void navigator.clipboard.writeText(group.name) },
+        { icon: Copy, label: 'Скопировать имя', action: () => copyTextWithToast(group.name, 'Имя скопировано') },
       ],
     ],
   };

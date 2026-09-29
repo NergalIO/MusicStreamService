@@ -159,6 +159,7 @@ private fun MainShell(vm: MssViewModel, nav: NavHostController) {
     val back by nav.currentBackStackEntryAsState()
     val route = back?.destination?.route ?: Routes.HOME
     val error by vm.error.collectAsState()
+    val notice by vm.notice.collectAsState()
     val prompt by vm.yandexPrompt.collectAsState()
     val ctx = LocalContext.current
     val onboarded by vm.onboarded.collectAsState()
@@ -274,6 +275,29 @@ private fun MainShell(vm: MssViewModel, nav: NavHostController) {
                         overflow = TextOverflow.Ellipsis,
                     )
                     IconButton({ vm.clearError() }) { Icon(Icons.Default.Close, "Закрыть") }
+                }
+            }
+            if (error == null) {
+                notice?.let { msg ->
+                    Row(
+                        Modifier
+                            .padding(horizontal = 16.dp, vertical = 8.dp)
+                            .fillMaxWidth()
+                            .clip(RoundedCornerShape(12.dp))
+                            .background(MaterialTheme.colorScheme.primary.copy(alpha = 0.12f))
+                            .padding(start = 12.dp),
+                        verticalAlignment = Alignment.CenterVertically,
+                    ) {
+                        Text(
+                            msg,
+                            color = MaterialTheme.colorScheme.onSurface,
+                            modifier = Modifier.weight(1f),
+                            style = MaterialTheme.typography.bodySmall,
+                            maxLines = 2,
+                            overflow = TextOverflow.Ellipsis,
+                        )
+                        IconButton({ vm.clearNotice() }) { Icon(Icons.Default.Close, "Закрыть") }
+                    }
                 }
             }
             NavHost(nav, Routes.HOME, Modifier.weight(1f).fillMaxWidth()) {

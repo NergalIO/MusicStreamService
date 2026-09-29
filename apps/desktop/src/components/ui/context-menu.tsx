@@ -136,8 +136,8 @@ export function ContextMenuHost() {
               role="menuitem"
               disabled={item.disabled}
               onClick={() => {
-                close();
                 item.action(navigate);
+                close();
               }}
               className={cn(
                 'flex w-full items-center gap-2.5 rounded-md px-2.5 py-1.5 text-left text-[13px] outline-none transition-colors hover:bg-primary hover:text-primary-foreground focus-visible:bg-primary focus-visible:text-primary-foreground disabled:pointer-events-none disabled:opacity-40',

@@ -1,5 +1,5 @@
 import dotenv from 'dotenv';
-import { app, BrowserWindow, components, ipcMain, session, shell, type Session } from 'electron';
+import { app, BrowserWindow, clipboard, components, ipcMain, session, shell, type Session } from 'electron';
 import { repairChromiumDiskCache } from './cache-repair.js';
 import { randomUUID } from 'node:crypto';
 import fs from 'node:fs';
@@ -181,6 +181,10 @@ export function showMainWindow(): void {
 
 function registerAppIpc(): void {
   ipcMain.handle('app:getDeviceId', () => getDeviceId());
+  ipcMain.handle('clipboard:writeText', (_e, text: unknown) => {
+    if (typeof text !== 'string') throw new Error('clipboard:writeText expects a string');
+    clipboard.writeText(text);
+  });
 
   ipcMain.handle('offline:list', () => listOffline());
   ipcMain.handle('offline:remove', (_e, trackId: string) => removeOffline(trackId));
@@ -213,9 +217,20 @@ async function ensureWidevine(): Promise<void> {
 }
 
 function allowPlaybackPermissions(ses: Session): void {
-  const allowed = new Set(['media', 'autoplay', 'mediaKeySystem', 'display-capture']);
+  const allowed = new Set([
+    'media',
+    'autoplay',
+    'mediaKeySystem',
+    'display-capture',
+    'clipboard-sanitized-write',
+    'clipboard-read',
+  ]);
   ses.setPermissionRequestHandler((_wc, permission, callback) => {
     callback(allowed.has(permission));
+  });
+  ses.setPermissionCheckHandler((_wc, permission) => {
+    if (permission === 'clipboard-sanitized-write' || permission === 'clipboard-read') return true;
+    return allowed.has(permission);
   });
 }
 

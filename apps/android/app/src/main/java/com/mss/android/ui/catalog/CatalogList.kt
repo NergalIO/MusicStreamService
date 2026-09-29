@@ -23,6 +23,7 @@ fun CatalogList(vm: MssViewModel, nav: NavHostController, modifier: Modifier = M
     val liked by vm.likedIds.collectAsState()
     val title by vm.detailTitle.collectAsState()
     val player by vm.playerState.collectAsState()
+    val canSuggest by vm.canSuggestToLobby.collectAsState()
     val currentKey = player.current?.let { "${it.source}:${it.id}" }
     Column(modifier.fillMaxSize()) {
         if (title.isNotBlank()) {
@@ -39,7 +40,7 @@ fun CatalogList(vm: MssViewModel, nav: NavHostController, modifier: Modifier = M
                 onSimilar = { nav.navigate(Routes.similar(it.source.name.lowercase(), it.id)) },
                 onQueue = { vm.player.enqueue(it) },
                 onWave = { vm.startWave(WaveSettings(seed = "track:${it.id}", seedTitle = it.title)) },
-                onSuggest = { vm.suggestToLobby(it) },
+                onSuggest = if (canSuggest) ({ vm.suggestToLobby(it) }) else null,
                 currentKey = currentKey,
                 modifier = Modifier.weight(1f),
             )

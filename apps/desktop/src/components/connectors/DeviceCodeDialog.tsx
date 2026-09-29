@@ -2,6 +2,7 @@ import { Check, Copy, ExternalLink, Loader2 } from 'lucide-react';
 import { useEffect, useState } from 'react';
 import { Button } from '@/components/ui/button';
 import { Dialog } from '@/components/ui/dialog';
+import { copyText } from '@/lib/clipboard';
 import { cancelConnect, useConnectStore } from '@/lib/connectors';
 
 function useCountdown(seconds: number | undefined, key: string | undefined): number {
@@ -29,7 +30,7 @@ export function DeviceCodeDialog() {
 
   const copy = async () => {
     if (!prompt) return;
-    await navigator.clipboard.writeText(prompt.userCode);
+    await copyText(prompt.userCode);
     setCopied(true);
     setTimeout(() => setCopied(false), 1500);
   };

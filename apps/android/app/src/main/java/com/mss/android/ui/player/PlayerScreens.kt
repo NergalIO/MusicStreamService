@@ -310,6 +310,7 @@ private fun SimilarPane(
     vm: MssViewModel,
     modifier: Modifier,
 ) {
+    val canSuggest by vm.canSuggestToLobby.collectAsState()
     if (similar.isEmpty()) {
         Text(
             "Похожих треков нет",
@@ -327,6 +328,7 @@ private fun SimilarPane(
                 onPlay = { vm.play(similar, i) },
                 onLike = { vm.toggleLike(t) },
                 onDownload = { vm.download(t) },
+                onSuggest = if (canSuggest) ({ vm.suggestToLobby(t) }) else null,
                 active = state.current?.id == t.id && state.current?.source == t.source,
             )
         }

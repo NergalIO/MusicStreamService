@@ -12,6 +12,7 @@ import {
   MicVocal,
   Pencil,
   Radio,
+  Send,
   Sparkles,
   ThumbsDown,
   Trash2,
@@ -20,13 +21,16 @@ import { toast } from 'sonner';
 import { openEditTrack } from '@/components/tracks/EditTrackDialog';
 import { openPlaylistPicker } from '@/components/tracks/PlaylistPicker';
 import { ContextMenuHost, openContextMenu, type MenuItem } from '@/components/ui/context-menu';
+import { copyTextWithToast } from '@/lib/clipboard';
 import { formatTrackCount } from '@/lib/format';
+import { suggestTrack } from '@/lib/lobby-api';
 import { mssTrackUrl, similarPath, trackAlbumPath, trackArtistLinks } from '@/lib/links';
 import { downloadOffline } from '@/lib/offline';
 import { startSpotifyRadio, startWave, toggleLike } from '@/lib/player-actions';
 import { queryClient } from '@/lib/query-client';
 import { canDownload, downloadKey, useDownloadsStore } from '@/store/downloads-store';
 import { useLikesStore } from '@/store/likes-store';
+import { isLobbyGuest, useLobbyStore } from '@/store/lobby-store';
 import { usePlayerStore } from '@/store/player-store';
 
 type MenuTrack = UnifiedTrack & { streamUrl?: string; uid?: string };
@@ -48,6 +52,22 @@ function isOwnUpload(track: UnifiedTrack): boolean {
   return !uploads || uploads.some((t) => t.id === track.id);
 }
 
+function suggestToParty(track: UnifiedTrack): void {
+  const lobby = useLobbyStore.getState().lobby;
+  if (!lobby || !isLobbyGuest()) {
+    toast.error('Предложить трек может слушатель эфира');
+    return;
+  }
+  void suggestTrack(lobby.id, track)
+    .then(() => toast.success('Трек предложен DJ'))
+    .catch((e) => toast.error(e instanceof Error ? e.message : 'Не удалось предложить'));
+}
+
+function partySuggestItem(track: UnifiedTrack): MenuItem[] {
+  if (!isLobbyGuest()) return [];
+  return [{ icon: Send, label: 'Предложить', action: () => suggestToParty(track) }];
+}
+
 export function trackMenuGroups(track: MenuTrack, extras: MenuExtras = {}): MenuItem[][] {
   const player = usePlayerStore.getState();
   const downloads = useDownloadsStore.getState();
@@ -57,6 +77,7 @@ export function trackMenuGroups(track: MenuTrack, extras: MenuExtras = {}): Menu
 
   return [
     [
+      ...partySuggestItem(track),
       { icon: ListStart, label: 'Играть следующим', action: () => (player.playNext(track), toast('Сыграет следующим')) },
       { icon: ListEnd, label: 'Добавить в очередь', action: () => (player.addToQueue(track), toast('Добавлено в очередь')) },
       { icon: ListPlus, label: 'Добавить в плейлист', action: () => openPlaylistPicker(track) },
@@ -120,12 +141,12 @@ export function trackMenuGroups(track: MenuTrack, extras: MenuExtras = {}): Menu
       {
         icon: Copy,
         label: 'Скопировать название',
-        action: () => void navigator.clipboard.writeText(`${track.artist} — ${track.title}`),
+        action: () => copyTextWithToast(`${track.artist} — ${track.title}`, 'Название скопировано'),
       },
       {
         icon: Link2,
         label: 'Скопировать ссылку MSS',
-        action: () => void navigator.clipboard.writeText(mssTrackUrl(track)).then(() => toast('Ссылка скопирована')),
+        action: () => copyTextWithToast(mssTrackUrl(track), 'Ссылка скопирована'),
       },
       ...(extras.onRemove
         ? [{ icon: Trash2, label: extras.removeLabel ?? 'Удалить', action: extras.onRemove, danger: true }]
@@ -181,7 +202,7 @@ export function bulkTrackActions(tracks: MenuTrack[], extras: BulkMenuExtras = {
       {
         icon: Copy,
         label: 'Скопировать названия',
-        action: () => void navigator.clipboard.writeText(tracks.map((t) => `${t.artist} — ${t.title}`).join('\n')),
+        action: () => copyTextWithToast(tracks.map((t) => `${t.artist} — ${t.title}`).join('\n'), 'Названия скопированы'),
       },
     ],
     extras.onRemove ? [{ icon: Trash2, label: extras.removeLabel ?? `Удалить (${n})`, action: extras.onRemove, danger: true }] : [],

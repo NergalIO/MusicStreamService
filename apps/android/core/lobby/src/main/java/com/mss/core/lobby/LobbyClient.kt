@@ -70,7 +70,7 @@ class LobbyClient @Inject constructor(
     }
 
     suspend fun suggest(track: com.mss.core.model.UnifiedTrack) {
-        val id = _lobby.value?.id ?: return
+        val id = _lobby.value?.id ?: error("Сначала войдите в listening party")
         api.suggestLobbyTrack(id, track)
     }
 
@@ -91,6 +91,11 @@ class LobbyClient @Inject constructor(
     }
 
     fun isHost(userId: String?): Boolean = _lobby.value?.hostUserId == userId
+
+    fun isListener(userId: String?): Boolean {
+        val room = _lobby.value ?: return false
+        return userId != null && room.hostUserId != userId
+    }
 
     private fun connectSocket(lobbyId: String) {
         disconnect()

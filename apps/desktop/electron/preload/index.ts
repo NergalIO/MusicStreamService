@@ -130,6 +130,9 @@ export type LogLevel = 'error' | 'warn' | 'info' | 'debug';
 
 const api = {
   getDeviceId: () => ipcRenderer.invoke('app:getDeviceId') as Promise<string>,
+  clipboard: {
+    writeText: (text: string) => ipcRenderer.invoke('clipboard:writeText', text) as Promise<void>,
+  },
   system: {
     getSettings: () => ipcRenderer.invoke('system:getSettings') as Promise<SystemSettings>,
     setSettings: (patch: Partial<SystemSettings>) =>

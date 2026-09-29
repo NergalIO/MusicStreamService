@@ -56,6 +56,7 @@ fun SearchScreen(vm: MssViewModel, nav: NavHostController) {
     val liked by vm.likedIds.collectAsState()
     val player by vm.playerState.collectAsState()
     val error by vm.error.collectAsState()
+    val canSuggest by vm.canSuggestToLobby.collectAsState()
     var didSearch by remember { mutableStateOf(false) }
     val focus = remember { FocusRequester() }
     LaunchedEffect(Unit) { focus.requestFocus() }
@@ -168,7 +169,7 @@ fun SearchScreen(vm: MssViewModel, nav: NavHostController) {
                     onSimilar = { nav.navigate(Routes.similar(track.source.name.lowercase(), track.id)) },
                     onQueue = { vm.player.enqueue(track) },
                     onWave = { vm.startWave(WaveSettings(seed = "track:${track.id}", seedTitle = track.title)) },
-                    onSuggest = { vm.suggestToLobby(track) },
+                    onSuggest = if (canSuggest) ({ vm.suggestToLobby(track) }) else null,
                     active = currentKey == "${track.source}:${track.id}",
                 )
             }
