@@ -272,7 +272,7 @@ export const usePlayerStore = create<PlayerState>()(
           position: 0,
           upNext: [],
           current: queue[0],
-          context: { type: 'wave', title: settings?.seedTitle ? `Волна: ${settings.seedTitle}` : 'Моя волна', path: '/wave' },
+          context: { type: 'wave', title: settings?.seedTitle ? `Волна: ${settings.seedTitle}` : 'Моя волна', path: '/yandex' },
           radio: { sessionId: batch.sessionId, batchId: batch.batchId, settings },
           repeat: s.repeat === 'all' ? 'off' : s.repeat,
           playId: s.playId + 1,

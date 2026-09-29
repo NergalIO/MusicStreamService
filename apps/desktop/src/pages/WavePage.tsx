@@ -1,5 +1,4 @@
 import type { WaveSettings } from '@mss/shared';
-import { useQueryClient } from '@tanstack/react-query';
 import { AnimatePresence, motion } from 'framer-motion';
 import { Loader2, Pause, Play, SkipForward, ThumbsDown } from 'lucide-react';
 import { useMemo, useState, type ReactNode } from 'react';
@@ -7,7 +6,7 @@ import { Artwork } from '@/components/media/Artwork';
 import { Button } from '@/components/ui/button';
 import { useCoverPalette, WAVE_IDLE_PALETTE, type CoverPalette } from '@/hooks/useDominantColor';
 import { useWaveAudioReactive } from '@/hooks/useWaveAudioReactive';
-import { connectSource, useYandexConnected } from '@/lib/connectors';
+import { useYandexConnected } from '@/lib/connectors';
 import { dislikeCurrent, skipNext, startWave, togglePlay } from '@/lib/player-actions';
 import { cn } from '@/lib/utils';
 import { usePlaybackStore } from '@/store/playback-store';
@@ -117,7 +116,7 @@ function WavePageShell({
   return (
     <div
       ref={audioRef}
-      className="wave-audio-root relative min-h-[max(100%,calc(100dvh-4.25rem))] w-full px-8 pb-16 pt-6"
+      className="wave-audio-root relative overflow-hidden rounded-2xl border border-foreground/10 px-6 pb-8 pt-6 md:px-8"
     >
       <div className="pointer-events-none absolute inset-0 overflow-hidden" aria-hidden>
         <WaveBackdropVisual palette={boosted} coverUrl={coverUrl} colorKey={colorKey} />
@@ -161,9 +160,8 @@ function WaveOrb({ active, palette }: { active: boolean; palette: CoverPalette }
   );
 }
 
-export function WavePage() {
+export function WavePanel() {
   const connected = useYandexConnected();
-  const queryClient = useQueryClient();
   const player = usePlayerStore();
   const { radio, current } = player;
   const upcoming = upcomingTracks(player).slice(0, 8);
@@ -175,22 +173,7 @@ export function WavePage() {
   const colorKey = current?.coverUrl ?? 'wave-idle';
   const audioReactive = waveActive && playing;
 
-  if (!connected) {
-    return (
-      <WavePageShell palette={WAVE_IDLE_PALETTE} colorKey="wave-disconnected" audioReactive={false}>
-        <div className="mx-auto flex max-w-md flex-col items-center py-20 text-center">
-          <WaveOrb active={false} palette={WAVE_IDLE_PALETTE} />
-          <h1 className="mt-8 text-3xl font-bold tracking-tight">Моя волна</h1>
-          <p className="mt-2 text-sm text-muted">
-            Бесконечный поток музыки, который подстраивается под ваши вкусы. Нужен аккаунт Яндекс Музыки.
-          </p>
-          <Button className="mt-6" size="lg" onClick={() => void connectSource('yandex', queryClient)}>
-            Подключить Яндекс Музыку
-          </Button>
-        </div>
-      </WavePageShell>
-    );
-  }
+  if (!connected) return null;
 
   const start = async (next: WaveSettings) => {
     setStarting(true);
@@ -212,7 +195,7 @@ export function WavePage() {
       audioReactive={audioReactive}
     >
       <div className="space-y-10">
-        <section className="flex flex-col items-center gap-10 pt-4 md:flex-row md:items-center md:pt-8">
+        <section className="flex flex-col items-center gap-8 md:flex-row md:items-center">
           <button
             type="button"
             disabled={starting}
@@ -310,7 +293,7 @@ export function WavePage() {
         </section>
 
         {waveActive && upcoming.length > 0 && (
-          <section className="pb-4">
+          <section>
             <h2 className="mb-3 text-xl font-bold tracking-tight">Дальше в волне</h2>
             <div className="grid grid-cols-2 gap-4 sm:grid-cols-4 xl:grid-cols-8">
               {upcoming.map((t) => (

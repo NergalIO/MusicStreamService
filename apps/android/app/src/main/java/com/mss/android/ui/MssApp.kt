@@ -162,7 +162,7 @@ private fun SpotifyWebLayer(vm: MssViewModel, visible: Boolean, modifier: Modifi
         AndroidView(
             factory = { ctx ->
                 android.widget.FrameLayout(ctx).also { frame ->
-                    frame.setBackgroundColor(android.graphics.Color.WHITE)
+                    frame.setBackgroundColor(android.graphics.Color.TRANSPARENT)
                     val view = WebView(ctx)
                     frame.addView(
                         view,
@@ -178,10 +178,14 @@ private fun SpotifyWebLayer(vm: MssViewModel, visible: Boolean, modifier: Modifi
             },
             update = { frame ->
                 val view = frame.getChildAt(0) as? WebView ?: return@AndroidView
+                view.setLayerType(View.LAYER_TYPE_NONE, null)
                 view.importantForAccessibility = View.IMPORTANT_FOR_ACCESSIBILITY_NO
-                view.visibility = View.VISIBLE
                 view.isFocusable = visible
                 view.isFocusableInTouchMode = visible
+                val shown = if (visible) View.VISIBLE else View.INVISIBLE
+                frame.visibility = shown
+                view.visibility = shown
+                frame.translationX = if (visible) 0f else frame.resources.displayMetrics.widthPixels * 4f
                 if (visible) {
                     view.requestLayout()
                     view.invalidate()

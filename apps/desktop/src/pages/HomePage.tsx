@@ -17,6 +17,7 @@ import { statsArtistGroup, statsTrackToUnified, useShelves } from '@/lib/stats';
 import { albumLink, playlistPath } from '@/lib/links';
 import { playCollection, startWave, togglePlay } from '@/lib/player-actions';
 import { libraryPath, MSS_HOME, SPOTIFY_HOME, SPOTIFY_WEB, YANDEX_HOME } from '@/lib/service-routes';
+import { WavePanel } from '@/pages/WavePage';
 import {
   useLocalTracks,
   useMssListenNow,
@@ -29,41 +30,6 @@ import {
 import type { QueueItem } from '@/store/player-store';
 import { usePlaybackStore } from '@/store/playback-store';
 import { usePlayerStore, type PlayContext } from '@/store/player-store';
-
-function WaveHero() {
-  const radio = usePlayerStore((s) => s.radio);
-  const current = usePlayerStore((s) => s.current);
-  const playing = usePlaybackStore((s) => s.playing);
-  const active = !!radio;
-
-  return (
-    <div className="relative overflow-hidden rounded-2xl border border-foreground/[0.06] bg-gradient-to-br from-primary/40 via-primary/15 to-card p-7">
-      <div className="pointer-events-none absolute -right-16 -top-24 h-72 w-72 rounded-full bg-primary/40 blur-3xl motion-reduce:blur-none" />
-      <div className="pointer-events-none absolute -bottom-24 right-40 h-60 w-60 rounded-full bg-primary/25 blur-3xl motion-reduce:blur-none" />
-      <div className="relative flex items-center gap-6">
-        <button
-          type="button"
-          onClick={() => (active ? togglePlay() : void startWave())}
-          className="flex h-16 w-16 shrink-0 items-center justify-center rounded-full bg-foreground text-background shadow-xl transition-transform hover:scale-105"
-          aria-label="Моя волна"
-        >
-          {active && playing ? <Pause size={26} fill="currentColor" /> : <Play size={26} fill="currentColor" className="ml-1" />}
-        </button>
-        <div className="min-w-0 flex-1">
-          <div className="flex items-center gap-2 text-xs font-semibold uppercase tracking-wider text-foreground/70">
-            <Radio size={13} /> Моя волна
-          </div>
-          <div className="mt-1 truncate text-2xl font-bold tracking-tight">
-            {active && current ? `${current.title} — ${current.artist}` : 'Музыка, которая подстраивается под вас'}
-          </div>
-        </div>
-        <Link to="/wave" className="hidden text-sm font-medium text-foreground/80 hover:text-foreground md:block">
-          Настроить
-        </Link>
-      </div>
-    </div>
-  );
-}
 
 function ConnectYandexCard() {
   const queryClient = useQueryClient();
@@ -292,9 +258,12 @@ export function YandexHomePage() {
 
   return (
     <div className="space-y-10">
-      <h1 className="text-3xl font-bold tracking-tight">Яндекс Музыка</h1>
-
-      {yandex ? <WaveHero /> : <ConnectYandexCard />}
+      {yandex ? <WavePanel /> : (
+        <>
+          <h1 className="text-3xl font-bold tracking-tight">Яндекс Музыка</h1>
+          <ConnectYandexCard />
+        </>
+      )}
 
       {yandex && <PersonalShelves yandex />}
 

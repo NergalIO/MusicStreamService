@@ -63,7 +63,6 @@ export function AppShell() {
   }, [navigate]);
 
   const scrollKey = scrollRouteKey(location.pathname, location.search);
-  const fullBleed = location.pathname === '/wave';
 
   useEffect(() => {
     const el = scrollRef.current;
@@ -107,11 +106,7 @@ export function AppShell() {
                 <AnimatePresence mode="wait" initial={false}>
                   <motion.div
                     key={location.pathname}
-                    className={
-                      fullBleed
-                        ? 'min-h-full w-full'
-                        : 'mx-auto w-full max-w-7xl px-8 pb-16 pt-6'
-                    }
+                    className="mx-auto w-full max-w-7xl px-8 pb-16 pt-6"
                     initial={{ opacity: 0, y: 10 }}
                     animate={{ opacity: 1, y: 0, transition: { duration: 0.22, ease: [0.2, 0.8, 0.2, 1] } }}
                     exit={{ opacity: 0, y: -6, transition: { duration: 0.12, ease: 'easeIn' } }}

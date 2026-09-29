@@ -30,7 +30,7 @@ export function parseMssLink(url: string): { path: string; play?: { source: stri
     case 'artist':
       return { path: `/artist/${encodeURIComponent(parts[0] ?? '')}${parsed.search}` };
     case 'wave':
-      return { path: '/wave' };
+      return { path: '/yandex' };
     case 'search':
       return { path: `/media/search${parsed.search}` };
     case 'library': {

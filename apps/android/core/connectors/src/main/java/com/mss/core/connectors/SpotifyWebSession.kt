@@ -12,9 +12,13 @@ import android.webkit.WebViewClient
 import com.mss.core.datastore.TokenVault
 import javax.inject.Inject
 import javax.inject.Singleton
+import java.util.concurrent.ConcurrentHashMap
+import java.util.concurrent.atomic.AtomicInteger
+import kotlinx.coroutines.CompletableDeferred
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
+import kotlinx.coroutines.withTimeout
 import org.json.JSONObject
 
 data class SpotifyWebHeaders(
@@ -53,6 +57,8 @@ class SpotifyWebSession @Inject constructor(
 
     @Volatile private var hashes: Map<String, String> = emptyMap()
     private var loginAgent = false
+    private val httpIds = AtomicInteger()
+    private val httpWaiters = ConcurrentHashMap<String, CompletableDeferred<Pair<Int, String>>>()
 
     init {
         runCatching {
@@ -95,8 +101,8 @@ class SpotifyWebSession @Inject constructor(
         view.settings.builtInZoomControls = false
         view.settings.displayZoomControls = false
         view.settings.userAgentString = DESKTOP_UA
-        view.setBackgroundColor(android.graphics.Color.WHITE)
-        view.setLayerType(WebView.LAYER_TYPE_HARDWARE, null)
+        view.setBackgroundColor(android.graphics.Color.TRANSPARENT)
+        view.setLayerType(WebView.LAYER_TYPE_NONE, null)
         view.isHorizontalScrollBarEnabled = false
         view.addJavascriptInterface(JsBridge(), "MssSpotify")
         view.webViewClient = object : WebViewClient() {
@@ -169,6 +175,57 @@ class SpotifyWebSession @Inject constructor(
             delay(250)
         }
         return found ?: throw ConnectorException("Веб-плеер Spotify ещё загружается. Подождите пару секунд и повторите")
+    }
+
+    /**
+     * Запрос из страницы open.spotify.com: те же cookie, TLS и client-token, что у веб-плеера.
+     * Отдельный OkHttp Spotify отклоняет с 403.
+     */
+    suspend fun browserFetch(method: String, url: String, body: String? = null): Pair<Int, String> {
+        if (webView == null) throw ConnectorException("Веб-плеер Spotify ещё не открыт")
+        val headers = awaitHeaders()
+        val id = httpIds.incrementAndGet().toString()
+        val deferred = CompletableDeferred<Pair<Int, String>>()
+        httpWaiters[id] = deferred
+        val payload = JSONObject()
+            .put("id", id)
+            .put("method", method)
+            .put("url", url)
+            .put("authorization", headers.authorization)
+            .put("clientToken", headers.clientToken)
+            .put("appVersion", headers.appVersion)
+            .put("body", body ?: JSONObject.NULL)
+            .toString()
+        eval(
+            """
+            (async () => {
+              const req = JSON.parse(${JSONObject.quote(payload)});
+              try {
+                const res = await fetch(req.url, {
+                  method: req.method,
+                  credentials: 'include',
+                  headers: {
+                    accept: 'application/json',
+                    'content-type': 'application/json;charset=UTF-8',
+                    authorization: req.authorization,
+                    'client-token': req.clientToken,
+                    'spotify-app-version': req.appVersion,
+                    'app-platform': 'WebPlayer',
+                  },
+                  body: req.body == null ? undefined : req.body,
+                });
+                MssSpotify.onHttp(req.id, res.status, await res.text());
+              } catch (e) {
+                MssSpotify.onHttp(req.id, 0, String(e && e.message || e));
+              }
+            })();
+            """.trimIndent(),
+        )
+        return try {
+            withTimeout(25_000) { deferred.await() }
+        } finally {
+            httpWaiters.remove(id)
+        }
     }
 
     fun logout() {
@@ -309,6 +366,11 @@ class SpotifyWebSession @Inject constructor(
             val next = mutableMapOf<String, String>()
             parsed.keys().forEach { key -> next[key] = parsed.optString(key) }
             hashes = next
+        }
+
+        @JavascriptInterface
+        fun onHttp(id: String, status: Int, body: String) {
+            httpWaiters.remove(id)?.complete(status to body)
         }
 
         @JavascriptInterface

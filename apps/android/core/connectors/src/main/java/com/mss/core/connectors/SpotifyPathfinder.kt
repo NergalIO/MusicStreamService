@@ -9,16 +9,6 @@ import com.mss.core.model.UnifiedAlbum
 import com.mss.core.model.UnifiedArtist
 import com.mss.core.model.UnifiedPlaylist
 import com.mss.core.model.UnifiedTrack
-import io.ktor.client.HttpClient
-import io.ktor.client.engine.okhttp.OkHttp
-import io.ktor.client.request.get
-import io.ktor.client.request.header
-import io.ktor.client.request.post
-import io.ktor.client.request.setBody
-import io.ktor.client.statement.bodyAsText
-import io.ktor.http.ContentType
-import io.ktor.http.contentType
-import io.ktor.http.isSuccess
 import javax.inject.Inject
 import javax.inject.Singleton
 import kotlinx.serialization.json.Json
@@ -33,6 +23,7 @@ import kotlinx.serialization.json.contentOrNull
 import kotlinx.serialization.json.jsonArray
 import kotlinx.serialization.json.jsonObject
 import kotlinx.serialization.json.jsonPrimitive
+import kotlinx.coroutines.delay
 import kotlinx.serialization.json.put
 import kotlinx.serialization.json.putJsonObject
 
@@ -41,7 +32,6 @@ class SpotifyPathfinder @Inject constructor(
     private val web: SpotifyWebSession,
 ) {
     private val json = Json { ignoreUnknownKeys = true }
-    private val http = HttpClient(OkHttp)
 
     suspend fun searchTracks(query: String, limit: Int): List<UnifiedTrack> {
         val data = query(
@@ -189,18 +179,10 @@ class SpotifyPathfinder @Inject constructor(
     }
 
     suspend fun trackRadio(trackId: String): PlaylistWithTracks {
-        val headers = web.headers ?: throw ConnectorException("Войдите в Spotify через веб-плеер")
         val path = "/inspiredby-mix/v2/seed_to_playlist/spotify:track:${java.net.URLEncoder.encode(trackId, Charsets.UTF_8)}?response-format=json"
-        val res = http.get("https://spclient.wg.spotify.com$path") {
-            header("authorization", headers.authorization)
-            header("client-token", headers.clientToken)
-            header("spotify-app-version", headers.appVersion)
-            header("app-platform", "WebPlayer")
-        }
-        val text = res.bodyAsText()
-        if (!res.status.isSuccess()) {
-            if (res.status.value == 401) web.invalidateHeaders()
-            throw ConnectorException(if (res.status.value == 429) "Spotify просит подождать — повторите через минуту" else "У этого трека нет радио в Spotify")
+        val (status, text) = exchange("GET", "https://spclient.wg.spotify.com$path", null)
+        if (status !in 200..299) {
+            throw ConnectorException(if (status == 429) "Spotify просит подождать — повторите через минуту" else "У этого трека нет радио в Spotify")
         }
         val seed = json.parseToJsonElement(text).jsonObject
         val uri = seed.arr("mediaItems")?.firstOrNull()?.jsonObject?.str("uri")
@@ -211,8 +193,19 @@ class SpotifyPathfinder @Inject constructor(
     }
 
     private suspend fun query(name: String, variables: JsonObject): JsonObject {
-        val headers = web.headers ?: throw ConnectorException("Нет заголовков веб-плеера Spotify")
-        val hash = web.operationHash(name) ?: throw ConnectorException("Веб-плеер Spotify не знает запрос $name")
+        val hash = hashFor(name)
+        val (status, text) = post(name, variables, hash)
+        if (status == 400 && text.contains("PersistedQueryNotFound", true)) {
+            web.invalidateHashes()
+            val (againStatus, againText) = post(name, variables, hashFor(name))
+            if (againStatus !in 200..299) throw ConnectorException("Spotify pathfinder $againStatus")
+            return json.parseToJsonElement(againText).jsonObject
+        }
+        if (status !in 200..299) throw ConnectorException("Spotify pathfinder $status")
+        return json.parseToJsonElement(text).jsonObject
+    }
+
+    private suspend fun post(name: String, variables: JsonObject, hash: String): Pair<Int, String> {
         val body = buildJsonObject {
             put("variables", variables)
             put("operationName", name)
@@ -223,20 +216,24 @@ class SpotifyPathfinder @Inject constructor(
                 }
             }
         }
-        val res = http.post("https://api-partner.spotify.com/pathfinder/v2/query") {
-            header("authorization", headers.authorization)
-            header("client-token", headers.clientToken)
-            header("spotify-app-version", headers.appVersion)
-            header("app-platform", "WebPlayer")
-            contentType(ContentType.Application.Json)
-            setBody(body.toString())
+        return exchange("POST", "https://api-partner.spotify.com/pathfinder/v2/query", body.toString())
+    }
+
+    private suspend fun exchange(method: String, url: String, body: String?): Pair<Int, String> {
+        val first = web.browserFetch(method, url, body)
+        if (first.first != 401 && first.first != 403) return first
+        web.invalidateHeaders()
+        return web.browserFetch(method, url, body)
+    }
+
+    private suspend fun hashFor(name: String): String {
+        web.operationHash(name)?.let { return it }
+        web.invalidateHashes()
+        repeat(40) {
+            delay(250)
+            web.operationHash(name)?.let { return it }
         }
-        val text = res.bodyAsText()
-        if (!res.status.isSuccess()) {
-            if (text.contains("PersistedQueryNotFound", true)) web.invalidateHashes()
-            throw ConnectorException("Spotify pathfinder ${res.status.value}")
-        }
-        return json.parseToJsonElement(text).jsonObject
+        throw ConnectorException("Веб-плеер Spotify не знает запрос $name")
     }
 
     private fun mapTrack(d: JsonObject?): UnifiedTrack? {

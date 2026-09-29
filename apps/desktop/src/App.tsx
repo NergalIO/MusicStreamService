@@ -8,7 +8,7 @@ import {
   Routes,
   useParams,
 } from 'react-router-dom';
-import { libraryPath } from '@/lib/service-routes';
+import { libraryPath, YANDEX_HOME } from '@/lib/service-routes';
 import { Toaster } from 'sonner';
 import { AppShell } from '@/components/layout/AppShell';
 import { loadSession } from '@/lib/api';
@@ -28,7 +28,6 @@ import { SimilarPage } from '@/pages/SimilarPage';
 import { StatsPage } from '@/pages/StatsPage';
 import { SubscriptionPage } from '@/pages/SubscriptionPage';
 import { LobbyPage } from '@/pages/LobbyPage';
-import { WavePage } from '@/pages/WavePage';
 import { WrappedPage } from '@/pages/WrappedPage';
 
 function LegacyLibraryRedirect() {
@@ -107,7 +106,7 @@ function AppRoutes() {
           <Route path="/search" element={<Navigate to="/media/search" replace />} />
           <Route path="/media/library" element={<Navigate to="/media/library/likes" replace />} />
           <Route path="/media/library/:tab" element={<LibraryPage scope="media" />} />
-          <Route path="/wave" element={<WavePage />} />
+          <Route path="/wave" element={<Navigate to={YANDEX_HOME} replace />} />
           <Route path="/artist/:name" element={<ArtistPage />} />
           <Route path="/album/:source/:id" element={<AlbumPage />} />
           <Route path="/playlist/:source/:id" element={<ExternalPlaylistPage />} />

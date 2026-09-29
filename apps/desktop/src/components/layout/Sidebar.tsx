@@ -29,12 +29,10 @@ import { Dialog } from '@/components/ui/dialog';
 import { clearSession, loadSession } from '@/lib/api';
 import { lobbyPath } from '@/lib/lobby-route';
 import { leaveCurrentLobby } from '@/lib/lobby-session';
-import { useYandexConnected } from '@/lib/connectors';
 import { playlistPath } from '@/lib/links';
 import { libraryPath, MSS_HOME, searchPath, SPOTIFY_HOME, SPOTIFY_WEB, VK_HOME, YANDEX_HOME } from '@/lib/service-routes';
 import { useMssPlaylists, useSpotifyPlaylists, useVkPlaylists, useYandexPlaylists } from '@/lib/queries';
 import { cn } from '@/lib/utils';
-import { usePlayerStore } from '@/store/player-store';
 import { useSettingsStore } from '@/store/settings-store';
 import {
   isSidebarCategory,
@@ -282,8 +280,6 @@ function SidebarSearch() {
 
 export function Sidebar() {
   const navigate = useNavigate();
-  const yandex = useYandexConnected();
-  const radio = usePlayerStore((s) => s.radio);
   const email = loadSession()?.user.email;
   const preferCollapsed = useSettingsStore((s) => s.sidebarCollapsed);
   const setCollapsed = useSettingsStore((s) => s.setSidebarCollapsed);
@@ -350,7 +346,6 @@ export function Sidebar() {
 
           <CollapsibleSection id="yandex" title="Яндекс Музыка">
             <Item to={YANDEX_HOME} end icon={Home} label="Слушать сейчас" />
-            {yandex && <Item to="/wave" icon={Radio} label={radio ? 'Моя волна · играет' : 'Моя волна'} />}
             <Item to={libraryPath('yandex', 'likes')} icon={Heart} label="Мне нравится" />
             <Item to={libraryPath('yandex', 'artists')} icon={MicVocal} label="Любимые исполнители" />
             <Item to={libraryPath('yandex', 'playlists')} icon={ListMusic} label="Все плейлисты" />
