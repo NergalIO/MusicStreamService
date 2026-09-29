@@ -126,36 +126,15 @@ function volumeScript(fraction: number): string {
   })()`;
 }
 
-function fadeVolumeScript(from: number, to: number, durationMs: number): string {
-  return `(async () => {
-    ${DOM_HELPERS}
-    const gen = bumpVol();
-    const volume = q('[data-testid="volume-bar"] input[type="range"]');
-    if (!volume) return false;
-    const start = Date.now();
-    const duration = ${Math.round(durationMs)};
-    const from = ${from};
-    const to = ${to};
-    if (duration <= 0) {
-      setRange(volume, to);
-      return true;
-    }
-    while (window.__mssVolGen === gen) {
-      const t = Math.min(1, (Date.now() - start) / duration);
-      setRange(volume, from + (to - from) * t);
-      if (t >= 1) break;
-      await sleep(50);
-    }
-    return window.__mssVolGen === gen;
-  })()`;
-}
-
 let expectedTrackId: string | null = null;
 let expectedTitle: string | null = null;
 let lastState: DomState | null = null;
 let endedFor: string | null = null;
 let pollTimer: ReturnType<typeof setTimeout> | null = null;
-let volumeTimer: ReturnType<typeof setTimeout> | null = null;
+let volumeBusy = false;
+let pendingVolume: { percent: number; muted: boolean } | null = null;
+let fadeTimer: ReturnType<typeof setInterval> | null = null;
+let fadeGen = 0;
 let active = false;
 let playSeq = 0;
 let endLeadMs = END_EARLY_MS;
@@ -240,29 +219,68 @@ function clamp01(value: number): number {
   return Math.min(1, Math.max(0, value));
 }
 
+function cancelFade(): void {
+  fadeGen += 1;
+  if (fadeTimer) {
+    clearInterval(fadeTimer);
+    fadeTimer = null;
+  }
+}
+
 function setVolume(percent: number, muted: boolean): void {
+  cancelFade();
   setSpotifyWebMuted(muted);
-  void spotifyWebExec('window.__mssVolGen = (window.__mssVolGen || 0) + 1').catch(() => undefined);
-  if (volumeTimer) clearTimeout(volumeTimer);
-  volumeTimer = setTimeout(() => {
-    volumeTimer = null;
-    void spotifyWebExec(volumeScript(clamp01(percent / 100))).catch((e) =>
-      log.warn('spotify volume failed', e instanceof Error ? e.message : e),
-    );
-  }, 250);
+  pendingVolume = { percent, muted };
+  void flushVolume();
+}
+
+async function flushVolume(): Promise<void> {
+  if (volumeBusy) return;
+  const next = pendingVolume;
+  if (!next) return;
+  pendingVolume = null;
+  volumeBusy = true;
+  try {
+    await spotifyWebExec(volumeScript(clamp01(next.percent / 100)));
+  } catch (e) {
+    log.warn('spotify volume failed', e instanceof Error ? e.message : e);
+  } finally {
+    volumeBusy = false;
+    if (pendingVolume) void flushVolume();
+  }
 }
 
 async function fadeVolume(fromPercent: number, toPercent: number, durationMs: number): Promise<void> {
-  if (volumeTimer) {
-    clearTimeout(volumeTimer);
-    volumeTimer = null;
+  cancelFade();
+  const from = clamp01(fromPercent / 100);
+  const to = clamp01(toPercent / 100);
+  const ms = Number.isFinite(durationMs) ? Math.max(0, durationMs) : 0;
+  const push = (fraction: number) => {
+    pendingVolume = { percent: fraction * 100, muted: false };
+    void flushVolume();
+  };
+  if (ms <= 0) {
+    push(to);
+    return;
   }
-  try {
-    const ms = Number.isFinite(durationMs) ? Math.max(0, durationMs) : 0;
-    await spotifyWebExec(fadeVolumeScript(clamp01(fromPercent / 100), clamp01(toPercent / 100), ms));
-  } catch (e) {
-    log.warn('spotify fade failed', e instanceof Error ? e.message : e);
-  }
+  const gen = fadeGen;
+  const start = Date.now();
+  push(from);
+  await new Promise<void>((resolve) => {
+    fadeTimer = setInterval(() => {
+      if (gen !== fadeGen) {
+        resolve();
+        return;
+      }
+      const t = Math.min(1, (Date.now() - start) / ms);
+      push(from + (to - from) * t);
+      if (t >= 1) {
+        if (fadeTimer) clearInterval(fadeTimer);
+        fadeTimer = null;
+        resolve();
+      }
+    }, 50);
+  });
 }
 
 function setEndLead(ms: number): void {
@@ -279,8 +297,8 @@ async function stop(): Promise<void> {
   lastState = null;
   if (pollTimer) clearTimeout(pollTimer);
   pollTimer = null;
-  if (volumeTimer) clearTimeout(volumeTimer);
-  volumeTimer = null;
+  pendingVolume = null;
+  cancelFade();
   setSpotifyControlled(false);
   if (wasActive) {
     await spotifyWebExec('window.__mssVolGen = (window.__mssVolGen || 0) + 1').catch(() => undefined);
