@@ -7,7 +7,7 @@ import type {
   UnifiedTrack,
 } from '@mss/shared';
 import type { StreamConnector } from './types.js';
-import { VkClient, type VkClientOptions } from './vk-client.js';
+import { VkApiError, VkClient, type VkClientOptions } from './vk-client.js';
 import {
   artistsFromTracks,
   mapVkPlaylist,
@@ -34,6 +34,18 @@ interface VkList<T> {
 
 function isHls(url: string): boolean {
   return /m3u8(\?|$)/i.test(url);
+}
+
+async function collectUserAudio(client: VkClient, limit: number): Promise<VkAudio[]> {
+  const ownerId = client.userId;
+  try {
+    return await collectAudio(client, 'audio.get', ownerId ? { owner_id: ownerId } : {}, limit);
+  } catch (e) {
+    if (ownerId && e instanceof VkApiError && e.code === 8) {
+      return await collectAudio(client, 'audio.get', {}, limit);
+    }
+    throw e;
+  }
 }
 
 async function collectAudio(
@@ -119,13 +131,11 @@ export function createVkConnector(opts: VkConnectorOptions): VkConnector {
     },
     async getSavedTracks(limit: number): Promise<UnifiedTrack[]> {
       if (client.status !== 'connected') return [];
-      const ownerId = client.userId;
-      return (await collectAudio(client, 'audio.get', ownerId ? { owner_id: ownerId } : {}, limit)).map(mapVkTrack);
+      return (await collectUserAudio(client, limit)).map(mapVkTrack);
     },
     async getHomeTracks(limit: number): Promise<UnifiedTrack[]> {
       if (client.status !== 'connected') return [];
-      const ownerId = client.userId;
-      return (await collectAudio(client, 'audio.get', ownerId ? { owner_id: ownerId } : {}, limit)).map(mapVkTrack);
+      return (await collectUserAudio(client, limit)).map(mapVkTrack);
     },
     async listPlaylists(): Promise<UnifiedPlaylist[]> {
       if (client.status !== 'connected' || !client.userId) return [];

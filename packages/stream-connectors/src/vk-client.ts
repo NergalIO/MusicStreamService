@@ -7,12 +7,12 @@ import {
   checkQr,
   confirmQr,
   confirmSms,
+  connectAuthToKateToken,
   deviceIdFromVault,
   kateTokenFromAndroidToken,
-  materializeKateToken,
+  oauthPayloadFromRedirectUrl,
   oauthRedirectError,
   normalizeVkPhone,
-  parseKateOAuthRedirect,
   sendPhoneOtp,
   startQrSession,
   startVkIdSession,
@@ -136,6 +136,7 @@ export class VkClient {
   private authAbort: AbortController | null = null;
   private lastCall = 0;
   private tokens: StoredTokens | null = null;
+  private kateUpgradeAttempted = false;
 
   constructor(private readonly opts: VkClientOptions) {
     this.restore();
@@ -153,6 +154,7 @@ export class VkClient {
     this.tokens = null;
     this.status = 'disconnected';
     this.cachedAccount = null;
+    this.kateUpgradeAttempted = false;
     this.opts.vault.delete(VAULT_KEY);
     this.opts.vault.delete(ACCOUNT_KEY);
   }
@@ -175,7 +177,15 @@ export class VkClient {
         else if (method === 'sms') outcome = await this.loginWithSms(signal, error);
         else outcome = await this.loginWithPassword(signal, error);
         error = undefined;
-        if (outcome.kind === 'done') return;
+        if (outcome.kind === 'done') {
+          try {
+            await this.verifyAudioAccess(signal);
+          } catch (e) {
+            this.logout();
+            throw e;
+          }
+          return;
+        }
         method = outcome.method;
         error = outcome.error;
       }
@@ -264,19 +274,13 @@ export class VkClient {
       if (raced.kind === 'window') {
         const oauthErr = oauthRedirectError(raced.url);
         if (oauthErr) throw new VkAuthError(oauthErr);
-        const parsed = parseKateOAuthRedirect(raced.url);
-        if (parsed?.access_token) {
-          try {
-            this.saveTokens(await kateTokenFromAndroidToken(parsed.access_token, signal));
-            return { kind: 'done' };
-          } catch {
-            this.saveTokens(await materializeKateToken(parsed));
+        const connect = oauthPayloadFromRedirectUrl(raced.url);
+        if (connect) {
+          const token = await connectAuthToKateToken(connect, signal);
+          if (token) {
+            this.saveTokens(token);
             return { kind: 'done' };
           }
-        }
-        if (parsed) {
-          this.saveTokens(await materializeKateToken(parsed));
-          return { kind: 'done' };
         }
         throw new VkAuthError('Окно закрыто. Нажмите «Продолжить», чтобы открыть снова');
       }
@@ -594,7 +598,7 @@ export class VkClient {
           continue;
         }
         const vkId = await ensureSession();
-        const token = await confirmSms(vkId, { phone, sid, code, deviceId });
+        const token = await confirmSms(vkId, { phone, sid, code, deviceId }, signal);
         this.saveTokens(token);
         return { kind: 'done' };
       } catch (e) {
@@ -689,6 +693,35 @@ export class VkClient {
     throw new Error('Отменено');
   }
 
+  private async tryUpgradeKateToken(signal?: AbortSignal): Promise<boolean> {
+    if (this.kateUpgradeAttempted || !this.tokens?.access_token) return false;
+    this.kateUpgradeAttempted = true;
+    try {
+      const upgraded = await kateTokenFromAndroidToken(this.tokens.access_token, signal);
+      this.saveTokens(upgraded);
+      return true;
+    } catch {
+      return false;
+    }
+  }
+
+  /** После VK ID без обмена audio.* отвечает «Invalid request». */
+  private async verifyAudioAccess(signal?: AbortSignal): Promise<void> {
+    try {
+      await this.call('audio.search', { q: '.', count: 1, auto_complete: 0 });
+      return;
+    } catch (e) {
+      if (!(e instanceof VkApiError) || (e.code !== 8 && e.code !== 15)) throw e;
+      if (!(await this.tryUpgradeKateToken(signal))) {
+        throw new VkApiError(
+          e.code,
+          'VK выдал токен без доступа к музыке. Отключите VK в настройках и войдите снова (QR или пароль).',
+        );
+      }
+    }
+    await this.call('audio.search', { q: '.', count: 1, auto_complete: 0 });
+  }
+
   async fetchAccount(refresh = false): Promise<ExternalAccount | null> {
     if (this.status !== 'connected' || !this.tokens) return null;
     if (!refresh && this.cachedAccount) return this.cachedAccount;
@@ -743,7 +776,15 @@ export class VkClient {
           throw new VkApiError(14, 'VK запросил капчу. Отключите сервис и войдите снова');
         }
         if (code === 15 || code === 201 || code === 1133) {
+          if (method.startsWith('audio.') && await this.tryUpgradeKateToken()) continue;
           throw new VkApiError(code, 'VK отклонил доступ к аудио. Войдите заново — нужен клиент с правом audio');
+        }
+        if ((code === 8 || code === 113) && method.startsWith('audio.')) {
+          if (await this.tryUpgradeKateToken()) continue;
+          throw new VkApiError(
+            code,
+            'VK отклонил запрос к музыке. Отключите VK в настройках и войдите снова (QR или пароль).',
+          );
         }
         throw new VkApiError(code, msg || `Ошибка VK ${code}`);
       }

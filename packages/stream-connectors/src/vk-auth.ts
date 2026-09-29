@@ -438,13 +438,16 @@ export async function fetchUserId(accessToken: string): Promise<number> {
   return list[0].id;
 }
 
-export async function materializeKateToken(raw: {
-  access_token?: string;
-  user_id?: number;
-  silent_token?: string;
-  silent_token_uuid?: string;
-  uuid?: string;
-}): Promise<VkTokenResponse> {
+export async function materializeKateToken(
+  raw: {
+    access_token?: string;
+    user_id?: number;
+    silent_token?: string;
+    silent_token_uuid?: string;
+    uuid?: string;
+  },
+  signal?: AbortSignal,
+): Promise<VkTokenResponse> {
   if (raw.access_token) {
     const userId = raw.user_id && raw.user_id > 0 ? raw.user_id : await fetchUserId(raw.access_token);
     return asToken(raw.access_token, userId);
@@ -452,7 +455,12 @@ export async function materializeKateToken(raw: {
   if (raw.silent_token) {
     const uuid = raw.silent_token_uuid || raw.uuid;
     if (!uuid) throw new VkAuthError('VK не вернул uuid silent-токена');
-    return exchangeSilentToken(raw.silent_token, uuid);
+    const exchanged = await exchangeSilentToken(raw.silent_token, uuid);
+    try {
+      return await kateTokenFromAndroidToken(exchanged.access_token, signal);
+    } catch {
+      return exchanged;
+    }
   }
   throw new VkAuthError('VK не вернул токен сессии');
 }
@@ -640,22 +648,36 @@ async function postLoginAct(
   }
 }
 
-async function tokenFromConnectSuccess(parsed: ConnectAuthSuccess, signal?: AbortSignal): Promise<VkTokenResponse | null> {
-  if (parsed.silentToken) {
-    return materializeKateToken({
-      silent_token: parsed.silentToken,
-      silent_token_uuid: parsed.silentUuid,
-      uuid: parsed.silentUuid,
-    });
-  }
+/** Токен VK ID / connect_authorize → Kate Mobile (иначе audio.* отвечает Invalid request). */
+export async function connectAuthToKateToken(
+  parsed: ConnectAuthSuccess,
+  signal?: AbortSignal,
+): Promise<VkTokenResponse | null> {
   if (parsed.accessToken) {
     try {
       return await kateTokenFromAndroidToken(parsed.accessToken, signal);
     } catch {
-      return materializeKateToken({ access_token: parsed.accessToken, user_id: parsed.userId });
+      /* ниже silent или повтор materialize */
     }
   }
+  if (parsed.silentToken) {
+    return materializeKateToken(
+      {
+        silent_token: parsed.silentToken,
+        silent_token_uuid: parsed.silentUuid,
+        uuid: parsed.silentUuid,
+      },
+      signal,
+    );
+  }
+  if (parsed.accessToken) {
+    return materializeKateToken({ access_token: parsed.accessToken, user_id: parsed.userId }, signal);
+  }
   return null;
+}
+
+async function tokenFromConnectSuccess(parsed: ConnectAuthSuccess, signal?: AbortSignal): Promise<VkTokenResponse | null> {
+  return connectAuthToKateToken(parsed, signal);
 }
 
 async function exchangeSuperAppWithApp(
@@ -970,6 +992,7 @@ export function parseConnectAuthorize(json: Json): ConnectAuthSuccess {
 export async function confirmSms(
   session: VkIdSession,
   opts: { phone: string; sid: string; code: string; deviceId: string; password?: string },
+  signal?: AbortSignal,
 ): Promise<VkTokenResponse> {
   const json = await vkIdRequest(
     `${LOGIN_URL}?act=connect_authorize`,
@@ -987,15 +1010,12 @@ export async function confirmSms(
       code: opts.code,
     },
     session.cookies,
+    signal,
   );
   const parsed = parseConnectAuthorize(json);
-  return materializeKateToken({
-    access_token: parsed.accessToken,
-    user_id: parsed.userId,
-    silent_token: parsed.silentToken,
-    silent_token_uuid: parsed.silentUuid,
-    uuid: session.uuid,
-  });
+  const token = await connectAuthToKateToken(parsed, signal);
+  if (!token) throw new VkAuthError('VK не вернул токен после SMS');
+  return token;
 }
 
 export async function exchangeSilentToken(silentToken: string, uuid: string): Promise<VkTokenResponse> {
