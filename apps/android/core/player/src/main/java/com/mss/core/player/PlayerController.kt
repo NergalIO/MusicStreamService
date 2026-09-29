@@ -95,6 +95,12 @@ class PlayerController @Inject constructor(
     private var playGen = 0
     private var consecutiveErrors = 0
     private var awaitingStart = false
+    /** После команды веб-плеер отвечает не сразу: до этого момента верим своему состоянию, а не старому DOM. */
+    private var commandHoldUntil = 0L
+    private var endedGen = -1
+    private var seekTarget: Long? = null
+    /** Пока веб-плеер переключается на новый трек, в DOM ещё старый — его позицию и конец не учитываем. */
+    private var spotifyStarting = false
 
     init {
         listOf(exoA, exoB).forEach { player ->
@@ -127,6 +133,13 @@ class PlayerController @Inject constructor(
         scope.launch {
             state.collect { nowPlaying.publish(it) }
         }
+        scope.launch {
+            spotifyWeb.dom.collect { if (usingSpotify && tickJob?.isActive == true) tickProgress() }
+        }
+    }
+
+    private fun holdCommand() {
+        commandHoldUntil = android.os.SystemClock.elapsedRealtime() + COMMAND_HOLD_MS
     }
 
     fun exoPlayer(): ExoPlayer = active
@@ -205,12 +218,19 @@ class PlayerController @Inject constructor(
     fun pause() {
         awaitingStart = false
         playGen += 1
-        if (usingSpotify) spotifyWeb.pause() else active.pause()
+        spotifyStarting = false
+        if (usingSpotify) {
+            holdCommand()
+            spotifyWeb.pause()
+        } else {
+            active.pause()
+        }
         _state.value = _state.value.copy(playing = false)
     }
 
     fun resume() {
         if (usingSpotify) {
+            holdCommand()
             awaitingStart = true
             spotifyWeb.wake()
             spotifyWeb.resume()
@@ -253,7 +273,13 @@ class PlayerController @Inject constructor(
     }
 
     fun seekTo(ms: Long) {
-        if (usingSpotify) spotifyWeb.seek(ms) else active.seekTo(ms)
+        if (usingSpotify) {
+            holdCommand()
+            seekTarget = ms
+            spotifyWeb.seek(ms)
+        } else {
+            active.seekTo(ms)
+        }
         _state.value = _state.value.copy(positionMs = ms)
     }
 
@@ -298,7 +324,7 @@ class PlayerController @Inject constructor(
         val pos = _state.value.positionMs
         usingSpotify = true
         silenceExo()
-        scope.launch { spotifyWeb.play(track.id, pos) }
+        scope.launch { spotifyWeb.play(track.id, pos, fast = preferences.loadPlaybackSettings().spotifyFastStart) }
     }
 
     fun tickProgress() {
@@ -308,17 +334,30 @@ class PlayerController @Inject constructor(
         if (usingSpotify) {
             val d = spotifyWeb.dom.value
             val fallbackDur = _state.value.current?.durationMs ?: 0L
-            if (awaitingStart && !d.playing) {
-                pos = d.positionMs.takeIf { it > 0 } ?: _state.value.positionMs
-                dur = d.durationMs.takeIf { it > 0 } ?: fallbackDur
+            val holding = android.os.SystemClock.elapsedRealtime() < commandHoldUntil
+            val wanted = _state.value.playing
+            val target = seekTarget
+            if (target != null && (!holding || kotlin.math.abs(d.positionMs - target) < 2_000)) seekTarget = null
+            dur = d.durationMs.takeIf { it > 0 } ?: fallbackDur
+            if (spotifyStarting) {
+                pos = _state.value.positionMs
                 playing = true
+            } else if (awaitingStart && !d.playing) {
+                pos = d.positionMs.takeIf { it > 0 } ?: _state.value.positionMs
+                playing = true
+            } else if (holding && d.playing != wanted) {
+                pos = _state.value.positionMs
+                playing = wanted
             } else {
                 if (d.playing) awaitingStart = false
-                pos = d.positionMs
-                dur = d.durationMs.takeIf { it > 0 } ?: fallbackDur
+                pos = if (seekTarget != null) _state.value.positionMs else d.positionMs
                 playing = d.playing
             }
-            if (d.ready && dur > 0 && pos >= dur - 900 && playing) onEnded()
+            if (d.ready && dur > 0 && pos >= dur - 900 && playing && endedGen != playGen) {
+                endedGen = playGen
+                onEnded()
+                return
+            }
         } else {
             pos = active.currentPosition
             dur = active.duration.coerceAtLeast(0)
@@ -333,6 +372,9 @@ class PlayerController @Inject constructor(
         if (dur > 0 && dur - pos <= 30_000 && !preloadedNext) {
             preloadedNext = true
             preloadNext()
+            queue.getOrNull(index + 1)
+                ?.takeIf { usingSpotify && it.source == SourceId.SPOTIFY && _state.value.repeat != RepeatMode.ONE && !_state.value.shuffle }
+                ?.let { spotifyWeb.prefetch(it.id) }
         }
         maybeLoadWave()
     }
@@ -378,7 +420,12 @@ class PlayerController @Inject constructor(
                     usingSpotify = true
                     silenceExo()
                     spotifyWeb.wake()
-                    runCatching { spotifyWeb.play(resolved.trackId) }
+                    spotifyStarting = true
+                    _state.value = _state.value.copy(positionMs = 0)
+                    val fast = preferences.loadPlaybackSettings().spotifyFastStart
+                    val result = runCatching { spotifyWeb.play(resolved.trackId, fast = fast) }
+                    if (gen == playGen) spotifyStarting = false
+                    result
                         .onSuccess {
                             if (gen != playGen) return@launch
                             val d = spotifyWeb.dom.value
@@ -622,5 +669,9 @@ class PlayerController @Inject constructor(
             }
             set(eq)
         }
+    }
+
+    private companion object {
+        const val COMMAND_HOLD_MS = 1_500L
     }
 }

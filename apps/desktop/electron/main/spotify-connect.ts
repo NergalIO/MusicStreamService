@@ -1,10 +1,19 @@
 import { BrowserWindow, ipcMain } from 'electron';
 import { log } from './logger.js';
-import { isSpotifyWebAudible, setSpotifyControlled, setSpotifyWebMuted, spotifyWebExec } from './spotify-web-session.js';
+import {
+  currentSpotifyWebHeaders,
+  isSpotifyWebAudible,
+  onSpotifyPageMessage,
+  setSpotifyControlled,
+  setSpotifyWebMuted,
+  spotifyConnectDeviceUrls,
+  spotifyWebExec,
+} from './spotify-web-session.js';
 
 /**
  * MSS ведёт встроенный веб-плеер Spotify через его же интерфейс: страница трека + кнопки,
- * слайдеры прогресса и громкости. Web API / Connect здесь не нужны — они отвечают 429 токену веб-плеера.
+ * слайдеры прогресса и громкости. Публичный Web API отвечает 429 токену веб-плеера, поэтому
+ * быстрый старт (тестовая функция) шлёт команду во внутренний connect-state, как сам веб-плеер.
  */
 
 const POLL_PLAYING_MS = 1000;
@@ -52,6 +61,7 @@ interface DomState {
   positionMs: number;
   durationMs: number;
   trackTitle?: string;
+  remoteName?: string | null;
 }
 
 const DOM_HELPERS = `
@@ -88,48 +98,169 @@ const DOM_HELPERS = `
   };
 `;
 
-function playScript(trackId: string, positionMs: number): string {
+/**
+ * Шлёт состояние плеера в main сразу при изменении нижней панели (console.debug с префиксом `__mss:state:`),
+ * чтобы пауза/запуск отражались в MSS без ожидания опроса. Ставится один раз на страницу.
+ */
+const STATE_OBSERVER = `
+  (function(){
+    if (window.__mssObserver) return;
+    const pick = () => document.querySelector('[data-testid="now-playing-bar"]') || document.querySelector('footer');
+    let last = '';
+    let queued = false;
+    const push = () => {
+      queued = false;
+      const s = readState();
+      const key = JSON.stringify(s);
+      if (key === last) return;
+      last = key;
+      console.debug('__mss:state:' + key);
+    };
+    const schedule = () => {
+      if (queued) return;
+      queued = true;
+      setTimeout(push, 16);
+    };
+    let bar = null;
+    const obs = new MutationObserver(schedule);
+    const attach = () => {
+      const next = pick();
+      if (!next || next === bar) return;
+      obs.disconnect();
+      bar = next;
+      obs.observe(bar, { subtree: true, childList: true, characterData: true, attributes: true, attributeFilter: ['aria-label', 'value', 'max'] });
+      schedule();
+    };
+    window.__mssObserver = obs;
+    attach();
+    setInterval(attach, 1000);
+  })();
+`;
+
+interface FastAuth {
+  authorization: string;
+  clientToken: string;
+  appVersion: string;
+  devices: string[];
+}
+
+/**
+ * Быстрый старт: команда «play» в Spotify Connect от этого веб-плеера самому себе — тот же канал,
+ * которым веб-плеер управляет устройствами. false — что-то не сошлось, дальше работает обычный путь.
+ */
+const FAST_PLAY = `
+  const fastPlay = async (auth, trackId, positionMs) => {
+    const devices = [];
+    const add = (url) => {
+      const m = String(url).match(/(https:\\/\\/[^\\/]+)\\/connect-state\\/v1\\/devices\\/(hobs_[0-9a-f]{16,})/);
+      if (!m) return;
+      const i = devices.findIndex((d) => d.id === m[2]);
+      if (i >= 0) devices.splice(i, 1);
+      devices.push({ origin: m[1], id: m[2] });
+    };
+    (auth.devices || []).forEach(add);
+    performance.getEntriesByType('resource').forEach((e) => add(e.name));
+    const dev = devices[devices.length - 1];
+    if (!dev) return false;
+    const before = readState();
+    const uri = 'spotify:track:' + trackId;
+    const res = await fetch(dev.origin + '/connect-state/v1/player/command/from/' + dev.id + '/to/' + dev.id, {
+      method: 'POST',
+      headers: {
+        authorization: auth.authorization,
+        'client-token': auth.clientToken,
+        'spotify-app-version': auth.appVersion,
+        'app-platform': 'WebPlayer',
+        'content-type': 'application/json',
+      },
+      body: JSON.stringify({
+        command: {
+          context: { uri, url: 'context://' + uri, metadata: {} },
+          play_origin: { feature_identifier: 'harmony', feature_version: auth.appVersion || '' },
+          options: { skip_to: { track_uri: uri }, seek_to: positionMs, player_options_override: {} },
+          logging_params: { command_id: Math.random().toString(16).slice(2) + Date.now().toString(16) },
+          endpoint: 'play',
+        },
+      }),
+    });
+    if (!res.ok) return false;
+    for (let t = 0; t < 5000; t += 80) {
+      const s = readState();
+      const restarted = s.positionMs < positionMs + 3000 && (!before.playing || before.positionMs > positionMs + 3000);
+      if (!s.ad && s.playing && (s.title !== before.title || restarted)) return true;
+      await sleep(80);
+    }
+    return false;
+  };
+`;
+
+function playScript(trackId: string, positionMs: number, fast: FastAuth | null): string {
   return `(async () => {
     ${DOM_HELPERS}
-    for (let i = 0; i < 80 && !q('[data-testid="control-button-playpause"]'); i++) await sleep(250);
+    ${DEVICE_HELPERS}
+    ${STATE_OBSERVER}
+    const tick = 80;
+    const waitFor = async (ms, ok) => {
+      for (let t = 0; t < ms; t += tick) {
+        if (ok()) return true;
+        await sleep(tick);
+      }
+      return !!ok();
+    };
+    await waitFor(20000, () => q('[data-testid="control-button-playpause"]'));
     if (!q('[data-testid="control-button-playpause"]')) throw new Error('Веб-плеер Spotify не загрузился');
+    const target = ${Math.round(positionMs)};
+    const fast = ${JSON.stringify(fast)};
+    ${FAST_PLAY}
+    if (fast && await fastPlay(fast, ${JSON.stringify(trackId)}, target).catch(() => false)) {
+      const state = readState();
+      state.trackTitle = state.title;
+      state.remoteName = remoteFromBar();
+      return state;
+    }
     const path = '/track/${trackId}';
     if (location.pathname !== path) {
       const before = q('main h1')?.textContent || '';
       history.pushState({}, '', path);
       dispatchEvent(new PopStateEvent('popstate', { state: {} }));
-      for (let i = 0; i < 20 && (q('main h1')?.textContent || '') === before; i++) await sleep(250);
+      await waitFor(5000, () => (q('main h1')?.textContent || '') !== before);
     }
     let button = null;
     let heading = '';
-    for (let i = 0; i < 80; i++) {
-      await sleep(250);
+    await waitFor(20000, () => {
       heading = (q('main h1')?.textContent || '').trim();
       button = q('main [data-testid="action-bar-row"] [data-testid="play-button"]');
-      if (button && heading && location.pathname === path) break;
-      button = null;
-    }
-    if (!button) throw new Error('Не удалось открыть трек в веб-плеере Spotify');
-    ${DEVICE_HELPERS}
+      return !!(button && heading && location.pathname === path);
+    });
+    if (!button || location.pathname !== path) throw new Error('Не удалось открыть трек в веб-плеере Spotify');
     if (!(await transferHere())) {
       throw new Error('Spotify играет на устройстве «' + (remoteFromBar() || 'другом') + '» — выберите MSS в списке устройств');
     }
     if (!isPauseLabel(button)) button.click();
-    for (let i = 0; i < 40; i++) {
-      await sleep(250);
+    await waitFor(10000, () => {
       const s = readState();
-      if (s.playing && (s.title === heading || s.ad)) break;
-    }
+      return s.playing && (s.title === heading || s.ad);
+    });
     const state = readState();
     if (!state.ad && state.title !== heading) throw new Error('Spotify не запустил трек — проверьте веб-плеер (Spotify → Веб-плеер)');
     state.trackTitle = heading;
-    const target = ${Math.round(positionMs)};
     if (!state.ad && Math.abs(state.positionMs - target) > 2000) {
       const progress = q('[data-testid="playback-progressbar"] input[type="range"]');
       if (progress) setRange(progress, target);
       state.positionMs = target;
     }
+    state.remoteName = remoteFromBar();
     return state;
+  })()`;
+}
+
+function prefetchScript(trackId: string): string {
+  return `(() => {
+    const path = '/track/${trackId}';
+    if (location.pathname === path || !document.querySelector('[data-testid="control-button-playpause"]')) return false;
+    history.pushState({}, '', path);
+    dispatchEvent(new PopStateEvent('popstate', { state: {} }));
+    return true;
   })()`;
 }
 
@@ -138,6 +269,7 @@ const STATE_SCRIPT = `(() => { ${DOM_HELPERS} return readState(); })()`;
 function clickPlayPauseScript(wantPlaying: boolean): string {
   return `(() => {
     ${DOM_HELPERS}
+    ${STATE_OBSERVER}
     const button = q('[data-testid="control-button-playpause"]');
     if (!button) throw new Error('Веб-плеер Spotify не загрузился');
     if (isPauseLabel(button) !== ${wantPlaying}) button.click();
@@ -215,28 +347,47 @@ function emitConnectState(s: DomState): SpotifyConnectState {
   return payload;
 }
 
+/** Разбирает состояние страницы (из опроса или от наблюдателя) и возвращает, через сколько опросить снова. */
+function handleState(s: DomState): number {
+  const prev = lastState;
+  lastState = s;
+  const ours = !!expectedTitle && s.title === expectedTitle;
+  const left = s.durationMs - s.positionMs;
+  if (!s.ad) {
+    if (ours && s.playing && s.durationMs > 0 && left <= endLeadMs) {
+      emitEnded();
+    } else if (!ours && prev?.ad && expectedTitle && s.title !== expectedTitle) {
+      emitEnded();
+    } else if (!ours && prev?.title === expectedTitle && prev.durationMs - prev.positionMs < 5000) {
+      emitEnded();
+    }
+  }
+  emitConnectState(s);
+  if (s.ad) return POLL_NEAR_END_MS;
+  if (s.playing) return left > 0 && left < 4000 ? POLL_NEAR_END_MS : POLL_PLAYING_MS;
+  return POLL_PAUSED_MS;
+}
+
+let starting = false;
+
+function onPageMessage(message: string): void {
+  if (!active || starting || !expectedTitle || !message.startsWith('__mss:state:')) return;
+  let s: DomState;
+  try {
+    s = JSON.parse(message.slice('__mss:state:'.length)) as DomState;
+  } catch {
+    return;
+  }
+  const next = handleState(s);
+  if (next === POLL_NEAR_END_MS) schedulePoll(next);
+}
+
 async function poll(): Promise<void> {
   pollTimer = null;
   if (!active) return;
   let next = POLL_PAUSED_MS;
   try {
-    const s = await spotifyWebExec<DomState>(STATE_SCRIPT);
-    const prev = lastState;
-    lastState = s;
-    const ours = !!expectedTitle && s.title === expectedTitle;
-    const left = s.durationMs - s.positionMs;
-    if (!s.ad) {
-      if (ours && s.playing && s.durationMs > 0 && left <= endLeadMs) {
-        emitEnded();
-      } else if (!ours && prev?.ad && expectedTitle && s.title !== expectedTitle) {
-        emitEnded();
-      } else if (!ours && prev?.title === expectedTitle && prev.durationMs - prev.positionMs < 5000) {
-        emitEnded();
-      }
-    }
-    emitConnectState(s);
-    if (s.ad) next = POLL_NEAR_END_MS;
-    else if (s.playing) next = left > 0 && left < 4000 ? POLL_NEAR_END_MS : POLL_PLAYING_MS;
+    next = handleState(await spotifyWebExec<DomState>(STATE_SCRIPT));
   } catch (e) {
     log.warn('spotify web player poll failed', e instanceof Error ? e.message : e);
   }
@@ -389,38 +540,48 @@ async function readDevices(): Promise<SpotifyDeviceStatus> {
   }
 }
 
-async function remoteAfterPlay(fallback: SpotifyPlayResult): Promise<SpotifyPlayResult> {
-  if (!isSpotifyWebAudible()) await new Promise((r) => setTimeout(r, 900));
-  const status = await readDevices();
-  if (!status.remoteName) return { ...fallback, remoteDevice: null };
-  return { ...fallback, playing: false, remoteDevice: status.remoteName };
+/** Имя чужого устройства берём из строки «Playing on …», которую вернул сценарий запуска, — без открытия панели устройств. */
+function remoteAfterPlay(fallback: SpotifyPlayResult, remoteName: string | null | undefined): SpotifyPlayResult {
+  const remote = remoteName && !isSpotifyWebAudible() ? remoteName : null;
+  publishDevices({ ...lastDevices, remoteName: remote });
+  if (!remote) return { ...fallback, remoteDevice: null };
+  return { ...fallback, playing: false, remoteDevice: remote };
 }
 
-async function play(trackId: string, positionMs = 0): Promise<SpotifyPlayResult | undefined> {
+function fastAuth(fast: boolean): FastAuth | null {
+  const headers = fast ? currentSpotifyWebHeaders() : null;
+  return headers ? { ...headers, devices: spotifyConnectDeviceUrls() } : null;
+}
+
+async function play(trackId: string, positionMs = 0, fast = false): Promise<SpotifyPlayResult | undefined> {
   if (!/^[A-Za-z0-9]{10,40}$/.test(trackId)) throw new Error('Некорректный id трека Spotify');
   return withSpotifyPage(async () => {
     const seq = ++playSeq;
     active = true;
+    starting = true;
     setSpotifyControlled(true);
     expectedTrackId = trackId;
     expectedTitle = null;
     endedFor = null;
     lastState = null;
     try {
-      const state = await spotifyWebExec<DomState>(playScript(trackId, positionMs));
+      const state = await spotifyWebExec<DomState>(playScript(trackId, positionMs, fastAuth(fast)));
       if (seq !== playSeq) return;
       expectedTitle = state.trackTitle || state.title;
       lastState = state;
       const sent = emitConnectState(state);
       schedulePoll(state.ad ? 250 : 600);
-      return remoteAfterPlay({
-        ad: sent.ad,
-        adTitle: sent.adTitle,
-        playing: sent.playing,
-        positionMs: sent.positionMs,
-        durationMs: sent.durationMs,
-        remoteDevice: null,
-      });
+      return remoteAfterPlay(
+        {
+          ad: sent.ad,
+          adTitle: sent.adTitle,
+          playing: sent.playing,
+          positionMs: sent.positionMs,
+          durationMs: sent.durationMs,
+          remoteDevice: null,
+        },
+        state.remoteName,
+      );
     } catch (e) {
       if (seq !== playSeq) return;
       const status = await readDevices();
@@ -436,8 +597,15 @@ async function play(trackId: string, positionMs = 0): Promise<SpotifyPlayResult 
         };
       }
       throw e;
+    } finally {
+      if (seq === playSeq) starting = false;
     }
   });
+}
+
+async function prefetch(trackId: string): Promise<void> {
+  if (!active || starting || !/^[A-Za-z0-9]{10,40}$/.test(trackId)) return;
+  await withSpotifyPage(() => spotifyWebExec<boolean>(prefetchScript(trackId))).catch(() => undefined);
 }
 
 async function setPlaying(playing: boolean): Promise<void> {
@@ -553,6 +721,7 @@ async function stop(): Promise<void> {
   const wasActive = active;
   playSeq++;
   active = false;
+  starting = false;
   expectedTrackId = null;
   expectedTitle = null;
   lastState = null;
@@ -568,7 +737,11 @@ async function stop(): Promise<void> {
 }
 
 export function registerSpotifyConnectIpc(): void {
-  ipcMain.handle('spotify-connect:play', (_e, trackId: string, positionMs?: number) => play(trackId, positionMs));
+  onSpotifyPageMessage(onPageMessage);
+  ipcMain.handle('spotify-connect:play', (_e, trackId: string, positionMs?: number, fast?: boolean) =>
+    play(trackId, positionMs, !!fast),
+  );
+  ipcMain.handle('spotify-connect:prefetch', (_e, trackId: string) => prefetch(trackId));
   ipcMain.handle('spotify-connect:pause', () => setPlaying(false));
   ipcMain.handle('spotify-connect:resume', () => setPlaying(true));
   ipcMain.handle('spotify-connect:seek', (_e, positionMs: number) => seek(positionMs));

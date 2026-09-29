@@ -48,8 +48,38 @@ function header(headers: Record<string, string>, name: string): string | undefin
   return key ? headers[key] : undefined;
 }
 
+const CONNECT_DEVICE_RE = /https:\/\/[^/]+\/connect-state\/v1\/devices\/hobs_[0-9a-f]{16,}/;
+const connectDeviceUrls: string[] = [];
+const pageMessageListeners = new Set<(message: string) => void>();
+
+/** Адреса connect-state этого веб-плеера (последний — актуальный): по ним быстрый старт узнаёт свой id устройства. */
+export function spotifyConnectDeviceUrls(): string[] {
+  return [...connectDeviceUrls];
+}
+
+/** Текущие заголовки веб-плеера без ожидания; null, если он ещё не делал запросов. */
+export function currentSpotifyWebHeaders(): SpotifyWebHeaders | null {
+  return webHeaders ? { authorization: webHeaders.authorization, clientToken: webHeaders.clientToken, appVersion: webHeaders.appVersion } : null;
+}
+
+/** Сообщения страницы веб-плеера через console.debug с префиксом — канал «страница → main» без preload. */
+export function onSpotifyPageMessage(listener: (message: string) => void): () => void {
+  pageMessageListeners.add(listener);
+  return () => pageMessageListeners.delete(listener);
+}
+
+function rememberDeviceUrl(url: string): void {
+  const hit = url.match(CONNECT_DEVICE_RE)?.[0];
+  if (!hit) return;
+  const i = connectDeviceUrls.indexOf(hit);
+  if (i >= 0) connectDeviceUrls.splice(i, 1);
+  connectDeviceUrls.push(hit);
+  if (connectDeviceUrls.length > 8) connectDeviceUrls.shift();
+}
+
 function watchPlayerRequests(target: Session): void {
   target.webRequest.onBeforeSendHeaders({ urls: ['https://*.spotify.com/*'] }, (details, callback) => {
+    rememberDeviceUrl(details.url);
     const headers = details.requestHeaders;
     const authorization = header(headers, 'authorization');
     const clientToken = header(headers, 'client-token');
@@ -216,6 +246,11 @@ function configureWebContents(wc: WebContents, opts: { media: boolean }): void {
     configureWebContents(child.webContents, { media: false });
   });
   if (!opts.media) return;
+  wc.on('console-message', (event: unknown, _level?: unknown, legacyMessage?: unknown) => {
+    const message = (event as { message?: unknown })?.message ?? legacyMessage;
+    if (typeof message !== 'string' || !message.startsWith('__mss:')) return;
+    for (const listener of pageMessageListeners) listener(message);
+  });
   wc.on('media-started-playing', () => {
     sendToRenderer('spotify-session:media', { playing: true });
   });

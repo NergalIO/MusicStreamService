@@ -709,6 +709,16 @@ export function SettingsPage() {
 
       <DownloadsSection />
 
+      <Section title="Тестовые функции" footer="Могут работать нестабильно — при сбое отключите.">
+        <Row title="Быстрый старт Spotify" subtitle="Трек запускается одной командой Spotify, без переходов в веб-плеере">
+          <Switch
+            checked={settings.spotifyFastStart}
+            onChange={settings.setSpotifyFastStart}
+            label="Быстрый старт Spotify"
+          />
+        </Row>
+      </Section>
+
       <SystemSection />
 
       <DiscordSection />

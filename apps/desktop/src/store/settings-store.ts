@@ -35,6 +35,8 @@ interface SettingsState {
   outputDeviceId: string;
   visualizer: boolean;
   miniVisualizer: boolean;
+  /** Тестовая функция: трек Spotify запускается одной командой Spotify Connect, без переходов в веб-плеере. */
+  spotifyFastStart: boolean;
   setQuality: (quality: Quality) => void;
   setDownloadQuality: (quality: Quality) => void;
   setDownloadCompression: (value: DownloadCompression) => void;
@@ -46,6 +48,7 @@ interface SettingsState {
   setOutputDeviceId: (id: string) => void;
   setVisualizer: (on: boolean) => void;
   setMiniVisualizer: (on: boolean) => void;
+  setSpotifyFastStart: (on: boolean) => void;
   setTheme: (theme: ThemeMode) => void;
   setAccent: (accent: AccentId) => void;
   setSidebarCollapsed: (collapsed: boolean) => void;
@@ -71,6 +74,7 @@ export const useSettingsStore = create<SettingsState>()(
       outputDeviceId: '',
       visualizer: true,
       miniVisualizer: false,
+      spotifyFastStart: true,
       setQuality: (quality) => set({ quality }),
       setDownloadQuality: (downloadQuality) => set({ downloadQuality }),
       setDownloadCompression: (downloadCompression) => set({ downloadCompression }),
@@ -82,6 +86,7 @@ export const useSettingsStore = create<SettingsState>()(
       setOutputDeviceId: (outputDeviceId) => set({ outputDeviceId }),
       setVisualizer: (visualizer) => set({ visualizer }),
       setMiniVisualizer: (miniVisualizer) => set({ miniVisualizer }),
+      setSpotifyFastStart: (spotifyFastStart) => set({ spotifyFastStart }),
       setTheme: (theme) => set({ theme }),
       setAccent: (accent) => set({ accent }),
       setSidebarCollapsed: (sidebarCollapsed) => set({ sidebarCollapsed }),

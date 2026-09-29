@@ -272,10 +272,18 @@ private fun MainShell(vm: MssViewModel, nav: NavHostController) {
                                 NavigationBarItem(
                                     selected = selected,
                                     onClick = {
-                                        nav.navigate(r) {
-                                            popUpTo(nav.graph.findStartDestination().id) { saveState = true }
-                                            launchSingleTop = true
-                                            restoreState = true
+                                        if (r == Routes.HOME) {
+                                            val startId = nav.graph.findStartDestination().id
+                                            if (!nav.popBackStack(startId, inclusive = false)) {
+                                                nav.navigate(Routes.HOME) { launchSingleTop = true }
+                                            }
+                                            nav.clearBackStack(Routes.HOME)
+                                        } else {
+                                            nav.navigate(r) {
+                                                popUpTo(nav.graph.findStartDestination().id) { saveState = true }
+                                                launchSingleTop = true
+                                                restoreState = true
+                                            }
                                         }
                                     },
                                     icon = { Icon(icon, contentDescription = null) },

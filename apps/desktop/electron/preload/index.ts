@@ -169,8 +169,9 @@ const api = {
     onMedia: (cb: (state: { playing: boolean }) => void) => subscribe('spotify-session:media', cb),
   },
   spotifyConnect: {
-    play: (trackId: string, positionMs?: number) =>
-      ipcRenderer.invoke('spotify-connect:play', trackId, positionMs) as Promise<{
+    prefetch: (trackId: string) => ipcRenderer.invoke('spotify-connect:prefetch', trackId) as Promise<void>,
+    play: (trackId: string, positionMs?: number, fast?: boolean) =>
+      ipcRenderer.invoke('spotify-connect:play', trackId, positionMs, fast) as Promise<{
         ad: boolean;
         adTitle: string | null;
         playing: boolean;

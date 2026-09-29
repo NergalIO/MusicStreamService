@@ -77,6 +77,8 @@ class SpotifyWebSession @Inject constructor(
     private val deviceWaiters = ConcurrentHashMap<String, CompletableDeferred<String>>()
     private val playWaiters = ConcurrentHashMap<String, CompletableDeferred<Unit>>()
     private val pageMutex = Mutex()
+    /** id этого веб-плеера в Spotify Connect (из адресов connect-state), нужен для быстрого старта. */
+    private val deviceIds = java.util.Collections.synchronizedSet(linkedSetOf<String>())
 
     init {
         runCatching {
@@ -146,6 +148,9 @@ class SpotifyWebSession @Inject constructor(
                 val auth = h.entries.find { it.key.equals("authorization", true) }?.value
                 val client = h.entries.find { it.key.equals("client-token", true) }?.value
                 val ver = h.entries.find { it.key.equals("spotify-app-version", true) }?.value
+                request.url?.toString()?.let { url ->
+                    DEVICE_ID_RE.find(url)?.value?.let { deviceIds.add(it) }
+                }
                 if (!signedOut && auth?.startsWith("Bearer ") == true && !client.isNullOrBlank()) {
                     headers = SpotifyWebHeaders(auth, client, ver.orEmpty())
                     if (!_loggedIn.value && hasLoginCookies()) markLoggedIn()
@@ -157,6 +162,7 @@ class SpotifyWebSession @Inject constructor(
                 if (url?.startsWith(HOME) == true || hasLoginCookies()) syncLoginState()
                 if (loginAgent) eval(FIT_MOBILE)
                 injectHelpers()
+                if (!loginAgent) eval(STATE_OBSERVER)
                 if (_loggedIn.value && !loginAgent) eval(SCAN_OPERATIONS)
             }
         }
@@ -346,55 +352,80 @@ class SpotifyWebSession @Inject constructor(
         cm.flush()
     }
 
-    suspend fun play(trackId: String, positionMs: Long = 0) {
+    /**
+     * @param fast быстрый старт: PUT /v1/me/player/play на этот веб-плеер; при любой ошибке — обычный путь через страницу трека.
+     */
+    suspend fun play(trackId: String, positionMs: Long = 0, fast: Boolean = false) {
         wake()
         pageMutex.withLock {
             val id = httpIds.incrementAndGet().toString()
             val done = CompletableDeferred<Unit>()
             playWaiters[id] = done
+            val auth = headers
+            val fastAuth = JSONObject()
+                .put("authorization", if (fast) auth?.authorization.orEmpty() else "")
+                .put("clientToken", auth?.clientToken.orEmpty())
+                .put("appVersion", auth?.appVersion.orEmpty())
+                .put("devices", JSONArray(deviceIds.toList()))
+                .toString()
             eval(
                 """
                 (async () => {
                   try {
                     $HELPERS
+                    $DEVICE_HELPERS
+                    $STATE_OBSERVER
                     const path = '/track/$trackId';
-                    for (let i = 0; i < 80 && !q('[data-testid="control-button-playpause"]'); i++) await sleep(250);
+                    const tick = 80;
+                    const waitFor = async (ms, ok) => {
+                      for (let t = 0; t < ms; t += tick) {
+                        if (ok()) return true;
+                        await sleep(tick);
+                      }
+                      return !!ok();
+                    };
+                    const fastAuth = JSON.parse(${JSONObject.quote(fastAuth)});
+                    $FAST_PLAY
+                    if (fastAuth.authorization && q('[data-testid="control-button-playpause"]')
+                      && await fastPlay(fastAuth, '$trackId', ${positionMs.coerceAtLeast(0)}).catch(() => false)) {
+                      MssSpotify.onState(JSON.stringify(readState()));
+                      MssSpotify.onRemote(remoteFromBar() || '');
+                      MssSpotify.onPlayDone('$id', '');
+                      return;
+                    }
+                    await waitFor(20000, () => q('[data-testid="control-button-playpause"]'));
                     if (!q('[data-testid="control-button-playpause"]')) throw new Error('Веб-плеер Spotify не загрузился');
                     if (location.pathname !== path) {
                       const before = q('main h1')?.textContent || '';
                       history.pushState({}, '', path);
                       dispatchEvent(new PopStateEvent('popstate', { state: {} }));
-                      for (let i = 0; i < 20 && (q('main h1')?.textContent || '') === before; i++) await sleep(250);
+                      await waitFor(5000, () => (q('main h1')?.textContent || '') !== before);
                       if ((q('main h1')?.textContent || '') === before) {
                         location.assign('https://open.spotify.com' + path);
-                        for (let i = 0; i < 80 && !q('[data-testid="control-button-playpause"]'); i++) await sleep(250);
+                        await waitFor(20000, () => q('[data-testid="control-button-playpause"]'));
                       }
                     }
                     let button = null;
                     let heading = '';
-                    for (let i = 0; i < 80; i++) {
-                      await sleep(250);
+                    await waitFor(20000, () => {
                       heading = (q('main h1')?.textContent || '').trim();
                       button = q('main [data-testid="action-bar-row"] [data-testid="play-button"]');
-                      if (button && heading && location.pathname.indexOf('$trackId') >= 0) break;
-                      button = null;
-                    }
-                    if (!button) {
+                      return !!(button && heading && location.pathname.indexOf('$trackId') >= 0);
+                    });
+                    if (!button || location.pathname.indexOf('$trackId') < 0) {
                       heading = (q('main h1')?.textContent || q('[data-testid="context-item-info-title"]')?.textContent || '').trim();
                       button = q('[data-testid="control-button-playpause"]');
                     }
                     if (!button) throw new Error('Не удалось открыть трек в веб-плеере Spotify');
-                    $DEVICE_HELPERS
                     const movedHere = await transferHere();
                     if (!movedHere) {
                       throw new Error('Spotify играет на устройстве «' + (remoteFromBar() || 'другом') + '» — выберите это приложение в списке устройств');
                     }
                     if (!isPauseLabel(button)) button.click();
-                    for (let i = 0; i < 40; i++) {
-                      await sleep(250);
+                    await waitFor(10000, () => {
                       const s = readState();
-                      if (s.playing && (s.title === heading || !heading || s.ad)) break;
-                    }
+                      return s.playing && (s.title === heading || !heading || s.ad);
+                    });
                     const state = readState();
                     if (!state.playing && !state.ad) {
                       throw new Error('Spotify не запустил трек — выберите это приложение в устройствах Spotify');
@@ -404,8 +435,10 @@ class SpotifyWebSession @Inject constructor(
                       const progress = q('[data-testid="playback-progressbar"] input[type="range"]');
                       if (progress) setRange(progress, $positionMs);
                     }
+                    MssSpotify.onRemote(remoteFromBar() || '');
                     MssSpotify.onPlayDone('$id', '');
                   } catch (e) {
+                    try { MssSpotify.onRemote(remoteFromBar() || ''); } catch (_) {}
                     MssSpotify.onPlayDone('$id', String(e && e.message || e));
                   }
                 })();
@@ -416,9 +449,23 @@ class SpotifyWebSession @Inject constructor(
                     ?: throw ConnectorException("Spotify не ответил")
             } finally {
                 playWaiters.remove(id)
-                runCatching { applyDevices(queryDevices("peek", "")) }
             }
         }
+    }
+
+    /** Заранее открывает страницу следующего трека: при переключении останется один клик. Играющий трек не прерывается. */
+    fun prefetch(trackId: String) {
+        if (!TRACK_ID_RE.matches(trackId) || pageMutex.isLocked || _visibleForLogin.value) return
+        eval(
+            """
+            (function(){
+              const path = '/track/$trackId';
+              if (location.pathname === path || !document.querySelector('[data-testid="control-button-playpause"]')) return;
+              history.pushState({}, '', path);
+              dispatchEvent(new PopStateEvent('popstate', { state: {} }));
+            })();
+            """.trimIndent(),
+        )
     }
 
     /** Открывает меню устройств веб-плеера и возвращает, занят ли аккаунт чужим устройством. */
@@ -490,7 +537,16 @@ class SpotifyWebSession @Inject constructor(
         val selectedLocal: Boolean,
     )
 
-    fun pause() = eval("document.querySelector('[data-testid=\"control-button-playpause\"]')?.click()")
+    fun pause() {
+        eval(
+            """
+            (function(){ $HELPERS
+              const btn = q('[data-testid="control-button-playpause"]');
+              if (btn && isPauseLabel(btn)) btn.click();
+            })();
+            """.trimIndent(),
+        )
+    }
 
     fun resume() = playCurrent()
 
@@ -568,6 +624,11 @@ class SpotifyWebSession @Inject constructor(
         }
 
         @JavascriptInterface
+        fun onRemote(name: String) {
+            _remoteDevice.value = name.takeIf { it.isNotBlank() }
+        }
+
+        @JavascriptInterface
         fun onDeviceResult(id: String, json: String) {
             deviceWaiters.remove(id)?.complete(json)
         }
@@ -637,6 +698,115 @@ class SpotifyWebSession @Inject constructor(
               durationMs: Number(progress?.max) || parseClock(q('[data-testid="playback-duration"]')?.textContent),
             };
           };
+        """
+
+        private val DEVICE_ID_RE = Regex("""https://[^/]+/connect-state/v1/devices/hobs_[0-9a-f]{16,}""")
+        private val TRACK_ID_RE = Regex("""[A-Za-z0-9]{10,40}""")
+
+        /**
+         * Быстрый старт: команда «play» в Spotify Connect от этого веб-плеера самому себе — тот же канал,
+         * которым веб-плеер управляет устройствами. Возвращает false, если что-то не сошлось: тогда работает обычный путь.
+         */
+        private const val FAST_PLAY = """
+          const fastPlay = async (auth, trackId, positionMs) => {
+            const devices = [];
+            const add = (url) => {
+              const m = String(url).match(/(https:\/\/[^\/]+)\/connect-state\/v1\/devices\/(hobs_[0-9a-f]{16,})/);
+              if (!m) return;
+              const i = devices.findIndex((d) => d.id === m[2]);
+              if (i >= 0) devices.splice(i, 1);
+              devices.push({ origin: m[1], id: m[2] });
+            };
+            (auth.devices || []).forEach(add);
+            performance.getEntriesByType('resource').forEach((e) => add(e.name));
+            const dev = devices[devices.length - 1];
+            if (!dev) return false;
+            const read = () => readState();
+            const before = read();
+            const uri = 'spotify:track:' + trackId;
+            const res = await fetch(dev.origin + '/connect-state/v1/player/command/from/' + dev.id + '/to/' + dev.id, {
+              method: 'POST',
+              headers: {
+                authorization: auth.authorization,
+                'client-token': auth.clientToken,
+                'spotify-app-version': auth.appVersion,
+                'app-platform': 'WebPlayer',
+                'content-type': 'application/json',
+              },
+              body: JSON.stringify({
+                command: {
+                  context: { uri, url: 'context://' + uri, metadata: {} },
+                  play_origin: { feature_identifier: 'harmony', feature_version: auth.appVersion || '' },
+                  options: { skip_to: { track_uri: uri }, seek_to: positionMs, player_options_override: {} },
+                  logging_params: { command_id: Math.random().toString(16).slice(2) + Date.now().toString(16) },
+                  endpoint: 'play',
+                },
+              }),
+            });
+            if (!res.ok) return false;
+            for (let t = 0; t < 5000; t += 80) {
+              const s = read();
+              const restarted = s.positionMs < positionMs + 3000 && (!before.playing || before.positionMs > positionMs + 3000);
+              if (s.ad || (s.playing && (s.title !== before.title || restarted))) return true;
+              await new Promise((r) => setTimeout(r, 80));
+            }
+            return false;
+          };
+        """
+
+        /**
+         * Шлёт состояние плеера в приложение сразу при изменении нижней панели, без ожидания опроса.
+         * Ставится один раз на страницу; панель пересоздаётся при навигации, поэтому раз в секунду переподключаемся.
+         */
+        private const val STATE_OBSERVER = """
+          (function(){
+            if (window.__mssObserver) return;
+            const pick = () => document.querySelector('[data-testid="now-playing-bar"]') || document.querySelector('footer');
+            const isPause = (el) => /pause|пауз/i.test(el?.getAttribute('aria-label') || '');
+            const clock = (t) => (t || '').trim().split(':').reduce((a, p) => a * 60 + (Number(p) || 0), 0) * 1000;
+            const read = () => {
+              const g = (s) => document.querySelector(s);
+              const button = g('[data-testid="control-button-playpause"]');
+              const progress = g('[data-testid="playback-progressbar"] input[type="range"]');
+              const title = (g('[data-testid="context-item-info-title"]')?.textContent || '').trim();
+              return {
+                ready: !!button,
+                title,
+                playing: isPause(button),
+                ad: !!g('[data-testid="ad-skip-button"], [data-testid="ad-cta-button"]') || /advertisement|реклама/i.test(title),
+                positionMs: clock(g('[data-testid="playback-position"]')?.textContent),
+                durationMs: Number(progress?.max) || clock(g('[data-testid="playback-duration"]')?.textContent),
+              };
+            };
+            let last = '';
+            let queued = false;
+            const push = () => {
+              queued = false;
+              const s = read();
+              const key = JSON.stringify(s);
+              if (key === last) return;
+              last = key;
+              try { MssSpotify.onState(key); } catch (_) {}
+            };
+            const schedule = () => {
+              if (queued) return;
+              queued = true;
+              setTimeout(push, 16);
+            };
+            let bar = null;
+            const obs = new MutationObserver(schedule);
+            const attach = () => {
+              const next = pick();
+              if (!next || next === bar) return;
+              obs.disconnect();
+              bar = next;
+              obs.observe(bar, { subtree: true, childList: true, characterData: true, attributes: true, attributeFilter: ['aria-label', 'value', 'max'] });
+              schedule();
+            };
+            window.__mssObserver = obs;
+            attach();
+            setInterval(attach, 1000);
+          })();
         """
 
         private const val SCAN_OPERATIONS = """

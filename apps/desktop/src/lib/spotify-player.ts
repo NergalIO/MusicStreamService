@@ -1,7 +1,7 @@
 import type { UnifiedTrack } from '@mss/shared';
 import { toast } from 'sonner';
 import { usePlaybackStore } from '@/store/playback-store';
-import { usePlayerStore } from '@/store/player-store';
+import { upcomingTracks, usePlayerStore } from '@/store/player-store';
 import { useSettingsStore } from '@/store/settings-store';
 
 /**
@@ -57,7 +57,20 @@ function startTick(): void {
     usePlaybackStore.setState({ currentTime: duration ? Math.min(t, duration) : t });
     syncMediaPosition(t, duration);
     maybeStartSpotifyFadeOut(duration, t);
+    maybePrefetchNext(duration, t);
   }, 250);
+}
+
+let prefetchedFor: string | null = null;
+
+/** За 30 с до конца открываем в веб-плеере страницу следующего трека Spotify — переключение сведётся к одному клику. */
+function maybePrefetchNext(duration: number, t: number): void {
+  if (!activeTrackId || prefetchedFor === activeTrackId || !duration || duration - t > 30) return;
+  prefetchedFor = activeTrackId;
+  const s = usePlayerStore.getState();
+  if (s.repeat === 'one') return;
+  const next = upcomingTracks(s)[0];
+  if (next?.source === 'spotify') void window.electronAPI.spotifyConnect.prefetch(next.id).catch(() => undefined);
 }
 
 function stopTick(): void {
@@ -129,7 +142,12 @@ export async function startSpotifyTrack(
   } else {
     void window.electronAPI.spotifyConnect.setVolume(volume * 100, muted);
   }
-  const started = await window.electronAPI.spotifyConnect.play(track.id, startAtSeconds * 1000);
+  prefetchedFor = null;
+  const started = await window.electronAPI.spotifyConnect.play(
+    track.id,
+    startAtSeconds * 1000,
+    useSettingsStore.getState().spotifyFastStart,
+  );
   if (activeTrackId !== track.id) return;
   if (started?.remoteDevice) {
     setAnchor(started.positionMs || startAtSeconds * 1000, false);
