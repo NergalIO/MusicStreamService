@@ -8,11 +8,13 @@ import androidx.compose.foundation.layout.BoxWithConstraints
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.runtime.Composable
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.geometry.Offset
 import androidx.compose.ui.graphics.Brush
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.layout.ContentScale
 import coil.compose.AsyncImage
+import com.mss.android.ui.components.coverRequest
 
 /** Фон нижней панели (мини-плеер): градиент акцента или обложки при «Динамическая». */
 @Composable
@@ -32,7 +34,7 @@ fun AccentPanelBackground(
         val widthPx = constraints.maxWidth.toFloat().coerceAtLeast(1f)
         if (accent == COVER_ACCENT && !coverUrl.isNullOrBlank()) {
             AsyncImage(
-                model = coverUrl,
+                model = coverRequest(LocalContext.current, coverUrl),
                 contentDescription = null,
                 contentScale = ContentScale.Crop,
                 modifier = Modifier.matchParentSize().isolatedCoverBlur(radiusPx = 48f, scale = 1.35f, alpha = 0.5f),

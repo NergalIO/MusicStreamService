@@ -296,10 +296,13 @@ function spotifyDeviceScript(action: 'list' | 'select', targetJson: string): str
     const connectButton = () => {
       const direct = document.querySelector('[data-testid="connect-device-picker"], [data-testid="device-picker-icon-button"], [data-testid="control-button-connect"]');
       if (direct) return direct;
-      return [...document.querySelectorAll('button')].find((b) => {
-        const label = (b.getAttribute('aria-label') || '').trim();
-        return isIdle(label) || /устройств|device/i.test(label);
-      }) || null;
+      return [...document.querySelectorAll('button')].find((b) => isIdle(b.getAttribute('aria-label') || '')) || null;
+    };
+    const looksLikeDevice = (name) => {
+      if (!name || name.length > 48) return false;
+      if (isLocal(name) || isIdle(name)) return isLocal(name);
+      if (/english|afrikaans|amharic|azerbaijani|bulgarian|bhojpuri|bengali|bosnian|catalan|czech|danish|greek|spanish|french|german|italian|portuguese|russian|hindi|japanese|korean|chinese/i.test(name)) return false;
+      return true;
     };
     const rowActive = (b) => {
       const cls = typeof b.className === 'string' ? b.className : '';
@@ -323,19 +326,24 @@ function spotifyDeviceScript(action: 'list' | 'select', targetJson: string): str
       return devices;
     };
     const findMenu = () => {
-      const roots = [...document.querySelectorAll('[role="menu"], [role="dialog"], [data-testid="device-picker"], [data-testid*="device-picker"]')];
-      return roots.find((root) => parseRoot(root).length > 0) || null;
+      const roots = [...document.querySelectorAll('[data-testid="device-picker"], [data-testid*="device-picker"], [role="menu"], [role="dialog"]')];
+      const parsed = roots.map((root) => ({ root, rows: parseRoot(root).filter((d) => looksLikeDevice(d.name)) }));
+      return parsed.find((p) => p.rows.some((d) => d.local))?.root
+        || parsed.find((p) => p.rows.length > 0 && p.rows.length <= 8)?.root
+        || null;
     };
     const btn = connectButton();
-    const wasOpen = !!btn && btn.getAttribute('aria-expanded') === 'true';
-    if (btn && !wasOpen) btn.click();
+    if (!btn) return { remoteName: null, devices: [] };
+    const wasOpen = btn.getAttribute('aria-expanded') === 'true';
+    if (!wasOpen) btn.click();
     let menu = null;
     for (let i = 0; i < 25; i++) {
       menu = findMenu();
       if (menu) break;
       await sleep(80);
     }
-    const rows = menu ? parseRoot(menu) : [];
+    let rows = (menu ? parseRoot(menu) : []).filter((d) => looksLikeDevice(d.name));
+    if (rows.length > 8 && !rows.some((d) => d.local)) rows = [];
     const closeMenu = async () => {
       if (!btn) return;
       if (btn.getAttribute('aria-expanded') === 'true') btn.click();

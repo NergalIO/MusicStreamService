@@ -275,7 +275,7 @@ class SpotifyPathfinder @Inject constructor(
             albumId = idFromUri(d.obj("albumOfTrack")?.str("uri")),
             durationMs = d.obj("duration")?.get("totalMilliseconds")?.jsonPrimitive?.contentOrNull?.toLongOrNull()
                 ?: d.obj("trackDuration")?.get("totalMilliseconds")?.jsonPrimitive?.contentOrNull?.toLongOrNull(),
-            coverUrl = bestImage(d.obj("albumOfTrack")?.obj("coverArt")?.arr("sources")),
+            coverUrl = coverOf(d),
             playable = playable,
         )
     }
@@ -288,7 +288,7 @@ class SpotifyPathfinder @Inject constructor(
             id = idFromUri(uri) ?: return null,
             title = d.str("name") ?: return null,
             owner = d.obj("ownerV2")?.obj("data")?.str("name"),
-            coverUrl = bestImage(d.obj("images")?.arr("items")?.firstOrNull()?.jsonObject?.arr("sources")),
+            coverUrl = coverOf(d),
             trackCount = d.obj("content")?.get("totalCount")?.jsonPrimitive?.contentOrNull?.toIntOrNull(),
         )
     }
@@ -301,7 +301,7 @@ class SpotifyPathfinder @Inject constructor(
             "ArtistResponseWrapper" -> {
                 val id = idFromUri(d.str("uri")) ?: return null
                 val name = d.obj("profile")?.str("name") ?: return null
-                FeedItem("artist", artist = UnifiedArtist(SourceId.SPOTIFY, id, name, imageUrl = bestImage(d.obj("visuals")?.obj("avatarImage")?.arr("sources"))))
+                FeedItem("artist", artist = UnifiedArtist(SourceId.SPOTIFY, id, name, imageUrl = coverOf(d)))
             }
             else -> null
         }
@@ -315,15 +315,35 @@ class SpotifyPathfinder @Inject constructor(
             id = id,
             title = d.str("name") ?: return null,
             artist = d.obj("artists")?.arr("items")?.mapNotNull { it.jsonObject.obj("profile")?.str("name") }?.joinToString().orEmpty(),
-            coverUrl = bestImage(d.obj("coverArt")?.arr("sources")),
+            coverUrl = coverOf(d),
         )
+    }
+
+    private fun coverOf(d: JsonObject): String? {
+        bestImage(d.obj("coverArt")?.arr("sources"))?.let { return it }
+        bestImage(d.obj("albumOfTrack")?.obj("coverArt")?.arr("sources"))?.let { return it }
+        bestImage(d.obj("images")?.arr("items")?.firstOrNull()?.jsonObject?.arr("sources"))?.let { return it }
+        bestImage(d.obj("visuals")?.obj("avatarImage")?.arr("sources"))?.let { return it }
+        return imageUrl(d.obj("coverArt")?.str("url") ?: d.str("imageUrl"))
     }
 
     private fun bestImage(sources: JsonArray?): String? {
         if (sources == null || sources.isEmpty()) return null
-        return sources.maxByOrNull {
-            it.jsonObject["width"]?.jsonPrimitive?.contentOrNull?.toIntOrNull() ?: 0
-        }?.jsonObject?.str("url") ?: sources.first().jsonObject.str("url")
+        val ranked = sources.mapNotNull { el ->
+            val obj = el as? JsonObject ?: return@mapNotNull null
+            imageUrl(obj.str("url"))?.let { it to (obj["width"]?.jsonPrimitive?.contentOrNull?.toIntOrNull() ?: 0) }
+        }
+        return ranked.maxByOrNull { it.second }?.first
+    }
+
+    private fun imageUrl(raw: String?): String? {
+        val url = raw?.trim().orEmpty()
+        if (url.isEmpty()) return null
+        return when {
+            url.startsWith("//") -> "https:$url"
+            url.startsWith("http://") || url.startsWith("https://") -> url
+            else -> null
+        }
     }
 
     private fun idFromUri(uri: String?): String? = uri?.substringAfterLast(':')?.takeIf { it.isNotBlank() }

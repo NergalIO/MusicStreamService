@@ -2,6 +2,7 @@ package com.mss.android.ui.more
 
 import android.annotation.SuppressLint
 import android.webkit.CookieManager
+import android.webkit.JavascriptInterface
 import android.webkit.WebResourceRequest
 import android.webkit.WebView
 import android.webkit.WebViewClient
@@ -173,10 +174,25 @@ fun VkIdOverlay(
                         ),
                     )
                     web.prepareLogin(VkAuth.MOBILE_UA)
+                    var deliverConnect: ((String) -> Unit)? = null
+                    web.addJavascriptInterface(object {
+                        @JavascriptInterface
+                        fun onConnect(body: String) {
+                            web.post { deliverConnect?.invoke(body) }
+                        }
+                    }, "MssVk")
                     web.webViewClient = object : WebViewClient() {
                         private var finished = false
                         private var fellBack = false
+                        private var openedFeed = false
                         private var lastCookieAt = 0L
+
+                        init {
+                            deliverConnect = { body ->
+                                val payload = vkConnectPayload(body)
+                                if (payload != null) acceptOAuth(VkAuth.toRedirectUrl(payload))
+                            }
+                        }
 
                         private fun acceptOAuth(url: String): Boolean {
                             if (finished || !VkAuth.shouldCompleteWebLogin(url)) return false
@@ -204,14 +220,18 @@ fun VkIdOverlay(
                                 val scraped = VkAuth.parsePageTokens(snap.html.ifBlank { snap.text })
                                 if (scraped != null && acceptOAuth(VkAuth.toRedirectUrl(scraped))) return@evaluateJavascript
                                 val cookies = vkWebCookies()
-                                if (
-                                    VkAuth.hasSessionCookie(cookies) &&
-                                    (VkAuth.looksLoggedIn(href) || VkAuth.looksLoggedIn(candidate))
-                                ) {
+                                if (VkAuth.hasSessionCookie(cookies) && VkAuth.isVkHost(runCatching { java.net.URI(href.ifBlank { candidate }).host.orEmpty() }.getOrDefault(""))) {
                                     val now = android.os.SystemClock.elapsedRealtime()
                                     if (now - lastCookieAt < 1500L) return@evaluateJavascript
                                     lastCookieAt = now
+                                    if (!openedFeed && !VkAuth.looksLoggedIn(href) && !VkAuth.looksLoggedIn(candidate)) {
+                                        openedFeed = true
+                                        target.loadUrl("https://vk.com/")
+                                        return@evaluateJavascript
+                                    }
                                     onCookies(cookies)
+                                    target.evaluateJavascript(vkConnectScript(VkAuth.KATE_CLIENT_ID), null)
+                                    target.evaluateJavascript(vkConnectScript(VkAuth.ANDROID_CLIENT_ID), null)
                                 }
                             }
                         }
@@ -305,6 +325,30 @@ private fun pageSnap(raw: String?): PageSnap {
     }.getOrElse {
         PageSnap(href = jsString(raw))
     }
+}
+
+private fun vkConnectScript(appId: String): String = """
+  fetch('https://login.vk.com/?act=connect_internal', {
+    method: 'POST',
+    credentials: 'include',
+    headers: { 'Content-Type': 'application/x-www-form-urlencoded' },
+    body: 'app_id=$appId&oauth_version=1&version=1'
+  }).then((r) => r.text()).then((t) => { try { MssVk.onConnect(t); } catch (e) {} }).catch(() => {});
+"""
+
+private fun vkConnectPayload(body: String): com.mss.core.connectors.VkOAuthPayload? {
+    val obj = runCatching { org.json.JSONObject(body) }.getOrNull() ?: return null
+    val data = obj.optJSONObject("data") ?: obj
+    fun str(key: String): String? {
+        if (!data.has(key) || data.isNull(key)) return null
+        val value = data.optString(key)
+        return value.takeIf { it.isNotBlank() && it != "null" }
+    }
+    val access = str("access_token")
+    val silent = str("silent_token")
+    if (access == null && silent == null) return null
+    val user = if (data.has("user_id") && !data.isNull("user_id")) data.optLong("user_id") else null
+    return com.mss.core.connectors.VkOAuthPayload(access, user, silent, str("uuid") ?: str("silent_token_uuid"))
 }
 
 private fun vkWebCookies(): String {

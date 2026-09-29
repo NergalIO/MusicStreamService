@@ -32,6 +32,7 @@ import androidx.compose.runtime.remember
 import androidx.compose.runtime.setValue
 import androidx.compose.foundation.layout.Box
 import androidx.compose.ui.Alignment
+import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.layout.ContentScale
@@ -41,7 +42,22 @@ import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.ui.unit.Dp
 import androidx.compose.ui.unit.dp
 import coil.compose.AsyncImage
+import coil.request.ImageRequest
 import com.mss.core.model.UnifiedTrack
+
+fun coverRequest(context: android.content.Context, url: String?): ImageRequest {
+    val data = url?.trim()?.let { raw -> if (raw.startsWith("//")) "https:$raw" else raw }
+    val builder = ImageRequest.Builder(context).data(data).crossfade(120)
+    if (data != null && (data.contains("scdn.co") || data.contains("spotifycdn.com") || data.contains("spotify.com"))) {
+        builder
+            .addHeader(
+                "User-Agent",
+                "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/144.0.0.0 Safari/537.36",
+            )
+            .addHeader("Referer", "https://open.spotify.com/")
+    }
+    return builder.build()
+}
 
 @Composable
 fun Cover(url: String?, modifier: Modifier = Modifier.size(48.dp), corner: Dp = 10.dp) {
@@ -53,7 +69,7 @@ fun Cover(url: String?, modifier: Modifier = Modifier.size(48.dp), corner: Dp = 
     ) {
         if (!failed) {
             AsyncImage(
-                model = url,
+                model = coverRequest(LocalContext.current, url),
                 contentDescription = null,
                 contentScale = ContentScale.Crop,
                 onError = { failed = true },

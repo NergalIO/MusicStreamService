@@ -64,6 +64,7 @@ import androidx.compose.ui.input.nestedscroll.NestedScrollConnection
 import androidx.compose.ui.input.nestedscroll.NestedScrollSource
 import androidx.compose.ui.input.nestedscroll.nestedScroll
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.draw.clipToBounds
 import androidx.compose.ui.graphics.Brush
@@ -82,6 +83,7 @@ import coil.compose.AsyncImage
 import com.mss.android.ui.LyricsUi
 import com.mss.android.ui.MssViewModel
 import com.mss.android.ui.components.Cover
+import com.mss.android.ui.components.coverRequest
 import com.mss.android.ui.components.TrackRow
 import com.mss.android.ui.theme.AccentPanelBackground
 import com.mss.android.ui.theme.COVER_ACCENT
@@ -118,7 +120,7 @@ fun LobbyBar(lobby: LobbyDto?, onOpen: () -> Unit) {
 @Composable
 private fun SpotifyDeviceBar(vm: MssViewModel, track: UnifiedTrack?) {
     val remote by vm.spotifyWeb.remoteDevice.collectAsState()
-    if (track?.source != SourceId.SPOTIFY || remote.isNullOrBlank()) return
+    if (track?.source != SourceId.SPOTIFY || remote.isNullOrBlank() || remote == "null") return
     var open by remember { mutableStateOf(false) }
     val scheme = MaterialTheme.colorScheme
     Text(
@@ -338,7 +340,7 @@ private fun NowPlayingBody(vm: MssViewModel, onBack: () -> Unit, onArtist: (Stri
                 ) {
                     CoverSlot(track.coverUrl, blurred = tab != null, modifier = Modifier.fillMaxSize().zIndex(0f))
                     when (tab) {
-                        0 -> QueuePane(state.queue, state.index, { vm.play(state.queue, it) }, Modifier.fillMaxSize().zIndex(1f))
+                        0 -> QueuePane(state, liked, vm, Modifier.fillMaxSize().zIndex(1f))
                         1 -> LyricsPane(vm, lyrics, state.positionMs, Modifier.fillMaxSize().zIndex(1f))
                         2 -> SimilarPane(similar, liked, state, vm, Modifier.fillMaxSize().zIndex(1f))
                         else -> Cover(track.coverUrl, Modifier.fillMaxSize().zIndex(1f), corner = 16.dp)
@@ -374,7 +376,7 @@ private fun CoverSlot(coverUrl: String?, blurred: Boolean, modifier: Modifier = 
         return
     }
     AsyncImage(
-        model = coverUrl,
+        model = coverRequest(LocalContext.current, coverUrl),
         contentDescription = null,
         contentScale = ContentScale.Crop,
         modifier = modifier.isolatedCoverBlur(radiusPx = 70f, alpha = if (blurred) 0.45f else 1f, enabled = blurred),
@@ -382,17 +384,33 @@ private fun CoverSlot(coverUrl: String?, blurred: Boolean, modifier: Modifier = 
 }
 
 @Composable
-private fun QueuePane(queue: List<UnifiedTrack>, index: Int, onPlay: (Int) -> Unit, modifier: Modifier) {
-    val scheme = MaterialTheme.colorScheme
-    LazyColumn(modifier.padding(horizontal = 8.dp, vertical = 8.dp)) {
-        itemsIndexed(queue) { i, t ->
-            Text(
-                t.title,
-                modifier = Modifier.fillMaxWidth().clickable { onPlay(i) }.padding(horizontal = 8.dp, vertical = 10.dp),
-                color = if (i == index) scheme.primary else scheme.onSurface,
-                fontWeight = if (i == index) FontWeight.SemiBold else FontWeight.Normal,
-                maxLines = 1,
-                overflow = TextOverflow.Ellipsis,
+private fun QueuePane(
+    state: com.mss.core.player.PlayerUiState,
+    liked: Set<String>,
+    vm: MssViewModel,
+    modifier: Modifier,
+) {
+    val canSuggest by vm.canSuggestToLobby.collectAsState()
+    val queue = state.queue
+    if (queue.isEmpty()) {
+        Text(
+            "Очередь пуста",
+            color = MaterialTheme.colorScheme.onSurfaceVariant,
+            modifier = modifier.padding(24.dp),
+            textAlign = TextAlign.Center,
+        )
+        return
+    }
+    LazyColumn(modifier) {
+        itemsIndexed(queue, key = { i, t -> "${t.source}:${t.id}:$i" }) { i, t ->
+            TrackRow(
+                t,
+                t.id in liked,
+                onPlay = { vm.play(queue, i) },
+                onLike = { vm.toggleLike(t) },
+                onDownload = { vm.download(t) },
+                onSuggest = if (canSuggest) ({ vm.suggestToLobby(t) }) else null,
+                active = i == state.index,
             )
         }
     }
@@ -695,7 +713,7 @@ private fun PlayerBackdrop(coverUrl: String?) {
     Box(Modifier.fillMaxSize().clipToBounds().background(Color(0xFF070708))) {
         if (!coverUrl.isNullOrBlank()) {
             AsyncImage(
-                model = coverUrl,
+                model = coverRequest(LocalContext.current, coverUrl),
                 contentDescription = null,
                 contentScale = ContentScale.Crop,
                 modifier = Modifier.fillMaxSize().isolatedCoverBlur(radiusPx = 70f, scale = 1.2f, alpha = 0.55f),
