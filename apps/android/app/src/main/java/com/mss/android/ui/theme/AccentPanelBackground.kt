@@ -1,9 +1,5 @@
 package com.mss.android.ui.theme
 
-import android.graphics.RenderEffect
-import android.graphics.Shader
-import android.os.Build
-import androidx.annotation.RequiresApi
 import androidx.compose.foundation.background
 import androidx.compose.foundation.isSystemInDarkTheme
 import androidx.compose.foundation.layout.Box
@@ -16,9 +12,8 @@ import androidx.compose.ui.Modifier
 import androidx.compose.ui.geometry.Offset
 import androidx.compose.ui.graphics.Brush
 import androidx.compose.ui.graphics.Color
-import androidx.compose.ui.graphics.asComposeRenderEffect
-import androidx.compose.ui.graphics.graphicsLayer
 import androidx.compose.ui.layout.ContentScale
+import androidx.compose.ui.zIndex
 import coil.compose.AsyncImage
 
 /** Фон нижней панели (мини-плеер): градиент акцента или обложки при «Динамическая». */
@@ -42,16 +37,7 @@ fun AccentPanelBackground(
                 model = coverUrl,
                 contentDescription = null,
                 contentScale = ContentScale.Crop,
-                modifier = Modifier
-                    .fillMaxSize()
-                    .graphicsLayer {
-                        scaleX = 1.35f
-                        scaleY = 1.35f
-                        alpha = 0.5f
-                        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.S) {
-                            renderEffect = coverBlurEffect()
-                        }
-                    },
+                modifier = Modifier.fillMaxSize().isolatedCoverBlur(radiusPx = 48f, scale = 1.35f, alpha = 0.5f),
             )
             Box(
                 Modifier
@@ -98,9 +84,6 @@ fun AccentPanelBackground(
                     ),
             )
         }
-        content()
+        Box(Modifier.zIndex(1f)) { content() }
     }
 }
-
-@RequiresApi(Build.VERSION_CODES.S)
-private fun coverBlurEffect() = RenderEffect.createBlurEffect(48f, 48f, Shader.TileMode.CLAMP).asComposeRenderEffect()

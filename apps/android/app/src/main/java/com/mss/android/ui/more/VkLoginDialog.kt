@@ -1,6 +1,7 @@
 package com.mss.android.ui.more
 
 import android.annotation.SuppressLint
+import android.webkit.CookieManager
 import android.webkit.WebResourceRequest
 import android.webkit.WebView
 import android.webkit.WebViewClient
@@ -59,8 +60,9 @@ fun VkLoginDialog(vm: MssViewModel) {
         text = {
             Column(verticalArrangement = Arrangement.spacedBy(10.dp)) {
                 ChipFlow {
-                    MssChip(ui.sms, "SMS") { vm.setVkMethod(true) }
-                    MssChip(!ui.sms, "Пароль") { vm.setVkMethod(false) }
+                    MssChip(ui.sms && ui.step != VkLoginStep.VKID, "SMS") { vm.setVkMethod(true) }
+                    MssChip(!ui.sms && ui.step != VkLoginStep.VKID, "Пароль") { vm.setVkMethod(false) }
+                    MssChip(false, "VK ID") { vm.openVkIdLogin() }
                 }
                 ui.error?.let { Text(it, color = androidx.compose.material3.MaterialTheme.colorScheme.error) }
                 when {
@@ -124,7 +126,14 @@ fun VkLoginDialog(vm: MssViewModel) {
 
 @SuppressLint("SetJavaScriptEnabled")
 @Composable
-fun VkIdOverlay(error: String?, onClose: () -> Unit, onDone: (String) -> Unit, modifier: Modifier = Modifier) {
+fun VkIdOverlay(
+    error: String?,
+    onClose: () -> Unit,
+    onForm: () -> Unit,
+    onDone: (String) -> Unit,
+    onCookies: (String) -> Unit,
+    modifier: Modifier = Modifier,
+) {
     var pageError by remember { mutableStateOf<String?>(null) }
     Column(
         modifier
@@ -139,8 +148,15 @@ fun VkIdOverlay(error: String?, onClose: () -> Unit, onDone: (String) -> Unit, m
             verticalAlignment = Alignment.CenterVertically,
         ) {
             Text("VK Музыка", modifier = Modifier.weight(1f).padding(start = 8.dp), style = MaterialTheme.typography.titleMedium)
+            TextButton(onClick = onForm) { Text("SMS / пароль") }
             TextButton(onClick = onClose) { Text("Закрыть") }
         }
+        Text(
+            "Войдите по номеру на странице VK. Токен подхватится сам.",
+            modifier = Modifier.padding(horizontal = 16.dp, vertical = 2.dp),
+            style = MaterialTheme.typography.bodySmall,
+            color = MaterialTheme.colorScheme.onSurfaceVariant,
+        )
         (pageError ?: error)?.let {
             Text(it, color = MaterialTheme.colorScheme.error, modifier = Modifier.padding(horizontal = 16.dp, vertical = 4.dp))
         }
@@ -149,43 +165,74 @@ fun VkIdOverlay(error: String?, onClose: () -> Unit, onDone: (String) -> Unit, m
                 android.widget.FrameLayout(ctx).apply {
                     setBackgroundColor(android.graphics.Color.WHITE)
                     val web = WebView(ctx)
-                    addView(web, android.widget.FrameLayout.LayoutParams(
-                        android.view.ViewGroup.LayoutParams.MATCH_PARENT,
-                        android.view.ViewGroup.LayoutParams.MATCH_PARENT,
-                    ))
+                    addView(
+                        web,
+                        android.widget.FrameLayout.LayoutParams(
+                            android.view.ViewGroup.LayoutParams.MATCH_PARENT,
+                            android.view.ViewGroup.LayoutParams.MATCH_PARENT,
+                        ),
+                    )
                     web.prepareLogin(VkAuth.MOBILE_UA)
                     web.webViewClient = object : WebViewClient() {
                         private var finished = false
                         private var fellBack = false
+                        private var lastCookieAt = 0L
 
-                        private fun finish(url: String) {
-                            if (finished || !url.contains("blank.html")) return
+                        private fun acceptOAuth(url: String): Boolean {
+                            if (finished || !VkAuth.shouldCompleteWebLogin(url)) return false
                             finished = true
                             onDone(url)
+                            return true
+                        }
+
+                        private fun inspect(view: WebView?, url: String?) {
+                            if (finished) return
+                            val candidate = url.orEmpty()
+                            if (acceptOAuth(candidate)) return
+                            val target = view ?: return
+                            target.evaluateJavascript(FIT_PHONE, null)
+                            target.evaluateJavascript(READ_PAGE) { raw ->
+                                if (finished) return@evaluateJavascript
+                                val snap = pageSnap(raw)
+                                val href = snap.href.ifBlank { candidate }
+                                if (acceptOAuth(href)) return@evaluateJavascript
+                                if (!fellBack && snap.text.contains("direct auth", true)) {
+                                    fellBack = true
+                                    target.loadUrl(VkAuth.ID_LOGIN)
+                                    return@evaluateJavascript
+                                }
+                                val scraped = VkAuth.parsePageTokens(snap.html.ifBlank { snap.text })
+                                if (scraped != null && acceptOAuth(VkAuth.toRedirectUrl(scraped))) return@evaluateJavascript
+                                val cookies = vkWebCookies()
+                                if (
+                                    VkAuth.hasSessionCookie(cookies) &&
+                                    (VkAuth.looksLoggedIn(href) || VkAuth.looksLoggedIn(candidate))
+                                ) {
+                                    val now = android.os.SystemClock.elapsedRealtime()
+                                    if (now - lastCookieAt < 1500L) return@evaluateJavascript
+                                    lastCookieAt = now
+                                    onCookies(cookies)
+                                }
+                            }
                         }
 
                         override fun shouldOverrideUrlLoading(view: WebView?, request: WebResourceRequest?): Boolean {
                             val u = request?.url?.toString() ?: return false
-                            if (u.contains("blank.html")) {
-                                finish(u)
-                                return true
-                            }
-                            return false
+                            return acceptOAuth(u)
+                        }
+
+                        override fun onPageStarted(view: WebView?, url: String?, favicon: android.graphics.Bitmap?) {
+                            if (url != null) acceptOAuth(url)
                         }
 
                         override fun onPageFinished(view: WebView?, url: String?) {
                             pageError = null
-                            view?.evaluateJavascript(FIT_PHONE, null)
-                            view?.evaluateJavascript(
-                                "(function(){return (document.body&&document.body.innerText||'').slice(0,400)})()",
-                            ) { raw ->
-                                val text = raw?.trim('"').orEmpty()
-                                if (!fellBack && text.contains("direct auth", true)) {
-                                    fellBack = true
-                                    view.loadUrl(VkAuth.ID_LOGIN)
-                                }
-                            }
-                            if (url != null) finish(url)
+                            inspect(view, url)
+                        }
+
+                        override fun doUpdateVisitedHistory(view: WebView?, url: String?, isReload: Boolean) {
+                            super.doUpdateVisitedHistory(view, url, isReload)
+                            inspect(view, url)
                         }
 
                         override fun onReceivedError(
@@ -203,7 +250,7 @@ fun VkIdOverlay(error: String?, onClose: () -> Unit, onDone: (String) -> Unit, m
                         }
                     }
                     web.webChromeClient = LoginPopupChrome(this, VkAuth.MOBILE_UA)
-                    web.loadUrl(VkAuth.mobileAuthorizeUrl())
+                    web.loadUrl(VkAuth.ID_LOGIN)
                     web.requestFocus()
                 }
             },
@@ -228,3 +275,46 @@ private const val FIT_PHONE = """
     m.setAttribute('content', 'width=device-width, initial-scale=1, maximum-scale=1');
   })();
 """
+
+private const val READ_PAGE = """
+  (function(){
+    return {
+      href: String(location.href || ''),
+      text: String(document.body && document.body.innerText || '').slice(0, 800),
+      html: String(document.documentElement && document.documentElement.innerHTML || '').slice(0, 80000)
+    };
+  })();
+"""
+
+private fun jsString(raw: String?): String {
+    if (raw.isNullOrBlank() || raw == "null") return ""
+    return runCatching { org.json.JSONTokener(raw).nextValue() as? String ?: "" }.getOrDefault("")
+}
+
+private data class PageSnap(val href: String = "", val text: String = "", val html: String = "")
+
+private fun pageSnap(raw: String?): PageSnap {
+    if (raw.isNullOrBlank() || raw == "null") return PageSnap()
+    return runCatching {
+        val obj = org.json.JSONObject(raw)
+        PageSnap(
+            href = obj.optString("href"),
+            text = obj.optString("text"),
+            html = obj.optString("html"),
+        )
+    }.getOrElse {
+        PageSnap(href = jsString(raw))
+    }
+}
+
+private fun vkWebCookies(): String {
+    val cookies = CookieManager.getInstance()
+    return listOf(
+        "https://login.vk.com/",
+        "https://id.vk.com/",
+        "https://vk.com/",
+        "https://m.vk.com/",
+        "https://oauth.vk.com/",
+    ).mapNotNull { cookies.getCookie(it)?.takeIf(String::isNotBlank) }
+        .joinToString("; ")
+}

@@ -37,7 +37,7 @@ class SpotifyConnector @Inject constructor(
     private val clientId = BuildConfig.SPOTIFY_CLIENT_ID
 
     override fun authStatus(): AuthStatus =
-        if (web.loggedIn.value) AuthStatus.CONNECTED else AuthStatus.DISCONNECTED
+        if (web.loggedIn.value || web.hasPersistedSession()) AuthStatus.CONNECTED else AuthStatus.DISCONNECTED
 
     override suspend fun disconnect() {
         vault.delete(VAULT_KEY)
@@ -47,9 +47,11 @@ class SpotifyConnector @Inject constructor(
     suspend fun trackRadio(track: UnifiedTrack) = pathfinder.trackRadio(track.id)
 
     override suspend fun search(query: String, limit: Int): List<UnifiedTrack> {
-        if (web.headers != null) {
-            runCatching { return pathfinder.searchTracks(query, limit) }
+        if (useWebCatalog()) {
+            awaitWebPlayer()
+            return pathfinder.searchTracks(query, limit)
         }
+        if (loadTokens() == null) throw ConnectorException("Spotify не подключён")
         val data = spotifyGet<SearchTracksResponse>(
             "/search",
             mapOf("q" to query, "type" to "track", "limit" to minOf(limit, 50).toString()),
@@ -58,9 +60,11 @@ class SpotifyConnector @Inject constructor(
     }
 
     override suspend fun listPlaylists(): List<UnifiedPlaylist> {
-        if (web.headers != null) {
-            runCatching { return pathfinder.listPlaylists() }
+        if (useWebCatalog()) {
+            awaitWebPlayer()
+            return pathfinder.listPlaylists()
         }
+        if (loadTokens() == null) throw ConnectorException("Spotify не подключён")
         val out = mutableListOf<UnifiedPlaylist>()
         var offset = 0
         while (out.size < 100) {
@@ -86,9 +90,11 @@ class SpotifyConnector @Inject constructor(
     }
 
     override suspend fun savedTracks(limit: Int): List<UnifiedTrack> {
-        if (web.headers != null) {
-            runCatching { return pathfinder.savedTracks(limit) }
+        if (useWebCatalog()) {
+            awaitWebPlayer()
+            return pathfinder.savedTracks(limit)
         }
+        if (loadTokens() == null) throw ConnectorException("Spotify не подключён")
         val out = mutableListOf<UnifiedTrack>()
         var offset = 0
         while (out.size < limit) {
@@ -106,9 +112,11 @@ class SpotifyConnector @Inject constructor(
     }
 
     suspend fun playlist(id: String): com.mss.core.model.PlaylistWithTracks {
-        if (web.headers != null) {
-            runCatching { return pathfinder.playlist(id) }
+        if (useWebCatalog()) {
+            awaitWebPlayer()
+            return pathfinder.playlist(id)
         }
+        if (loadTokens() == null) throw ConnectorException("Spotify не подключён")
         val meta = spotifyGet<SpotifyPlaylistDetail>("/playlists/$id", emptyMap())
         val tracks = mutableListOf<UnifiedTrack>()
         var offset = 0
@@ -134,9 +142,11 @@ class SpotifyConnector @Inject constructor(
     }
 
     suspend fun album(id: String): com.mss.core.model.AlbumWithTracks {
-        if (web.headers != null) {
-            runCatching { return pathfinder.album(id) }
+        if (useWebCatalog()) {
+            awaitWebPlayer()
+            return pathfinder.album(id)
         }
+        if (loadTokens() == null) throw ConnectorException("Spotify не подключён")
         val meta = spotifyGet<SpotifyAlbumDetail>("/albums/$id", emptyMap())
         val tracks = meta.tracks.items.filterNotNull().map { t ->
             mapTrack(t).copy(album = meta.name, coverUrl = meta.images.firstOrNull()?.url)
@@ -162,9 +172,17 @@ class SpotifyConnector @Inject constructor(
         return data.previewUrl ?: throw ConnectorException("Полный трек Spotify — через веб-сессию")
     }
 
-    suspend fun homeFeed() = if (web.headers != null) {
+    suspend fun homeFeed() = if (useWebCatalog()) {
+        awaitWebPlayer()
         runCatching { pathfinder.homeFeed() }.getOrDefault(emptyList())
     } else emptyList()
+
+    private fun useWebCatalog(): Boolean =
+        web.loggedIn.value || web.headers != null || web.hasPersistedSession()
+
+    private suspend fun awaitWebPlayer() {
+        web.awaitHeaders()
+    }
 
     private suspend fun accessToken(): String {
         val t = loadTokens() ?: throw ConnectorException("Spotify не подключён")

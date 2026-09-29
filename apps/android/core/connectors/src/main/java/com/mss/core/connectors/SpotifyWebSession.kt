@@ -9,10 +9,13 @@ import android.webkit.WebResourceRequest
 import android.webkit.WebSettings
 import android.webkit.WebView
 import android.webkit.WebViewClient
+import com.mss.core.datastore.TokenVault
 import javax.inject.Inject
 import javax.inject.Singleton
+import kotlinx.coroutines.delay
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
+import org.json.JSONObject
 
 data class SpotifyWebHeaders(
     val authorization: String,
@@ -30,7 +33,9 @@ data class SpotifyDomState(
 )
 
 @Singleton
-class SpotifyWebSession @Inject constructor() {
+class SpotifyWebSession @Inject constructor(
+    private val vault: TokenVault,
+) {
     private val main = Handler(Looper.getMainLooper())
     private var webView: WebView? = null
 
@@ -48,6 +53,17 @@ class SpotifyWebSession @Inject constructor() {
 
     @Volatile private var hashes: Map<String, String> = emptyMap()
     private var loginAgent = false
+
+    init {
+        runCatching {
+            CookieManager.getInstance().setAcceptCookie(true)
+            restorePersistedCookies()
+            CookieManager.getInstance().flush()
+        }
+        if (hasPersistedSession() || hasLoginCookies()) _loggedIn.value = true
+    }
+
+    fun hasPersistedSession(): Boolean = vault.get(FLAG_KEY) == "1"
 
     fun isReady(): Boolean = webView != null && _loggedIn.value
 
@@ -93,48 +109,66 @@ class SpotifyWebSession @Inject constructor() {
                 val ver = h.entries.find { it.key.equals("spotify-app-version", true) }?.value
                 if (auth?.startsWith("Bearer ") == true && !client.isNullOrBlank()) {
                     headers = SpotifyWebHeaders(auth, client, ver.orEmpty())
+                    if (!_loggedIn.value) markLoggedIn()
                 }
                 return null
             }
 
             override fun onPageFinished(view: WebView?, url: String?) {
-                val cookies = CookieManager.getInstance().getCookie("https://open.spotify.com/")
-                    ?: CookieManager.getInstance().getCookie("https://accounts.spotify.com/")
-                    ?: ""
-                _loggedIn.value = cookies.contains("sp_dc") || cookies.contains("sp_key")
+                if (hasLoginCookies()) markLoggedIn()
                 if (loginAgent) eval(FIT_MOBILE)
                 injectHelpers()
                 if (_loggedIn.value && !loginAgent) eval(SCAN_OPERATIONS)
             }
         }
-        view.loadUrl("https://open.spotify.com/")
+        restorePersistedCookies()
+        if (hasLoginCookies() || hasPersistedSession()) markLoggedIn()
+        view.loadUrl(HOME)
     }
 
     fun showLogin() {
         _visibleForLogin.value = true
-        if (loginAgent) {
-            eval("window.location.href='$LOGIN_URL'")
-            return
-        }
         loginAgent = true
-        applyAgent(mobile = true, url = LOGIN_URL)
+        main.post {
+            val view = webView ?: return@post
+            view.settings.userAgentString = DESKTOP_UA
+            view.settings.loadWithOverviewMode = false
+            eval(FIT_MOBILE)
+            view.loadUrl(LOGIN_URL)
+        }
     }
 
     fun hideLogin() {
         _visibleForLogin.value = false
         if (!loginAgent) return
         loginAgent = false
-        applyAgent(mobile = false, url = "https://open.spotify.com/")
+        ensurePlayer()
     }
 
-    private fun applyAgent(mobile: Boolean, url: String) {
-        val view = webView ?: return
+    fun ensurePlayer() {
         main.post {
-            view.settings.userAgentString = if (mobile) MOBILE_UA else DESKTOP_UA
-            view.settings.loadWithOverviewMode = false
-            view.isHorizontalScrollBarEnabled = false
-            view.loadUrl(url)
+            val view = webView ?: return@post
+            view.settings.userAgentString = DESKTOP_UA
+            val url = view.url.orEmpty()
+            if (url.isBlank() || url.contains("accounts.spotify.com") || url == "about:blank") {
+                view.loadUrl(HOME)
+            } else if (_loggedIn.value) {
+                eval(SCAN_OPERATIONS)
+            }
         }
+    }
+
+    suspend fun awaitHeaders(timeoutMs: Long = 20_000): SpotifyWebHeaders {
+        headers?.let { if (hashes.isNotEmpty()) return it }
+        ensurePlayer()
+        val deadline = android.os.SystemClock.elapsedRealtime() + timeoutMs
+        var found: SpotifyWebHeaders? = headers
+        while (android.os.SystemClock.elapsedRealtime() < deadline) {
+            found = headers
+            if (found != null && hashes.isNotEmpty()) return found
+            delay(250)
+        }
+        return found ?: throw ConnectorException("Веб-плеер Spotify ещё загружается. Подождите пару секунд и повторите")
     }
 
     fun logout() {
@@ -143,12 +177,58 @@ class SpotifyWebSession @Inject constructor() {
         loginAgent = false
         headers = null
         hashes = emptyMap()
+        vault.delete(COOKIE_KEY)
+        vault.delete(FLAG_KEY)
         main.post {
-            CookieManager.getInstance().removeAllCookies(null)
-            CookieManager.getInstance().flush()
+            clearSpotifyCookies()
             webView?.settings?.userAgentString = DESKTOP_UA
-            webView?.loadUrl("https://open.spotify.com/")
+            webView?.loadUrl(HOME)
         }
+    }
+
+    private fun markLoggedIn() {
+        persistCookies()
+        if (!_loggedIn.value) _loggedIn.value = true
+    }
+
+    private fun hasLoginCookies(): Boolean {
+        val cm = runCatching { CookieManager.getInstance() }.getOrNull() ?: return false
+        return SpotifyCookies.URLS.any { url -> SpotifyCookies.headerLooksLoggedIn(cm.getCookie(url)) }
+    }
+
+    private fun persistCookies() {
+        vault.set(FLAG_KEY, "1")
+        val cm = runCatching { CookieManager.getInstance() }.getOrNull() ?: return
+        val obj = JSONObject()
+        for (url in SpotifyCookies.URLS) {
+            val header = cm.getCookie(url) ?: continue
+            if (header.isNotBlank()) obj.put(url, header)
+        }
+        if (obj.length() > 0) vault.set(COOKIE_KEY, obj.toString())
+        runCatching { cm.flush() }
+    }
+
+    private fun restorePersistedCookies() {
+        val raw = vault.get(COOKIE_KEY) ?: return
+        val cm = runCatching { CookieManager.getInstance() }.getOrNull() ?: return
+        val obj = runCatching { JSONObject(raw) }.getOrNull() ?: return
+        obj.keys().forEach { url ->
+            obj.optString(url).split(';').forEach { part ->
+                val cookie = part.trim()
+                if (cookie.isNotEmpty()) cm.setCookie(url, cookie)
+            }
+        }
+    }
+
+    private fun clearSpotifyCookies() {
+        val cm = CookieManager.getInstance()
+        for (url in SpotifyCookies.URLS) {
+            cm.getCookie(url)?.split(';')?.forEach { part ->
+                val name = part.substringBefore('=').trim()
+                if (name.isNotBlank()) cm.setCookie(url, "$name=; Max-Age=0; Path=/")
+            }
+        }
+        cm.flush()
     }
 
     fun play(trackId: String, positionMs: Long = 0) {
@@ -248,10 +328,11 @@ class SpotifyWebSession @Inject constructor() {
     }
 
     companion object {
+        private const val HOME = "https://open.spotify.com/"
+        private const val COOKIE_KEY = "spotify_web_cookies"
+        private const val FLAG_KEY = "spotify_web_logged_in"
         private const val DESKTOP_UA =
             "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/144.0.0.0 Safari/537.36"
-        private const val MOBILE_UA =
-            "Mozilla/5.0 (Linux; Android 14; Pixel 8) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/144.0.0.0 Mobile Safari/537.36"
         private const val LOGIN_URL =
             "https://accounts.spotify.com/login?continue=https%3A%2F%2Fopen.spotify.com%2F"
         private const val FIT_MOBILE = """

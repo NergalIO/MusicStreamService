@@ -142,7 +142,9 @@ fun MssApp(
                 VkIdOverlay(
                     error = vkLogin.error,
                     onClose = { vm.closeVkLogin() },
+                    onForm = { vm.setVkMethod(true) },
                     onDone = { vm.completeVkId(it) },
+                    onCookies = { vm.tryVkWebCookies(it) },
                     modifier = Modifier.zIndex(3f),
                 )
             }

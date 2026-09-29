@@ -3,10 +3,6 @@ package com.mss.android.ui.player
 import android.media.audiofx.Visualizer
 import android.os.Handler
 import android.os.Looper
-import android.graphics.RenderEffect
-import android.graphics.Shader
-import android.os.Build
-import androidx.annotation.RequiresApi
 import androidx.compose.foundation.background
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.Arrangement
@@ -57,11 +53,11 @@ import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
+import androidx.compose.ui.draw.clipToBounds
 import androidx.compose.ui.graphics.Brush
 import androidx.compose.ui.graphics.Color
-import androidx.compose.ui.graphics.asComposeRenderEffect
-import androidx.compose.ui.graphics.graphicsLayer
 import androidx.compose.ui.layout.ContentScale
+import androidx.compose.ui.zIndex
 import androidx.compose.ui.semantics.contentDescription
 import androidx.compose.ui.semantics.semantics
 import androidx.compose.ui.text.font.FontWeight
@@ -76,6 +72,7 @@ import com.mss.android.ui.components.TrackRow
 import com.mss.android.ui.theme.AccentPanelBackground
 import com.mss.android.ui.theme.COVER_ACCENT
 import com.mss.android.ui.theme.MssTheme
+import com.mss.android.ui.theme.isolatedCoverBlur
 import com.mss.android.ui.theme.rememberCoverHsl
 import com.mss.core.model.LobbyDto
 import com.mss.core.model.SourceId
@@ -180,7 +177,11 @@ private fun NowPlayingBody(vm: MssViewModel, onBack: () -> Unit, onArtist: (Stri
     Box(Modifier.fillMaxSize()) {
         PlayerBackdrop(track?.coverUrl)
         if (track == null) {
-            Column(Modifier.fillMaxSize().padding(24.dp), verticalArrangement = Arrangement.Center, horizontalAlignment = Alignment.CenterHorizontally) {
+            Column(
+                Modifier.fillMaxSize().zIndex(1f).padding(24.dp),
+                verticalArrangement = Arrangement.Center,
+                horizontalAlignment = Alignment.CenterHorizontally,
+            ) {
                 Text("Ничего не играет", style = MaterialTheme.typography.titleMedium)
                 Text(
                     "Выберите трек на главной или в медиатеке",
@@ -201,7 +202,7 @@ private fun NowPlayingBody(vm: MssViewModel, onBack: () -> Unit, onArtist: (Stri
             if (tab == 2) vm.loadSimilar(track)
         }
         val scheme = MaterialTheme.colorScheme
-        BoxWithConstraints(Modifier.fillMaxSize()) {
+        BoxWithConstraints(Modifier.fillMaxSize().zIndex(1f)) {
             val landscape = maxWidth > maxHeight
             val cover = min(min(maxWidth - 48.dp, 320.dp), if (landscape) maxHeight * 0.48f else maxHeight * 0.38f)
             val showVisualizer = settings.visualizer && !landscape && maxHeight > 640.dp && tab == null
@@ -219,12 +220,12 @@ private fun NowPlayingBody(vm: MssViewModel, onBack: () -> Unit, onArtist: (Stri
                         .clip(RoundedCornerShape(16.dp)),
                     contentAlignment = Alignment.Center,
                 ) {
-                    CoverSlot(track.coverUrl, blurred = tab != null, modifier = Modifier.fillMaxSize())
+                    CoverSlot(track.coverUrl, blurred = tab != null, modifier = Modifier.fillMaxSize().zIndex(0f))
                     when (tab) {
-                        0 -> QueuePane(state.queue, state.index, { vm.play(state.queue, it) }, Modifier.fillMaxSize())
-                        1 -> LyricsPane(lyrics, state.positionMs, Modifier.fillMaxSize())
-                        2 -> SimilarPane(similar, liked, state, vm, Modifier.fillMaxSize())
-                        else -> Cover(track.coverUrl, Modifier.fillMaxSize(), corner = 16.dp)
+                        0 -> QueuePane(state.queue, state.index, { vm.play(state.queue, it) }, Modifier.fillMaxSize().zIndex(1f))
+                        1 -> LyricsPane(lyrics, state.positionMs, Modifier.fillMaxSize().zIndex(1f))
+                        2 -> SimilarPane(similar, liked, state, vm, Modifier.fillMaxSize().zIndex(1f))
+                        else -> Cover(track.coverUrl, Modifier.fillMaxSize().zIndex(1f), corner = 16.dp)
                     }
                 }
                 TrackHeading(
@@ -260,12 +261,7 @@ private fun CoverSlot(coverUrl: String?, blurred: Boolean, modifier: Modifier = 
         model = coverUrl,
         contentDescription = null,
         contentScale = ContentScale.Crop,
-        modifier = modifier.graphicsLayer {
-            alpha = if (blurred) 0.45f else 1f
-            if (blurred && Build.VERSION.SDK_INT >= Build.VERSION_CODES.S) {
-                renderEffect = coverBlur()
-            }
-        },
+        modifier = modifier.isolatedCoverBlur(radiusPx = 70f, alpha = if (blurred) 0.45f else 1f, enabled = blurred),
     )
 }
 
@@ -501,20 +497,13 @@ private fun NowPlayingControls(vm: MssViewModel, state: com.mss.core.player.Play
 
 @Composable
 private fun PlayerBackdrop(coverUrl: String?) {
-    Box(Modifier.fillMaxSize().background(Color(0xFF070708))) {
+    Box(Modifier.fillMaxSize().clipToBounds().background(Color(0xFF070708))) {
         if (!coverUrl.isNullOrBlank()) {
             AsyncImage(
                 model = coverUrl,
                 contentDescription = null,
                 contentScale = ContentScale.Crop,
-                modifier = Modifier.fillMaxSize().graphicsLayer {
-                    scaleX = 1.2f
-                    scaleY = 1.2f
-                    alpha = 0.55f
-                    if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.S) {
-                        renderEffect = coverBlur()
-                    }
-                },
+                modifier = Modifier.fillMaxSize().isolatedCoverBlur(radiusPx = 70f, scale = 1.2f, alpha = 0.55f),
             )
         }
         Box(
@@ -526,9 +515,6 @@ private fun PlayerBackdrop(coverUrl: String?) {
         )
     }
 }
-
-@RequiresApi(Build.VERSION_CODES.S)
-private fun coverBlur() = RenderEffect.createBlurEffect(70f, 70f, Shader.TileMode.CLAMP).asComposeRenderEffect()
 
 private fun formatClock(ms: Long): String {
     val total = (ms / 1000).coerceAtLeast(0)

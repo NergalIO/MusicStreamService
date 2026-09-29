@@ -129,6 +129,113 @@ object VkAuth {
         e.message
     }
 
+    /** Путь `/blank.html`, а не `redirect_uri=...blank.html` в query authorize. */
+    fun isOAuthBlankUrl(url: String): Boolean {
+        val parsed = try {
+            java.net.URI(url)
+        } catch (_: Exception) {
+            return false
+        }
+        val host = parsed.host.orEmpty()
+        if (!host.matches(Regex("oauth\\.vk\\.(com|ru)", RegexOption.IGNORE_CASE))) return false
+        return parsed.path?.contains("blank.html") == true
+    }
+
+    fun shouldCompleteWebLogin(url: String): Boolean {
+        if (!isOAuthBlankUrl(url)) return false
+        return try {
+            parseOAuthRedirect(url) != null
+        } catch (e: VkAuthException) {
+            val msg = e.message.orEmpty()
+            !msg.contains("не разрешает", true) && !msg.contains("direct auth", true)
+        }
+    }
+
+    fun isVkHost(host: String): Boolean =
+        host.matches(Regex("(?:(?:m|id|login|oauth|qr)\\.)?vk\\.(com|ru)", RegexOption.IGNORE_CASE))
+
+    fun looksLoggedIn(url: String): Boolean {
+        val parsed = try {
+            java.net.URI(url)
+        } catch (_: Exception) {
+            return false
+        }
+        val host = parsed.host.orEmpty()
+        if (!isVkHost(host)) return false
+        if (host.contains("oauth.vk", true) || host.contains("qr.vk", true)) return false
+        val path = parsed.path.orEmpty()
+        return !path.contains("/login", true) && !path.contains("/auth", true)
+    }
+
+    fun parseCookieHeader(header: String): MutableMap<String, String> {
+        val out = mutableMapOf<String, String>()
+        header.split(';').forEach { part ->
+            val eq = part.indexOf('=')
+            if (eq <= 0) return@forEach
+            val name = part.substring(0, eq).trim()
+            val value = part.substring(eq + 1).trim()
+            if (name.isNotBlank() && value.isNotBlank() && value != "DELETED") out[name] = value
+        }
+        return out
+    }
+
+    fun hasSessionCookie(header: String): Boolean {
+        return parseCookieHeader(header).keys.any { name ->
+            val n = name.lowercase()
+            n.contains("remix") && (n.contains("sid") || n.contains("token") || n.contains("stlid"))
+        }
+    }
+
+    fun parsePageTokens(html: String): VkOAuthPayload? {
+        val access = Regex("\"(?:apiPrefetchToken|access_token|accessToken)\"\\s*:\\s*\"(vk1\\.[^\"]+)\"")
+            .find(html)?.groupValues?.get(1)
+        val silent = Regex("\"(?:silent_token|silentToken)\"\\s*:\\s*\"([^\"]{16,})\"")
+            .find(html)?.groupValues?.get(1)
+        val uuid = Regex("\"(?:silent_token_uuid|uuid)\"\\s*:\\s*\"([0-9a-f-]{16,})\"", RegexOption.IGNORE_CASE)
+            .find(html)?.groupValues?.get(1)
+        if (access.isNullOrBlank() && silent.isNullOrBlank()) return null
+        return VkOAuthPayload(access, null, silent, uuid)
+    }
+
+    fun toRedirectUrl(payload: VkOAuthPayload): String {
+        val parts = mutableListOf<String>()
+        fun add(key: String, value: String?) {
+            if (!value.isNullOrBlank()) parts += "$key=${encode(value)}"
+        }
+        add("access_token", payload.accessToken)
+        add("silent_token", payload.silentToken)
+        add("uuid", payload.uuid)
+        payload.userId?.let { parts += "user_id=$it" }
+        return "https://oauth.vk.com/blank.html#${parts.joinToString("&")}"
+    }
+
+    suspend fun tokensFromConnectInternal(
+        cookies: Map<String, String>,
+        appId: String,
+        ua: String = MOBILE_UA,
+    ): VkOAuthPayload? {
+        if (cookies.isEmpty()) return null
+        val obj = runCatching {
+            postForm(
+                "https://login.vk.com/?act=connect_internal",
+                mapOf("app_id" to appId, "oauth_version" to "1", "version" to "1"),
+                cookies = cookies.toMutableMap(),
+                ua = ua,
+                origin = "https://id.vk.com",
+            )
+        }.getOrNull() ?: return null
+        val nested = obj["data"]?.jsonObject ?: obj
+        val access = nested.str("access_token")
+        val silent = nested.str("silent_token")
+        if (access.isNullOrBlank() && silent.isNullOrBlank()) return null
+        return VkOAuthPayload(
+            accessToken = access,
+            userId = nested["user_id"]?.jsonPrimitive?.longOrNull ?: nested.str("user_id")?.toLongOrNull(),
+            silentToken = silent,
+            uuid = nested.str("uuid") ?: nested.str("silent_token_uuid"),
+        )
+    }
+
     suspend fun loginPassword(
         username: String,
         password: String,

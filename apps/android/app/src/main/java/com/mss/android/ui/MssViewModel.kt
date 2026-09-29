@@ -8,6 +8,7 @@ import com.mss.android.ui.navigation.parseMssLink
 import com.mss.core.connectors.AuthStatus
 import com.mss.core.connectors.SpotifyConnector
 import com.mss.core.connectors.SpotifyWebSession
+import com.mss.core.connectors.VkAuth
 import com.mss.core.connectors.VkAuthException
 import com.mss.core.connectors.VkConnector
 import com.mss.core.connectors.YandexConnector
@@ -112,6 +113,7 @@ class MssViewModel @Inject constructor(
     val sources: StateFlow<SourceStatuses> = _sources
     private val _vkLogin = MutableStateFlow(VkLoginUi())
     val vkLogin: StateFlow<VkLoginUi> = _vkLogin
+    @Volatile private var vkCookieProbe = false
 
     init {
         refreshSources()
@@ -336,16 +338,21 @@ class MssViewModel @Inject constructor(
 
     fun openVkLogin() {
         vk.cancelLogin()
-        _vkLogin.value = VkLoginUi(open = true)
+        vkCookieProbe = false
+        _vkLogin.value = VkLoginUi(open = true, step = VkLoginStep.VKID)
     }
+
+    fun openVkIdLogin() = openVkLogin()
 
     fun closeVkLogin() {
         vk.cancelLogin()
+        vkCookieProbe = false
         _vkLogin.value = VkLoginUi()
     }
 
     fun setVkMethod(sms: Boolean) {
         vk.cancelLogin()
+        vkCookieProbe = false
         _vkLogin.value = VkLoginUi(open = true, sms = sms)
     }
 
@@ -374,11 +381,33 @@ class MssViewModel @Inject constructor(
         loadHome()
     }
 
-    fun completeVkId(url: String) = launchVk {
-        vk.completeWebLogin(url)
-        _vkLogin.value = VkLoginUi()
-        refreshSources()
-        loadHome()
+    fun completeVkId(url: String) {
+        if (!VkAuth.shouldCompleteWebLogin(url)) return
+        launchVk {
+            vk.completeWebLogin(url)
+            _vkLogin.value = VkLoginUi()
+            refreshSources()
+            loadHome()
+        }
+    }
+
+    fun tryVkWebCookies(cookies: String) {
+        if (cookies.isBlank() || vkCookieProbe) return
+        viewModelScope.launch {
+            vkCookieProbe = true
+            runCatching { vk.completeWebLoginFromCookies(cookies) }
+                .onSuccess { ok ->
+                    if (ok) {
+                        _vkLogin.value = VkLoginUi()
+                        refreshSources()
+                        loadHome()
+                    }
+                }
+                .onFailure { e ->
+                    _vkLogin.value = _vkLogin.value.copy(busy = false, error = e.message)
+                }
+            vkCookieProbe = false
+        }
     }
 
     private fun launchVk(block: suspend () -> Unit) {

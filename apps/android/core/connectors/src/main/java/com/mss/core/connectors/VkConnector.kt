@@ -116,6 +116,18 @@ class VkConnector @Inject constructor(
         saveTokens(VkTokens(pair.accessToken, pair.userId))
     }
 
+    /** Cookies из WebView после входа на id.vk.com. false — сессии ещё нет, окно не закрываем. */
+    suspend fun completeWebLoginFromCookies(cookieHeader: String): Boolean {
+        val cookies = VkAuth.parseCookieHeader(cookieHeader)
+        if (cookies.isEmpty()) return false
+        val payload = VkAuth.tokensFromConnectInternal(cookies, VkAuth.KATE_CLIENT_ID)
+            ?: VkAuth.tokensFromConnectInternal(cookies, VkAuth.ANDROID_CLIENT_ID)
+            ?: return false
+        val pair = VkAuth.materialize(payload)
+        saveTokens(VkTokens(pair.accessToken, pair.userId))
+        return true
+    }
+
     override suspend fun disconnect() {
         vault.delete(VAULT_KEY)
         vault.delete(ACCOUNT_KEY)
