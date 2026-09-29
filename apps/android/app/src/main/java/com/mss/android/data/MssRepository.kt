@@ -61,6 +61,17 @@ class MssRepository @Inject constructor(
         preferences.clearSession()
     }
 
+    suspend fun enterUiPreview() {
+        preferences.setOnboarded(true)
+        preferences.saveSession(
+            AuthSession(
+                accessToken = "preview",
+                refreshToken = "preview",
+                user = com.mss.core.model.AuthUser("preview", "preview@local"),
+            ),
+        )
+    }
+
     suspend fun setApiBase(url: String) = preferences.setApiBaseUrl(url)
 
     suspend fun mssTracks(query: String = "", limit: Int = 50): List<UnifiedTrack> {

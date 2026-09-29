@@ -2,27 +2,46 @@ package com.mss.android.ui.search
 
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.Arrangement
-import androidx.compose.foundation.layout.Column
-import androidx.compose.foundation.layout.Row
+import androidx.compose.foundation.layout.PaddingValues
+import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.padding
-import androidx.compose.material3.Button
-import androidx.compose.material3.FilterChip
-import androidx.compose.material3.OutlinedTextField
+import androidx.compose.foundation.lazy.LazyColumn
+import androidx.compose.foundation.lazy.LazyRow
+import androidx.compose.foundation.lazy.items
+import androidx.compose.foundation.lazy.itemsIndexed
+import androidx.compose.foundation.text.KeyboardActions
+import androidx.compose.foundation.text.KeyboardOptions
+import androidx.compose.material.icons.Icons
+import androidx.compose.material.icons.filled.Search
+import androidx.compose.material3.Icon
+import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.collectAsState
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.focus.FocusRequester
+import androidx.compose.ui.focus.focusRequester
+import androidx.compose.ui.text.input.ImeAction
+import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import androidx.navigation.NavHostController
 import com.mss.android.ui.MssViewModel
-import com.mss.android.ui.catalog.CatalogList
+import com.mss.android.ui.components.EmptyState
+import com.mss.android.ui.components.EntityRow
+import com.mss.android.ui.components.MssChip
+import com.mss.android.ui.components.MssField
+import com.mss.android.ui.components.ScreenTitle
+import com.mss.android.ui.components.SectionTitle
+import com.mss.android.ui.components.TrackRow
 import com.mss.android.ui.navigation.Routes
 import com.mss.core.model.SourceId
+import com.mss.core.model.WaveSettings
 
 @Composable
 fun SearchScreen(vm: MssViewModel, nav: NavHostController) {
@@ -33,40 +52,126 @@ fun SearchScreen(vm: MssViewModel, nav: NavHostController) {
     val albums by vm.albums.collectAsState()
     val playlists by vm.searchPlaylists.collectAsState()
     val artists by vm.searchArtists.collectAsState()
-    Column {
-        OutlinedTextField(q, { q = it }, label = { Text("Поиск") }, modifier = Modifier.fillMaxWidth().padding(16.dp))
-        Row(Modifier.padding(horizontal = 16.dp), horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-            FilterChip(source == null, { source = null }, label = { Text("Все") })
-            FilterChip(source == SourceId.LOCAL, { source = SourceId.LOCAL }, label = { Text("MSS") })
-            FilterChip(source == SourceId.YANDEX, { source = SourceId.YANDEX }, label = { Text("Яндекс") })
-            FilterChip(source == SourceId.SPOTIFY, { source = SourceId.SPOTIFY }, label = { Text("Spotify") })
-            FilterChip(source == SourceId.VK, { source = SourceId.VK }, label = { Text("VK") })
+    val tracks by vm.tracks.collectAsState()
+    val liked by vm.likedIds.collectAsState()
+    val player by vm.playerState.collectAsState()
+    val error by vm.error.collectAsState()
+    var didSearch by remember { mutableStateOf(false) }
+    val focus = remember { FocusRequester() }
+    LaunchedEffect(Unit) { focus.requestFocus() }
+    val currentKey = player.current?.let { "${it.source}:${it.id}" }
+    val runSearch = {
+        if (q.isNotBlank()) {
+            didSearch = true
+            vm.search(q, source, kind)
         }
-        Row(Modifier.padding(horizontal = 16.dp), horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-            listOf("all" to "Все", "tracks" to "Треки", "artists" to "Артисты", "albums" to "Альбомы", "playlists" to "Плейлисты").forEach { (k, label) ->
-                FilterChip(kind == k, { kind = k }, label = { Text(label) })
+    }
+    val showTracks = kind == "all" || kind == "tracks"
+    val showAlbums = kind == "all" || kind == "albums"
+    val showArtists = kind == "all" || kind == "artists"
+    val showPlaylists = kind == "all" || kind == "playlists"
+    val nothing = didSearch && tracks.isEmpty() && albums.isEmpty() && playlists.isEmpty() && artists.isEmpty()
+
+    LazyColumn(Modifier.fillMaxSize(), contentPadding = PaddingValues(bottom = 16.dp)) {
+        item {
+            ScreenTitle("Поиск")
+            MssField(
+                q,
+                { q = it },
+                placeholder = "Треки, артисты, альбомы",
+                modifier = Modifier.fillMaxWidth().padding(horizontal = 16.dp).focusRequester(focus),
+                leadingIcon = { Icon(Icons.Default.Search, contentDescription = null) },
+                keyboardOptions = KeyboardOptions(imeAction = ImeAction.Search),
+                keyboardActions = KeyboardActions(onSearch = { runSearch() }),
+            )
+        }
+        item {
+            LazyRow(
+                contentPadding = PaddingValues(horizontal = 16.dp, vertical = 12.dp),
+                horizontalArrangement = Arrangement.spacedBy(8.dp),
+            ) {
+                items(
+                    listOf(
+                        null to "Все",
+                        SourceId.LOCAL to "MSS",
+                        SourceId.YANDEX to "Яндекс",
+                        SourceId.SPOTIFY to "Spotify",
+                        SourceId.VK to "VK",
+                    ),
+                ) { (s, label) ->
+                    MssChip(source == s, label) { source = s }
+                }
             }
         }
-        Button(onClick = { vm.search(q, source, kind) }, modifier = Modifier.padding(16.dp)) { Text("Искать") }
-        if (history.isNotEmpty()) {
-            Text("Недавние", modifier = Modifier.padding(horizontal = 16.dp))
-            history.take(5).forEach { h ->
-                Text(h, modifier = Modifier.padding(horizontal = 16.dp, vertical = 4.dp).clickable { q = h; vm.search(h, source, kind) })
+        item {
+            LazyRow(
+                contentPadding = PaddingValues(start = 16.dp, end = 16.dp, bottom = 8.dp),
+                horizontalArrangement = Arrangement.spacedBy(8.dp),
+            ) {
+                items(listOf("all" to "Все", "tracks" to "Треки", "artists" to "Артисты", "albums" to "Альбомы", "playlists" to "Плейлисты")) { (k, label) ->
+                    MssChip(kind == k, label) { kind = k }
+                }
             }
         }
-        albums.forEach { a ->
-            Text("${a.title} · ${a.artist}", modifier = Modifier.fillMaxWidth().clickable {
-                nav.navigate(Routes.album(a.source.name.lowercase(), a.id))
-            }.padding(16.dp))
+        if (!didSearch && q.isBlank() && history.isNotEmpty()) {
+            item { SectionTitle("Недавние") }
+            items(history.take(8)) { h ->
+                Text(
+                    h,
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .clickable {
+                            q = h
+                            didSearch = true
+                            vm.search(h, source, kind)
+                        }
+                        .padding(horizontal = 16.dp, vertical = 12.dp),
+                    maxLines = 1,
+                    overflow = TextOverflow.Ellipsis,
+                    color = MaterialTheme.colorScheme.onSurface,
+                )
+            }
         }
-        playlists.forEach { p ->
-            Text(p.title, modifier = Modifier.fillMaxWidth().clickable {
-                nav.navigate(if (p.source == SourceId.LOCAL) Routes.mssPlaylist(p.id) else Routes.playlist(p.source.name.lowercase(), p.id))
-            }.padding(16.dp))
+        if (didSearch && error != null && nothing) {
+            item { EmptyState("Не удалось выполнить поиск", "Проверьте соединение и нажмите поиск ещё раз.") }
+        } else if (nothing) {
+            item { EmptyState("Ничего не найдено", "Попробуйте другой запрос или источник.") }
         }
-        artists.forEach { a ->
-            Text(a.name, modifier = Modifier.fillMaxWidth().clickable { nav.navigate(Routes.artist(a.name)) }.padding(16.dp))
+        if (showAlbums && albums.isNotEmpty()) {
+            item { SectionTitle("Альбомы") }
+            items(albums, key = { "a:${it.source}:${it.id}" }) { a ->
+                EntityRow(a.title, a.artist, a.coverUrl, { nav.navigate(Routes.album(a.source.name.lowercase(), a.id)) })
+            }
         }
-        CatalogList(vm, nav)
+        if (showArtists && artists.isNotEmpty()) {
+            item { SectionTitle("Артисты") }
+            items(artists, key = { "ar:${it.name}" }) { a ->
+                EntityRow(a.name, null, a.imageUrl, { nav.navigate(Routes.artist(a.name)) })
+            }
+        }
+        if (showPlaylists && playlists.isNotEmpty()) {
+            item { SectionTitle("Плейлисты") }
+            items(playlists, key = { "p:${it.source}:${it.id}" }) { p ->
+                EntityRow(p.title, p.owner, p.coverUrl, {
+                    nav.navigate(if (p.source == SourceId.LOCAL) Routes.mssPlaylist(p.id) else Routes.playlist(p.source.name.lowercase(), p.id))
+                })
+            }
+        }
+        if (showTracks && tracks.isNotEmpty()) {
+            item { SectionTitle("Треки") }
+            itemsIndexed(tracks, key = { i, t -> "${t.source}:${t.id}:$i" }) { i, track ->
+                TrackRow(
+                    track, track.id in liked,
+                    onPlay = { vm.play(tracks, i) },
+                    onLike = { vm.toggleLike(track) },
+                    onDownload = { vm.download(track) },
+                    onSimilar = { nav.navigate(Routes.similar(track.source.name.lowercase(), track.id)) },
+                    onQueue = { vm.player.enqueue(track) },
+                    onWave = { vm.startWave(WaveSettings(seed = "track:${track.id}", seedTitle = track.title)) },
+                    onSuggest = { vm.suggestToLobby(track) },
+                    active = currentKey == "${track.source}:${track.id}",
+                )
+            }
+        }
     }
 }

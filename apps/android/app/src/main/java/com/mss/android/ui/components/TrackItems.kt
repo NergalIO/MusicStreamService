@@ -1,20 +1,23 @@
 package com.mss.android.ui.components
 
+import androidx.compose.foundation.background
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Row
+import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.itemsIndexed
-import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.Download
 import androidx.compose.material.icons.filled.Favorite
 import androidx.compose.material.icons.filled.FavoriteBorder
+import androidx.compose.material.icons.filled.GraphicEq
 import androidx.compose.material.icons.filled.MoreVert
+import androidx.compose.material.icons.filled.MusicNote
 import androidx.compose.material3.DropdownMenu
 import androidx.compose.material3.DropdownMenuItem
 import androidx.compose.material3.Icon
@@ -26,22 +29,39 @@ import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.setValue
+import androidx.compose.foundation.layout.Box
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.layout.ContentScale
+import androidx.compose.ui.text.font.FontWeight
+import androidx.compose.ui.text.style.TextOverflow
+import androidx.compose.foundation.shape.RoundedCornerShape
+import androidx.compose.ui.unit.Dp
 import androidx.compose.ui.unit.dp
 import coil.compose.AsyncImage
 import com.mss.core.model.UnifiedTrack
 
 @Composable
-fun Cover(url: String?, modifier: Modifier = Modifier.size(48.dp)) {
-    AsyncImage(
-        model = url,
-        contentDescription = null,
-        contentScale = ContentScale.Crop,
-        modifier = modifier.clip(RoundedCornerShape(8.dp)),
-    )
+fun Cover(url: String?, modifier: Modifier = Modifier.size(48.dp), corner: Dp = 10.dp) {
+    val scheme = MaterialTheme.colorScheme
+    var failed by remember(url) { mutableStateOf(url.isNullOrBlank()) }
+    Box(
+        modifier.clip(RoundedCornerShape(corner)).background(scheme.onSurface.copy(alpha = 0.07f)),
+        contentAlignment = Alignment.Center,
+    ) {
+        if (!failed) {
+            AsyncImage(
+                model = url,
+                contentDescription = null,
+                contentScale = ContentScale.Crop,
+                onError = { failed = true },
+                modifier = Modifier.matchParentSize(),
+            )
+        } else {
+            Icon(Icons.Default.MusicNote, contentDescription = null, tint = scheme.onSurfaceVariant, modifier = Modifier.size(22.dp))
+        }
+    }
 }
 
 @Composable
@@ -55,24 +75,50 @@ fun TrackRow(
     onQueue: (() -> Unit)? = null,
     onWave: (() -> Unit)? = null,
     onSuggest: (() -> Unit)? = null,
+    active: Boolean = false,
 ) {
     var menu by remember { mutableStateOf(false) }
+    val scheme = MaterialTheme.colorScheme
     Row(
-        Modifier.fillMaxWidth().clickable(onClick = onPlay).padding(horizontal = 16.dp, vertical = 8.dp),
+        Modifier
+            .fillMaxWidth()
+            .background(if (active) scheme.onSurface.copy(alpha = 0.06f) else scheme.background.copy(alpha = 0f))
+            .clickable(onClick = onPlay)
+            .padding(horizontal = 16.dp, vertical = 8.dp),
         verticalAlignment = Alignment.CenterVertically,
         horizontalArrangement = Arrangement.spacedBy(12.dp),
     ) {
-        Cover(track.coverUrl)
+        Cover(track.coverUrl, Modifier.size(48.dp))
         Column(Modifier.weight(1f)) {
-            Text(track.title, style = MaterialTheme.typography.bodyLarge, maxLines = 1)
-            Text(track.artist, style = MaterialTheme.typography.bodySmall, maxLines = 1)
+            Row(Modifier.fillMaxWidth(), verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(6.dp)) {
+                Text(
+                    track.title,
+                    style = MaterialTheme.typography.bodyLarge,
+                    fontWeight = if (active) FontWeight.SemiBold else FontWeight.Medium,
+                    color = if (active) scheme.primary else scheme.onSurface,
+                    maxLines = 1,
+                    overflow = TextOverflow.Ellipsis,
+                    modifier = Modifier.weight(1f),
+                )
+                if (active) Icon(Icons.Default.GraphicEq, contentDescription = "Играет", tint = scheme.primary, modifier = Modifier.size(16.dp))
+            }
+            Text(track.artist, style = MaterialTheme.typography.bodySmall, color = scheme.onSurfaceVariant, maxLines = 1, overflow = TextOverflow.Ellipsis)
         }
         IconButton(onClick = onLike) {
-            Icon(if (liked) Icons.Default.Favorite else Icons.Default.FavoriteBorder, contentDescription = "лайк")
+            Icon(
+                if (liked) Icons.Default.Favorite else Icons.Default.FavoriteBorder,
+                contentDescription = if (liked) "Убрать из библиотеки" else "Добавить в библиотеку",
+                tint = if (liked) scheme.primary else scheme.onSurfaceVariant,
+            )
         }
         IconButton(onClick = { menu = true }) {
-            Icon(Icons.Default.MoreVert, contentDescription = "меню")
+            Icon(Icons.Default.MoreVert, contentDescription = "Ещё", tint = scheme.onSurfaceVariant)
             DropdownMenu(menu, { menu = false }) {
+                DropdownMenuItem(
+                    text = { Text(if (liked) "Убрать лайк" else "Лайк") },
+                    onClick = { menu = false; onLike() },
+                    leadingIcon = { Icon(if (liked) Icons.Default.Favorite else Icons.Default.FavoriteBorder, null) },
+                )
                 DropdownMenuItem(text = { Text("Скачать") }, onClick = { menu = false; onDownload() }, leadingIcon = { Icon(Icons.Default.Download, null) })
                 onQueue?.let { DropdownMenuItem(text = { Text("В очередь") }, onClick = { menu = false; it() }) }
                 onSimilar?.let { DropdownMenuItem(text = { Text("Похожие") }, onClick = { menu = false; it() }) }
@@ -94,8 +140,10 @@ fun TrackList(
     onQueue: ((UnifiedTrack) -> Unit)? = null,
     onWave: ((UnifiedTrack) -> Unit)? = null,
     onSuggest: ((UnifiedTrack) -> Unit)? = null,
+    currentKey: String? = null,
+    modifier: Modifier = Modifier,
 ) {
-    LazyColumn {
+    LazyColumn(modifier.fillMaxSize()) {
         itemsIndexed(tracks, key = { i, t -> "${t.source}:${t.id}:$i" }) { index, track ->
             TrackRow(
                 track = track,
@@ -107,6 +155,7 @@ fun TrackList(
                 onQueue = onQueue?.let { { it(track) } },
                 onWave = onWave?.let { { it(track) } },
                 onSuggest = onSuggest?.let { { it(track) } },
+                active = currentKey == "${track.source}:${track.id}",
             )
         }
     }

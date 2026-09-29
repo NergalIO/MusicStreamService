@@ -422,7 +422,12 @@ class MssViewModel @Inject constructor(
     private fun launch(block: suspend () -> Unit) {
         viewModelScope.launch {
             _error.value = null
-            runCatching { block() }.onFailure { _error.value = it.message }
+            runCatching { block() }.onFailure { e ->
+                if (session.value?.accessToken == "preview") return@launch
+                _error.value = e.message
+            }
         }
     }
+
+    fun clearError() { _error.value = null }
 }

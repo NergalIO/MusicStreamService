@@ -25,12 +25,17 @@ class AuthViewModel @Inject constructor(
     val authVerify: StateFlow<Boolean> = _authVerify
     private val _authInfo = MutableStateFlow<String?>(null)
     val authInfo: StateFlow<String?> = _authInfo
+    private val _busy = MutableStateFlow(false)
+    val busy: StateFlow<Boolean> = _busy
 
     fun setApiBase(url: String) = viewModelScope.launch { repo.setApiBase(url) }
+
+    fun enterUiPreview() = viewModelScope.launch { repo.enterUiPreview() }
 
     fun login(email: String, password: String, register: Boolean) {
         viewModelScope.launch {
             _error.value = null
+            _busy.value = true
             runCatching {
                 if (register) {
                     val pending = repo.register(email, password)
@@ -46,6 +51,7 @@ class AuthViewModel @Inject constructor(
                     _authInfo.value = e.message
                 } else _error.value = e.message
             }
+            _busy.value = false
         }
     }
 

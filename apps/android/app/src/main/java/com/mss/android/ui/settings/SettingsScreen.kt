@@ -3,13 +3,14 @@ package com.mss.android.ui.settings
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Row
+import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.material3.Button
-import androidx.compose.material3.FilterChip
-import androidx.compose.material3.OutlinedTextField
+import com.mss.android.ui.components.MssChip
+import com.mss.android.ui.components.MssField
 import androidx.compose.material3.Slider
 import androidx.compose.material3.Switch
 import androidx.compose.material3.Text
@@ -24,6 +25,7 @@ import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.unit.dp
 import androidx.hilt.navigation.compose.hiltViewModel
+import com.mss.android.ui.theme.ChipFlow
 import com.mss.core.model.Quality
 
 @Composable
@@ -36,19 +38,22 @@ fun SettingsScreen(vm: SettingsViewModel = hiltViewModel()) {
     LaunchedEffect(Unit) { vm.checkApk() }
     val bands = settings.eqBands.toMutableList().let { if (it.size < 8) it + List(8 - it.size) { 0f } else it }.take(8)
     val labels = listOf("60", "150", "400", "1k", "2.4k", "6k", "10k", "15k")
-    Column(Modifier.padding(16.dp).verticalScroll(rememberScrollState()), verticalArrangement = Arrangement.spacedBy(8.dp)) {
-        OutlinedTextField(api, { api = it }, label = { Text("URL API") }, modifier = Modifier.fillMaxWidth())
+    Column(
+        Modifier.fillMaxSize().verticalScroll(rememberScrollState()).padding(16.dp),
+        verticalArrangement = Arrangement.spacedBy(8.dp),
+    ) {
+        MssField(api, { api = it }, placeholder = "https://…", label = "URL API", modifier = Modifier.fillMaxWidth())
         Button({ vm.setApiBase(api) }) { Text("Сохранить URL") }
         Text("Качество")
-        Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-            FilterChip(settings.quality == Quality.NORMAL, { vm.setQuality(Quality.NORMAL) }, label = { Text("Обычное") })
-            FilterChip(settings.quality == Quality.HIGH, { vm.setQuality(Quality.HIGH) }, label = { Text("Высокое") })
-            FilterChip(settings.quality == Quality.LOSSLESS, { vm.setQuality(Quality.LOSSLESS) }, label = { Text("Lossless") })
+        ChipFlow {
+            MssChip(settings.quality == Quality.NORMAL, "Обычное") { vm.setQuality(Quality.NORMAL) }
+            MssChip(settings.quality == Quality.HIGH, "Высокое") { vm.setQuality(Quality.HIGH) }
+            MssChip(settings.quality == Quality.LOSSLESS, "Lossless") { vm.setQuality(Quality.LOSSLESS) }
         }
         Text("Акцент")
-        Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+        ChipFlow {
             listOf("violet" to "Фиолет", "teal" to "Бирюза", "amber" to "Янтарь").forEach { (id, label) ->
-                FilterChip(settings.accent == id, { vm.savePlayback(settings.copy(accent = id)) }, label = { Text(label) })
+                MssChip(settings.accent == id, label) { vm.savePlayback(settings.copy(accent = id)) }
             }
         }
         Text("Кроссфейд ${settings.crossfadeMs} мс")

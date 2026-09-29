@@ -5,7 +5,6 @@ import WebSocket from 'ws';
 import { getAppSettings } from './app-settings.js';
 import { bindLocalTrack, prepareLocalFile, resolveLocalTrackPath } from './local-tracks.js';
 import { emitRelayEvent, getRelayAccessToken } from './relay-bridge.js';
-import { toastMain } from './toast.js';
 
 function resolveApiBase(): string {
   const fromSettings = getAppSettings().apiPublicUrl?.trim();
@@ -99,7 +98,6 @@ export async function fulfillRelayUpload(sessionId: string, interactive: boolean
     const filePath = await resolveRelayFilePath(msg.trackId, msg.title, interactive);
     await uploadRelayFile(msg, filePath, bearer);
     emitRelayEvent({ phase: 'done', sessionId: msg.sessionId, title: msg.title });
-    toastMain(`Трек «${msg.title}» отправлен на сервер — другой пользователь может слушать`);
     pendingRelays.delete(sessionId);
   } catch (e) {
     const raw = e instanceof Error ? e.message : String(e);
@@ -114,7 +112,6 @@ export async function fulfillRelayUpload(sessionId: string, interactive: boolean
       error,
       needFile,
     });
-    toastMain(needFile ? `Нужен файл для «${msg.title}» — нажмите «Указать файл» в панели внизу` : error);
     if (!needFile) pendingRelays.delete(sessionId);
     throw e;
   } finally {
@@ -128,7 +125,6 @@ function handleMessage(raw: WebSocket.RawData): void {
     if (msg.type !== 'relay_upload') return;
 
     pendingRelays.set(msg.sessionId, msg);
-    toastMain(`Запрос на «${msg.title}» — отдаём файл на сервер…`);
     void fulfillRelayUpload(msg.sessionId, true).catch(() => undefined);
   } catch {
     /* ignore */
