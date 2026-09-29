@@ -1,5 +1,6 @@
 import { toast } from 'sonner';
 import type { LobbyDto, LobbyMemberRole, LobbyWsEvent } from '@mss/shared';
+import { currentUserId } from '@/lib/api';
 import { leaveLobby, LobbyWsClient } from '@/lib/lobby-api';
 import { startLobbyBroadcast, stopLobbyBroadcast } from '@/lib/lobby-broadcast';
 import {
@@ -8,6 +9,14 @@ import {
   endLobbyGuestPlayerMirror,
 } from '@/lib/lobby-guest-player';
 import { appendLobbyAudioChunk, setLobbyListenPaused, startLobbyListen, stopLobbyListen } from '@/lib/lobby-listen';
+import {
+  bindLobbyWebrtc,
+  dropWebrtcPeer,
+  ensureHostWebrtcGuest,
+  handleLobbyWebrtcEvent,
+  stopLobbyWebrtc,
+  syncHostWebrtcGuests,
+} from '@/lib/lobby-webrtc';
 import { useLobbyStore } from '@/store/lobby-store';
 import { notifyLobbyPresence } from '@/lib/lobby-discord';
 import { forgetActiveLobby, rememberActiveLobby } from '@/lib/lobby-route';
@@ -22,6 +31,11 @@ function handleWsEvent(event: LobbyWsEvent): void {
       store.setLobby(event.lobby, role);
       notifyLobbyPresence(event.lobby, role);
       if (role === 'guest') applyLobbyGuestPlayback(event.lobby.playback);
+      if (client) {
+        const selfId = currentUserId();
+        if (selfId) bindLobbyWebrtc({ client, role, hostUserId: event.lobby.hostUserId, selfUserId: selfId });
+        if (role === 'host') syncHostWebrtcGuests(event.lobby.members);
+      }
       break;
     }
     case 'playback':
@@ -44,15 +58,21 @@ function handleWsEvent(event: LobbyWsEvent): void {
       notifyLobbyPresence(store.lobby!, store.role!);
       break;
     case 'listener_ready':
-      if (store.role === 'host' && client) {
-        void startLobbyBroadcast(client).catch(() => undefined);
-      }
+      // Захват не рестартуем: новый гость получает отдельный PeerConnection.
+      if (store.role === 'host') ensureHostWebrtcGuest(event.userId);
       break;
     case 'member_leave':
+      dropWebrtcPeer(event.userId);
       store.patchLobby({
         members: (store.lobby?.members ?? []).filter((m) => m.userId !== event.userId),
       });
       notifyLobbyPresence(store.lobby!, store.role!);
+      break;
+    case 'webrtc_offer':
+    case 'webrtc_answer':
+    case 'webrtc_ice':
+    case 'webrtc_state':
+      handleLobbyWebrtcEvent(event);
       break;
     case 'lobby_closed':
       toast.info('Лобби закрыто');
@@ -61,14 +81,14 @@ function handleWsEvent(event: LobbyWsEvent): void {
     case 'error':
       toast.error(event.message);
       break;
+    case 'ping':
     case 'pong':
       break;
   }
 }
 
 function inferRole(lobby: LobbyDto): LobbyMemberRole {
-  const session = JSON.parse(localStorage.getItem('mss_session') ?? '{}') as { user?: { id: string } };
-  const uid = session.user?.id;
+  const uid = currentUserId();
   if (uid && lobby.hostUserId === uid) return 'host';
   return 'guest';
 }
@@ -86,10 +106,19 @@ export function connectLobbySession(lobby: LobbyDto, role: LobbyMemberRole): voi
   client = new LobbyWsClient(handleWsEvent, {
     onOpen: () => {
       useLobbyStore.getState().setWsStatus('open');
+      const selfId = currentUserId();
+      if (selfId && client) {
+        bindLobbyWebrtc({ client, role, hostUserId: lobby.hostUserId, selfUserId: selfId });
+      }
       if (role === 'host' && client) {
-        void startLobbyBroadcast(client).catch((e) => {
-          toast.error(e instanceof Error ? e.message : 'Не удалось начать трансляцию');
-        });
+        void startLobbyBroadcast(client)
+          .then(() => {
+            const members = useLobbyStore.getState().lobby?.members ?? lobby.members;
+            syncHostWebrtcGuests(members);
+          })
+          .catch((e) => {
+            toast.error(e instanceof Error ? e.message : 'Не удалось начать трансляцию');
+          });
       }
     },
   });
@@ -120,6 +149,7 @@ export async function leaveCurrentLobby(): Promise<void> {
 
 export function disconnectLobbySession(): void {
   endLobbyGuestPlayerMirror();
+  stopLobbyWebrtc();
   stopLobbyBroadcast();
   stopLobbyListen();
   client?.disconnect();

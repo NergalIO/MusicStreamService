@@ -10,6 +10,7 @@ export function LobbyBar() {
   const role = useLobbyStore((s) => s.role);
   const live = useLobbyStore((s) => s.live);
   const wsStatus = useLobbyStore((s) => s.wsStatus);
+  const audioTransport = useLobbyStore((s) => s.audioTransport);
   const navigate = useNavigate();
   const location = useLocation();
   if (!lobby || !role) return null;
@@ -37,6 +38,11 @@ export function LobbyBar() {
           <span className="text-muted">
             {' '}
             · {role === 'host' ? 'вы DJ' : 'вы слушаете'} · {lobby.members.length}/{lobby.maxMembers} · {status}
+            {role === 'guest' && wsStatus === 'open'
+              ? audioTransport === 'webrtc'
+                ? ' · напрямую'
+                : ' · через сервер'
+              : ''}
           </span>
         </p>
         {lobby.playback.track && (

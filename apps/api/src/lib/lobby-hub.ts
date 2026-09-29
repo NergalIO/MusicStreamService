@@ -216,6 +216,62 @@ export function sendLobbyError(ws: WebSocket, message: string): void {
   sendJson(ws, { type: 'error', message });
 }
 
+const WEBRTC_USER_MAX = 64;
+const WEBRTC_SDP_MAX = 65_536;
+const WEBRTC_CANDIDATE_MAX = 2_048;
+
+function webrtcUserId(value: unknown): string | null {
+  return typeof value === 'string' && value.length > 0 && value.length <= WEBRTC_USER_MAX ? value : null;
+}
+
+/**
+ * Звезда DJ ↔ гость: SDP и ICE только между хостом комнаты и одним гостем.
+ * Невалидные поля молча отбрасываются, чтобы не логировать SDP.
+ */
+export function tryForwardLobbyWebrtc(
+  lobbyId: string,
+  fromUserId: string,
+  fromRole: 'host' | 'guest',
+  msg: Record<string, unknown>,
+): boolean {
+  const type = msg.type;
+  if (type !== 'webrtc_offer' && type !== 'webrtc_answer' && type !== 'webrtc_ice' && type !== 'webrtc_state') {
+    return false;
+  }
+  const toUserId = webrtcUserId(msg.toUserId);
+  if (!toUserId || toUserId === fromUserId) return true;
+  const room = rooms.get(lobbyId);
+  if (!room) return true;
+  const target = room.get(toUserId);
+  if (!target) return true;
+  const hostToGuest = fromRole === 'host' && target.role === 'guest';
+  const guestToHost = fromRole === 'guest' && target.role === 'host';
+  if (!hostToGuest && !guestToHost) return true;
+
+  let event: LobbyWsEvent | null = null;
+  if (type === 'webrtc_offer' || type === 'webrtc_answer') {
+    const sdp = typeof msg.sdp === 'string' ? msg.sdp : '';
+    if (!sdp || sdp.length > WEBRTC_SDP_MAX) return true;
+    event = { type, fromUserId, toUserId, sdp };
+  } else if (type === 'webrtc_ice') {
+    const raw = msg.candidate;
+    const candidate = raw === null ? null : typeof raw === 'string' ? raw : undefined;
+    if (candidate === undefined) return true;
+    if (candidate !== null && candidate.length > WEBRTC_CANDIDATE_MAX) return true;
+    const sdpMid = typeof msg.sdpMid === 'string' || msg.sdpMid === null ? msg.sdpMid : undefined;
+    const sdpMLineIndex = typeof msg.sdpMLineIndex === 'number' && Number.isFinite(msg.sdpMLineIndex)
+      ? msg.sdpMLineIndex
+      : undefined;
+    event = { type, fromUserId, toUserId, candidate, sdpMid, sdpMLineIndex };
+  } else {
+    const state = msg.state;
+    if (state !== 'connecting' && state !== 'connected' && state !== 'failed') return true;
+    event = { type, fromUserId, toUserId, state };
+  }
+  if (event) sendJson(target.ws, event);
+  return true;
+}
+
 export function lobbyRoomSize(lobbyId: string): number {
   return rooms.get(lobbyId)?.size ?? 0;
 }

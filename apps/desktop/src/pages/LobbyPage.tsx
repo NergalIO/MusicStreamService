@@ -1,6 +1,6 @@
 import type { LobbyDto, LobbySummaryDto } from '@mss/shared';
 import { useMutation, useQueryClient } from '@tanstack/react-query';
-import { Copy, DoorOpen, Radio, Users } from 'lucide-react';
+import { Copy, DoorOpen, Radio, Users, Wifi } from 'lucide-react';
 import { useEffect, useMemo, useState } from 'react';
 import { LobbyRoomList } from '@/components/lobby/LobbyRoomList';
 import { TrackList } from '@/components/tracks/TrackList';
@@ -17,6 +17,7 @@ import {
   joinLobby,
   rejectSuggestion,
 } from '@/lib/lobby-api';
+import { currentUserId } from '@/lib/api';
 import { copyTextWithToast } from '@/lib/clipboard';
 import { isLobbyListenPaused, resumeLobbyListen } from '@/lib/lobby-listen';
 import { disconnectLobbySession, enterLobbySession, leaveCurrentLobby } from '@/lib/lobby-session';
@@ -34,6 +35,8 @@ export function LobbyPage() {
   const role = useLobbyStore((s) => s.role);
   const live = useLobbyStore((s) => s.live);
   const wsStatus = useLobbyStore((s) => s.wsStatus);
+  const audioTransport = useLobbyStore((s) => s.audioTransport);
+  const guestTransports = useLobbyStore((s) => s.guestTransports);
   const [joinCode, setJoinCode] = useState(search.get('code') ?? '');
   const [publicRoom, setPublicRoom] = useState(true);
   const queryClient = useQueryClient();
@@ -182,6 +185,12 @@ export function LobbyPage() {
                   ? 'Вы слышите эфир DJ. Свой плеер на это не влияет. Можно уйти в другой раздел — комната останется.'
                   : 'Ждём звук от DJ. Если тишина долгая, пусть DJ перезапустит трек.'}
           </p>
+          {role === 'guest' && wsStatus === 'open' && (
+            <p className="mt-1 flex items-center gap-1.5 text-xs text-muted">
+              <Wifi size={12} aria-hidden />
+              {audioTransport === 'webrtc' ? 'Прямое соединение с DJ' : 'Через сервер'}
+            </p>
+          )}
         </div>
         <div className="flex items-center gap-2">
           <code className="rounded-lg bg-foreground/10 px-3 py-1.5 text-sm font-mono">{lobby.inviteCode}</code>
@@ -203,12 +212,19 @@ export function LobbyPage() {
       <section>
         <h2 className="mb-2 text-sm font-medium">Участники</h2>
         <ul className="space-y-1 text-sm">
-          {lobby.members.map((m) => (
-            <li key={m.userId} className="flex justify-between rounded-md px-2 py-1 hover:bg-foreground/5">
-              <span>{m.displayName ?? m.userId.slice(0, 8)}</span>
-              <span className="text-muted">{m.role === 'host' ? 'DJ' : 'гость'}</span>
-            </li>
-          ))}
+          {lobby.members.map((m) => {
+            const direct =
+              guestTransports[m.userId] === 'webrtc' ||
+              (audioTransport === 'webrtc' && m.userId === currentUserId());
+            return (
+              <li key={m.userId} className="flex justify-between rounded-md px-2 py-1 hover:bg-foreground/5">
+                <span>{m.displayName ?? m.userId.slice(0, 8)}</span>
+                <span className="text-muted">
+                  {m.role === 'host' ? 'DJ' : direct ? 'гость · напрямую' : 'гость'}
+                </span>
+              </li>
+            );
+          })}
         </ul>
       </section>
 

@@ -9,6 +9,7 @@ import {
   readAudioFrame,
   registerLobbySocket,
   sendLobbyError,
+  tryForwardLobbyWebrtc,
   unregisterLobbySocket,
 } from '../lib/lobby-hub.js';
 import { isLobbyMember, loadLobbyDto } from '../lib/lobby-load.js';
@@ -63,9 +64,10 @@ export async function wsLobbyRoutes(app: FastifyInstance) {
           return;
         }
         try {
-          const msg = JSON.parse(buf.toString()) as { type?: string; t?: number };
+          const msg = JSON.parse(buf.toString()) as Record<string, unknown>;
           if (msg.type === 'ping') socket.send(JSON.stringify({ type: 'pong', t: msg.t }));
-          else if (msg.type === 'pong') noteLobbyPong(lobbyId, userId, msg.t);
+          else if (msg.type === 'pong') noteLobbyPong(lobbyId, userId, typeof msg.t === 'number' ? msg.t : undefined);
+          else tryForwardLobbyWebrtc(lobbyId, userId, role, msg);
         } catch {
           /* ignore */
         }

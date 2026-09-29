@@ -4,6 +4,7 @@ import type {
   LobbyPlaybackState,
   LobbyQueueItemDto,
   LobbySummaryDto,
+  LobbyWsClientMessage,
   LobbyWsEvent,
   UnifiedTrack,
 } from '@mss/shared';
@@ -203,6 +204,11 @@ export class LobbyWsClient {
       }
       this.reconnectTimer = setTimeout(() => this.openSocket(), Math.min(1000 * this.attempts, 5000));
     };
+  }
+
+  sendJson(payload: LobbyWsClientMessage): void {
+    if (this.ws?.readyState !== WebSocket.OPEN) return;
+    this.ws.send(JSON.stringify(payload));
   }
 
   /** Кадр эфира: [0x02][seq uint32 BE][WebM] — по номерам сервер считает потери до DJ. */

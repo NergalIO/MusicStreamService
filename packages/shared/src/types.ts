@@ -406,6 +406,9 @@ export interface LobbyListDto {
   tookMs: number;
 }
 
+/** Состояние прямого канала гость ↔ DJ. Сервер только форвардит, SDP не разбирает. */
+export type LobbyWebrtcState = 'connecting' | 'connected' | 'failed';
+
 export type LobbyWsEvent =
   | { type: 'lobby_state'; lobby: LobbyDto }
   | { type: 'member_join'; member: LobbyMemberDto }
@@ -418,4 +421,30 @@ export type LobbyWsEvent =
   /** Сервер измеряет RTT участника: `t` возвращается в `pong` без изменений. */
   | { type: 'ping'; t?: number }
   | { type: 'pong'; t?: number }
-  | { type: 'error'; message: string };
+  | { type: 'error'; message: string }
+  | { type: 'webrtc_offer'; fromUserId: string; toUserId: string; sdp: string }
+  | { type: 'webrtc_answer'; fromUserId: string; toUserId: string; sdp: string }
+  | {
+      type: 'webrtc_ice';
+      fromUserId: string;
+      toUserId: string;
+      candidate: string | null;
+      sdpMid?: string | null;
+      sdpMLineIndex?: number | null;
+    }
+  | { type: 'webrtc_state'; fromUserId: string; toUserId: string; state: LobbyWebrtcState };
+
+/** Исходящие JSON с клиента: `fromUserId` подставляет сервер. */
+export type LobbyWsClientMessage =
+  | { type: 'ping'; t?: number }
+  | { type: 'pong'; t?: number }
+  | { type: 'webrtc_offer'; toUserId: string; sdp: string }
+  | { type: 'webrtc_answer'; toUserId: string; sdp: string }
+  | {
+      type: 'webrtc_ice';
+      toUserId: string;
+      candidate: string | null;
+      sdpMid?: string | null;
+      sdpMLineIndex?: number | null;
+    }
+  | { type: 'webrtc_state'; toUserId: string; state: LobbyWebrtcState };

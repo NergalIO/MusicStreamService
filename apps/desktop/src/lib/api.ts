@@ -111,6 +111,17 @@ export function currentAccessToken(): string | null {
   return accessToken;
 }
 
+export function currentUserId(): string | null {
+  try {
+    const raw = localStorage.getItem('mss_session');
+    if (!raw) return null;
+    const s = JSON.parse(raw) as { user?: { id?: string } };
+    return typeof s.user?.id === 'string' ? s.user.id : null;
+  } catch {
+    return null;
+  }
+}
+
 export async function refreshAccess(): Promise<boolean> {
   if (!refreshToken) return false;
   const res = await fetch(apiUrl('/auth/refresh'), {
