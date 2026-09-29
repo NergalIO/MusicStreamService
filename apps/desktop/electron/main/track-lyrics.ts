@@ -8,7 +8,6 @@ import { downloadPathFor } from './downloads.js';
 import { resolveLocalTrackPath } from './local-tracks.js';
 import { listOffline } from './offline-store.js';
 import { spotifySpclient } from './spotify-pathfinder.js';
-import { isSpotifyLoggedIn } from './spotify-web-session.js';
 
 const LYRICS_SOURCES = new Set<SourceId>(['yandex', 'spotify', 'local']);
 
@@ -58,7 +57,6 @@ async function lyricsForSource(source: SourceId, trackId: string): Promise<Track
     case 'yandex':
       return getYandex().api.lyrics(trackId);
     case 'spotify':
-      if (!isSpotifyLoggedIn()) return null;
       return fetchSpotifyLyrics(spotifySpclient, trackId);
     case 'local':
       return lyricsForLocal(trackId);

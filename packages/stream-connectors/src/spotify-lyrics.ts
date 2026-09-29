@@ -2,7 +2,7 @@ import type { TrackLyrics } from '@mss/shared';
 
 interface SpotifyLyricsLine {
   startTimeMs?: string | number;
-  words?: string;
+  words?: string | { string?: string }[];
 }
 
 interface SpotifyLyricsPayload {
@@ -13,14 +13,23 @@ interface SpotifyLyricsPayload {
   };
 }
 
+function lineWords(words: SpotifyLyricsLine['words']): string {
+  if (typeof words === 'string') return words;
+  if (Array.isArray(words)) {
+    return words.map((part) => (typeof part === 'string' ? part : part?.string ?? '')).join('');
+  }
+  return '';
+}
+
 export function mapSpotifyLyrics(data: SpotifyLyricsPayload): TrackLyrics | null {
   const block = data.lyrics;
   if (!block?.lines?.length) return null;
-  const synced = block.syncType === 'LINE_SYNCED' || block.syncType === 'SYLLABLE_SYNCED';
+  const sync = (block.syncType ?? '').toUpperCase();
+  const synced = sync === 'LINE_SYNCED' || sync === 'SYLLABLE_SYNCED';
   const lines = block.lines
     .map((line) => ({
       timeMs: synced ? Number(line.startTimeMs ?? 0) : -1,
-      text: line.words ?? '',
+      text: lineWords(line.words),
     }))
     .filter((line) => line.text.trim() || synced);
   if (!lines.some((line) => line.text.trim())) return null;
@@ -40,7 +49,7 @@ export async function fetchSpotifyLyrics(
     const data = (await spclient(path)) as SpotifyLyricsPayload;
     return mapSpotifyLyrics(data);
   } catch (e) {
-    if (e instanceof Error && /\b404\b/.test(e.message)) return null;
+    if (e instanceof Error && /\b(404|403)\b/.test(e.message)) return null;
     throw e;
   }
 }

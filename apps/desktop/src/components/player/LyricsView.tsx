@@ -11,11 +11,12 @@ const LEAD_MS = 250;
 const LYRICS_SOURCES = new Set<SourceId>(['yandex', 'spotify', 'local']);
 
 export function LyricsView({ track }: { track: UnifiedTrack }) {
+  const lyricsApi = window.electronAPI?.lyrics?.get;
   const supported = LYRICS_SOURCES.has(track.source);
   const { data, isLoading, isError } = useQuery({
     queryKey: ['lyrics', track.source, track.id],
-    queryFn: () => window.electronAPI.lyrics.get(track.source, track.id),
-    enabled: supported,
+    queryFn: () => lyricsApi!(track.source, track.id),
+    enabled: supported && !!lyricsApi,
     staleTime: Infinity,
     retry: false,
   });
@@ -40,6 +41,9 @@ export function LyricsView({ track }: { track: UnifiedTrack }) {
     el?.scrollIntoView({ block: 'center', behavior: 'smooth' });
   }, [active]);
 
+  if (!lyricsApi) {
+    return <Empty text="Обновите приложение: тексты для Spotify и MSS есть в сборке новее 0.5.6" />;
+  }
   if (!supported) return <Empty text="Тексты песен недоступны для этого источника" />;
   if (isLoading)
     return (
@@ -47,12 +51,20 @@ export function LyricsView({ track }: { track: UnifiedTrack }) {
         <Loader2 className="animate-spin" />
       </div>
     );
-  if (isError) return <Empty text="Не удалось загрузить текст" />;
+  if (isError) {
+    const text =
+      track.source === 'spotify'
+        ? 'Не удалось загрузить текст. Откройте Spotify → Веб-плеер в боковой панели и войдите в аккаунт.'
+        : 'Не удалось загрузить текст';
+    return <Empty text={text} />;
+  }
   if (!data || !data.lines.some((l) => l.text.trim())) {
     const empty =
       track.source === 'local'
         ? 'Нет текста. Положите .lrc или .txt рядом с файлом трека (или скачанной копией).'
-        : 'У этого трека нет текста';
+        : track.source === 'spotify'
+          ? 'У этого трека нет текста в Spotify (или они недоступны для вашего аккаунта).'
+          : 'У этого трека нет текста';
     return <Empty text={empty} />;
   }
 
