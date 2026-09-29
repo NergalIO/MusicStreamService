@@ -1,361 +1,265 @@
 package com.mss.android.ui
 
+import android.annotation.SuppressLint
 import android.net.Uri
+import android.webkit.WebView
 import androidx.browser.customtabs.CustomTabsIntent
-import androidx.compose.foundation.clickable
-import androidx.compose.foundation.layout.Arrangement
+import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
-import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
+import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.padding
-import androidx.compose.foundation.lazy.LazyColumn
-import androidx.compose.foundation.lazy.items
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.Home
 import androidx.compose.material.icons.filled.LibraryMusic
+import androidx.compose.material.icons.filled.MoreHoriz
 import androidx.compose.material.icons.filled.Search
-import androidx.compose.material.icons.filled.Settings
 import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.Button
-import androidx.compose.material3.ExperimentalMaterial3Api
 import androidx.compose.material3.Icon
 import androidx.compose.material3.MaterialTheme
-import androidx.compose.material3.Surface
-import androidx.compose.material3.OutlinedTextField
+import androidx.compose.material3.NavigationBar
+import androidx.compose.material3.NavigationBarItem
 import androidx.compose.material3.Scaffold
 import androidx.compose.material3.Text
 import androidx.compose.material3.TopAppBar
+import androidx.compose.material3.ExperimentalMaterial3Api
+import androidx.compose.material3.darkColorScheme
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.collectAsState
 import androidx.compose.runtime.getValue
-import androidx.compose.runtime.mutableStateOf
-import androidx.compose.runtime.remember
-import androidx.compose.runtime.setValue
+import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.unit.dp
+import androidx.compose.ui.viewinterop.AndroidView
 import androidx.hilt.navigation.compose.hiltViewModel
 import androidx.navigation.NavHostController
+import androidx.navigation.NavType
 import androidx.navigation.compose.NavHost
 import androidx.navigation.compose.composable
 import androidx.navigation.compose.currentBackStackEntryAsState
 import androidx.navigation.compose.rememberNavController
+import androidx.navigation.navArgument
+import com.mss.android.ui.auth.LoginScreen
+import com.mss.android.ui.catalog.CatalogList
+import com.mss.android.ui.home.HomeScreen
+import com.mss.android.ui.library.ArtistHub
+import com.mss.android.ui.library.DownloadsScreen
+import com.mss.android.ui.library.LibraryHub
+import com.mss.android.ui.library.PlaylistHub
+import com.mss.android.ui.library.UploadsScreen
+import com.mss.android.ui.lobby.LobbyScreen
+import com.mss.android.ui.more.MoreHub
+import com.mss.android.ui.navigation.Routes
+import com.mss.android.ui.navigation.parseMssLink
+import com.mss.android.ui.player.LobbyBar
+import com.mss.android.ui.player.MiniPlayer
+import com.mss.android.ui.player.NowPlayingScreen
+import com.mss.android.ui.search.SearchScreen
+import com.mss.android.ui.settings.SettingsScreen
+import com.mss.android.ui.stats.StatsScreen
+import com.mss.android.ui.stats.SubScreen
+import com.mss.android.ui.wave.WaveScreen
 import com.mss.core.model.SourceId
+import com.mss.core.model.sourceFrom
 
 @Composable
 fun MssApp(
     vm: MssViewModel = hiltViewModel(),
-    spotifyCallback: Uri? = null,
-    openUri: Uri? = null,
+    incomingUri: Uri? = null,
 ) {
     val session by vm.session.collectAsState()
     val nav = rememberNavController()
-
-    LaunchedEffect(spotifyCallback) {
-        val uri = spotifyCallback ?: return@LaunchedEffect
-        val code = uri.getQueryParameter("code") ?: return@LaunchedEffect
-        val state = uri.getQueryParameter("state") ?: return@LaunchedEffect
-        vm.completeSpotify(code, state)
+    val spotifyVisible by vm.spotifyWeb.loggedIn.collectAsState()
+    val settings by vm.playbackSettings.collectAsState()
+    val primary = when (settings.accent) {
+        "teal" -> Color(0xFF2DD4BF)
+        "amber" -> Color(0xFFF59E0B)
+        else -> Color(0xFFA78BFA)
     }
 
-    LaunchedEffect(openUri) {
-        val uri = openUri ?: return@LaunchedEffect
-        if (uri.scheme == "mss" && uri.host == "open") vm.openDeepLink(uri)
-    }
-
-    if (session == null) {
-        LoginScreen(vm)
-        return
-    }
-
-    val backStack by nav.currentBackStackEntryAsState()
-    val route = backStack?.destination?.route ?: Routes.HOME
-
-    Scaffold(
-        topBar = { TopBar(title = titleFor(route)) },
-        bottomBar = { MssBottomBar(nav, route) },
-        floatingActionButton = {},
-    ) { padding ->
-        NavHost(
-            navController = nav,
-            startDestination = Routes.HOME,
-            modifier = Modifier.padding(padding),
-        ) {
-            composable(Routes.HOME) {
-                LaunchedEffect(Unit) { vm.loadHome() }
-                TrackListScreen(vm, "Недавние треки")
-            }
-            composable(Routes.SEARCH) { SearchScreen(vm) }
-            composable(Routes.LIBRARY) { LibraryHubScreen(nav, vm) }
-            composable(Routes.LIBRARY_MSS) {
-                LaunchedEffect(Unit) { vm.loadLikes() }
-                TrackListScreen(vm, "MSS — понравилось")
-            }
-            composable(Routes.SPOTIFY) {
-                LaunchedEffect(Unit) { vm.loadSpotifyLibrary() }
-                TrackListScreen(vm, "Spotify")
-            }
-            composable(Routes.YANDEX) {
-                LaunchedEffect(Unit) { vm.loadYandexLibrary() }
-                TrackListScreen(vm, "Яндекс Музыка")
-            }
-            composable(Routes.STATS) { StatsScreen(vm) }
-            composable(Routes.SUBSCRIPTION) { SubscriptionScreen(vm) }
-            composable(Routes.WAVE) {
-                Column(Modifier.padding(16.dp)) {
-                    Text("Моя волна (Яндекс)")
-                    Button(onClick = { vm.startWave() }) { Text("Старт") }
-                }
-            }
-            composable(Routes.SETTINGS) { SettingsScreen(vm) }
+    LaunchedEffect(incomingUri) {
+        val uri = incomingUri ?: return@LaunchedEffect
+        val url = uri.toString()
+        if (uri.host == "spotify" && uri.path?.contains("callback") == true) {
+            val code = uri.getQueryParameter("code") ?: return@LaunchedEffect
+            val state = uri.getQueryParameter("state") ?: return@LaunchedEffect
+            vm.completeSpotify(code, state)
+            return@LaunchedEffect
         }
-        MiniPlayerBar(vm)
+        parseMssLink(url)?.let { action ->
+            vm.applyDeepLink(url)
+            nav.navigate(action.route)
+        }
     }
-}
 
-@Composable
-private fun LoginScreen(vm: MssViewModel) {
-    var email by remember { mutableStateOf("") }
-    var password by remember { mutableStateOf("") }
-    var code by remember { mutableStateOf("") }
-    var register by remember { mutableStateOf(false) }
-    val error by vm.error.collectAsState()
-    val verify by vm.authVerify.collectAsState()
-    val info by vm.authInfo.collectAsState()
-
-    Column(Modifier.fillMaxSize().padding(24.dp), verticalArrangement = Arrangement.spacedBy(12.dp)) {
-        Text("MusicStreamService", style = MaterialTheme.typography.headlineMedium)
-        if (!verify) {
-            OutlinedTextField(email, { email = it }, label = { Text("Email") }, modifier = Modifier.fillMaxWidth())
-            OutlinedTextField(password, { password = it }, label = { Text("Пароль") }, modifier = Modifier.fillMaxWidth())
-            error?.let { Text(it, color = MaterialTheme.colorScheme.error) }
-            Button(onClick = { vm.login(email, password, register) }, modifier = Modifier.fillMaxWidth()) {
-                Text(if (register) "Регистрация" else "Войти")
+    MaterialTheme(colorScheme = darkColorScheme(primary = primary)) {
+        Box(Modifier.fillMaxSize()) {
+            if (session == null) {
+                LoginScreen()
+            } else {
+                MainShell(vm, nav)
             }
-            Button(onClick = { register = !register }, modifier = Modifier.fillMaxWidth()) {
-                Text(if (register) "Уже есть аккаунт" else "Создать аккаунт")
-            }
-        } else {
-            Text("Подтверждение почты")
-            info?.let { Text(it, style = MaterialTheme.typography.bodyMedium) }
-            OutlinedTextField(code, { code = it.filter(Char::isDigit).take(6) }, label = { Text("Код из письма") }, modifier = Modifier.fillMaxWidth())
-            error?.let { Text(it, color = MaterialTheme.colorScheme.error) }
-            Button(onClick = { vm.verifyEmail(email, code) }, enabled = code.length == 6, modifier = Modifier.fillMaxWidth()) {
-                Text("Подтвердить")
-            }
-            Button(onClick = { vm.resendVerification(email, password) }, modifier = Modifier.fillMaxWidth()) {
-                Text("Отправить код снова")
-            }
-            Button(onClick = { vm.cancelVerify(); code = "" }, modifier = Modifier.fillMaxWidth()) {
-                Text("Назад")
-            }
+            SpotifyWebLayer(vm, visible = !spotifyVisible && vm.spotifyWeb.visibleForLogin)
         }
     }
 }
 
+@SuppressLint("SetJavaScriptEnabled")
 @Composable
-private fun SearchScreen(vm: MssViewModel) {
-    var q by remember { mutableStateOf("") }
-    var source by remember { mutableStateOf<SourceId?>(null) }
-    Column(Modifier.padding(16.dp)) {
-        OutlinedTextField(q, { q = it }, label = { Text("Запрос") }, modifier = Modifier.fillMaxWidth())
-        Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-            Button(onClick = { source = null }) { Text("Все") }
-            Button(onClick = { source = SourceId.LOCAL }) { Text("MSS") }
-            Button(onClick = { source = SourceId.YANDEX }) { Text("Яндекс") }
-            Button(onClick = { source = SourceId.SPOTIFY }) { Text("Spotify") }
-        }
-        Button(onClick = { vm.search(q, source) }, modifier = Modifier.padding(top = 8.dp)) { Text("Искать") }
-        TrackListScreen(vm, null)
-    }
-}
-
-@Composable
-private fun LibraryHubScreen(nav: NavHostController, vm: MssViewModel) {
-    val ctx = LocalContext.current
-    var yandexPrompt by remember { mutableStateOf<com.mss.core.model.DeviceCodePrompt?>(null) }
-    yandexPrompt?.let { prompt ->
-        AlertDialog(
-            onDismissRequest = { yandexPrompt = null },
-            title = { Text("Яндекс Музыка") },
-            text = {
-                Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
-                    Text("Код: ${prompt.userCode}")
-                    Text("Откройте ${prompt.verificationUrl} и введите код")
-                }
+private fun SpotifyWebLayer(vm: MssViewModel, visible: Boolean) {
+    Box(Modifier.fillMaxWidth().then(if (visible) Modifier.fillMaxSize() else Modifier.height(1.dp))) {
+        AndroidView(
+            factory = { ctx ->
+                WebView(ctx).also { vm.spotifyWeb.attach(it) }
             },
-            confirmButton = {
-                Button(onClick = {
-                    CustomTabsIntent.Builder().build().launchUrl(ctx, Uri.parse(prompt.verificationUrl))
-                }) { Text("Открыть") }
-            },
-            dismissButton = {
-                Button(onClick = { yandexPrompt = null }) { Text("Закрыть") }
-            },
+            modifier = Modifier.fillMaxSize(),
         )
-    }
-    Column(Modifier.padding(16.dp), verticalArrangement = Arrangement.spacedBy(8.dp)) {
-        Button(onClick = { nav.navigate(Routes.LIBRARY_MSS) }, modifier = Modifier.fillMaxWidth()) { Text("MSS") }
-        Button(onClick = { nav.navigate(Routes.SPOTIFY) }, modifier = Modifier.fillMaxWidth()) { Text("Spotify") }
-        Button(onClick = { nav.navigate(Routes.YANDEX) }, modifier = Modifier.fillMaxWidth()) { Text("Яндекс") }
-        Button(onClick = { nav.navigate(Routes.STATS) }, modifier = Modifier.fillMaxWidth()) { Text("Статистика") }
-        Button(onClick = { nav.navigate(Routes.SUBSCRIPTION) }, modifier = Modifier.fillMaxWidth()) { Text("Подписка") }
-        Button(onClick = { nav.navigate(Routes.WAVE) }, modifier = Modifier.fillMaxWidth()) { Text("Моя волна") }
-        Button(
-            onClick = {
-                vm.connectSpotify { url ->
-                    CustomTabsIntent.Builder().build().launchUrl(ctx, Uri.parse(url))
-                }
-            },
-            modifier = Modifier.fillMaxWidth(),
-        ) { Text("Подключить Spotify") }
-        Button(
-            onClick = { vm.connectYandex { p -> yandexPrompt = p } },
-            modifier = Modifier.fillMaxWidth(),
-        ) { Text("Подключить Яндекс") }
-    }
-}
-
-@Composable
-private fun TrackListScreen(vm: MssViewModel, title: String?) {
-    val tracks by vm.tracks.collectAsState()
-    val error by vm.error.collectAsState()
-    Column {
-        title?.let { Text(it, modifier = Modifier.padding(16.dp), style = MaterialTheme.typography.titleMedium) }
-        error?.let { Text(it, color = MaterialTheme.colorScheme.error, modifier = Modifier.padding(horizontal = 16.dp)) }
-        LazyColumn {
-            items(tracks, key = { "${it.source}:${it.id}" }) { track ->
-                Row(
-                    Modifier.fillMaxWidth().clickable { vm.play(tracks, tracks.indexOf(track)) }.padding(16.dp),
-                    horizontalArrangement = Arrangement.SpaceBetween,
-                ) {
-                    Column(Modifier.weight(1f)) {
-                        Text(track.title)
-                        Text(track.artist, style = MaterialTheme.typography.bodySmall)
-                    }
-                    Button(onClick = { vm.download(track) }) { Text("↓") }
-                    if (track.source == SourceId.YANDEX) {
-                        Button(onClick = { vm.loadSimilar(track) }) { Text("~") }
-                    }
-                }
-            }
+        if (visible) {
+            Button(
+                onClick = { vm.spotifyWeb.hideLogin() },
+                modifier = Modifier.align(Alignment.TopEnd).padding(16.dp),
+            ) { Text("Скрыть Spotify") }
         }
     }
-}
-
-@Composable
-private fun SettingsScreen(vm: MssViewModel) {
-    var url by remember { mutableStateOf("http://10.0.2.2:3001") }
-    Column(Modifier.padding(16.dp), verticalArrangement = Arrangement.spacedBy(8.dp)) {
-        OutlinedTextField(url, { url = it }, label = { Text("URL API") }, modifier = Modifier.fillMaxWidth())
-        Button(onClick = { vm.setApiBase(url) }) { Text("Сохранить") }
-        Button(onClick = { vm.cycleRepeat() }) { Text("Repeat") }
-        Button(onClick = { vm.setSleepTimer(30) }) { Text("Sleep 30m") }
-        Button(onClick = { vm.setSleepTimer(null) }) { Text("Sleep off") }
-        Button(onClick = { vm.logout() }) { Text("Выйти") }
-    }
-}
-
-@Composable
-private fun StatsScreen(vm: MssViewModel) {
-    LaunchedEffect(Unit) { vm.loadStats() }
-    val stats by vm.stats.collectAsState()
-    Column(Modifier.padding(16.dp)) {
-        stats?.let {
-            Text("Минут: ${it.totalMinutes}, прослушиваний: ${it.totalPlays}")
-            it.topTracks.take(10).forEach { t -> Text("• ${t.artist} — ${t.title} (${t.plays})") }
-        } ?: Text("Загрузка…")
-    }
-}
-
-@Composable
-private fun SubscriptionScreen(vm: MssViewModel) {
-    LaunchedEffect(Unit) { vm.loadSubscription() }
-    val sub by vm.subscription.collectAsState()
-    Column(Modifier.padding(16.dp)) {
-        sub?.let { Text("${it.planName} (${it.status})") } ?: Text("Загрузка…")
-    }
-}
-
-@Composable
-private fun PlaceholderScreen(text: String) {
-    Text(text, modifier = Modifier.padding(16.dp))
 }
 
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
-private fun TopBar(title: String) {
-    TopAppBar(title = { Text(title) })
-}
+private fun MainShell(vm: MssViewModel, nav: NavHostController) {
+    val back by nav.currentBackStackEntryAsState()
+    val route = back?.destination?.route ?: Routes.HOME
+    val error by vm.error.collectAsState()
+    val prompt by vm.yandexPrompt.collectAsState()
+    val ctx = LocalContext.current
+    val onboarded by vm.onboarded.collectAsState()
+    val lobby by vm.lobbyState.collectAsState()
 
-@Composable
-private fun MiniPlayerBar(vm: MssViewModel) {
-    val state by vm.playerState.collectAsState()
-    val track = state.current ?: return
-    Row(Modifier.fillMaxWidth().padding(8.dp), horizontalArrangement = Arrangement.SpaceBetween) {
-        Column(Modifier.weight(1f)) {
-            Text(track.title)
-            Text(track.artist, style = MaterialTheme.typography.bodySmall)
-        }
-        Button(onClick = { vm.togglePlay() }) { Text(if (state.playing) "⏸" else "▶") }
-        Button(onClick = { vm.next() }) { Text("⏭") }
+    prompt?.let { p ->
+        AlertDialog(
+            onDismissRequest = {},
+            title = { Text("Яндекс Музыка") },
+            text = { Text("Код ${p.userCode}\nОткройте ${p.verificationUrl}") },
+            confirmButton = {
+                Button(onClick = {
+                    CustomTabsIntent.Builder().build().launchUrl(ctx, Uri.parse(p.verificationUrl))
+                }) { Text("Открыть") }
+            },
+        )
     }
-}
+    if (!onboarded) {
+        AlertDialog(
+            onDismissRequest = { vm.setOnboarded() },
+            title = { Text("MusicStreamService") },
+            text = { Text("Единая медиатека: MSS, Яндекс, Spotify и VK. Подключите источники в разделе «Ещё».") },
+            confirmButton = { Button(onClick = { vm.setOnboarded() }) { Text("Понятно") } },
+        )
+    }
 
-@Composable
-private fun MssBottomBar(nav: NavHostController, current: String) {
-    val items = listOf(
-        Triple(Routes.HOME, "MSS", Icons.Default.Home),
-        Triple(Routes.SEARCH, "Поиск", Icons.Default.Search),
-        Triple(Routes.LIBRARY, "Библиотека", Icons.Default.LibraryMusic),
-        Triple(Routes.SETTINGS, "Настройки", Icons.Default.Settings),
-    )
-    Surface(tonalElevation = 3.dp) {
-        Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.SpaceEvenly) {
-            items.forEach { (route, label, icon) ->
-                val selected = current == route
-                Column(
-                    Modifier
-                        .weight(1f)
-                        .clickable { nav.navigate(route) { launchSingleTop = true } }
-                        .padding(vertical = 8.dp),
-                    horizontalAlignment = androidx.compose.ui.Alignment.CenterHorizontally,
-                ) {
-                    Icon(
-                        icon,
-                        contentDescription = label,
-                        tint = if (selected) MaterialTheme.colorScheme.primary else MaterialTheme.colorScheme.onSurfaceVariant,
-                    )
-                    Text(
-                        label,
-                        style = MaterialTheme.typography.labelSmall,
-                        color = if (selected) MaterialTheme.colorScheme.primary else MaterialTheme.colorScheme.onSurfaceVariant,
-                    )
+    Scaffold(
+        topBar = { TopAppBar(title = { Text(titleFor(route)) }) },
+        bottomBar = {
+            Column {
+                LobbyBar(lobby) { nav.navigate(Routes.LOBBY) }
+                MiniPlayer(vm) { nav.navigate(Routes.NOW_PLAYING) }
+                NavigationBar {
+                    listOf(
+                        Triple(Routes.HOME, "Главная", Icons.Default.Home),
+                        Triple(Routes.SEARCH, "Поиск", Icons.Default.Search),
+                        Triple(Routes.LIBRARY, "Медиатека", Icons.Default.LibraryMusic),
+                        Triple(Routes.MORE, "Ещё", Icons.Default.MoreHoriz),
+                    ).forEach { (r, label, icon) ->
+                        NavigationBarItem(
+                            selected = route == r || (r == Routes.LIBRARY && route.startsWith("library")),
+                            onClick = { nav.navigate(r) { launchSingleTop = true } },
+                            icon = { Icon(icon, label) },
+                            label = { Text(label) },
+                        )
+                    }
+                }
+            }
+        },
+    ) { padding ->
+        Column(Modifier.padding(padding).fillMaxSize()) {
+            error?.let { Text(it, color = MaterialTheme.colorScheme.error, modifier = Modifier.padding(8.dp)) }
+            NavHost(nav, Routes.HOME, Modifier.weight(1f)) {
+                composable(Routes.HOME) { HomeScreen(vm, nav) }
+                composable(Routes.SEARCH) { SearchScreen(vm, nav) }
+                composable(Routes.LIBRARY) { LibraryHub(nav) }
+                composable(Routes.MORE) { MoreHub(vm, nav) }
+                composable(Routes.LIKES) { LaunchedEffect(Unit) { vm.loadLikes() }; CatalogList(vm, nav) }
+                composable(Routes.PLAYLISTS) { LaunchedEffect(Unit) { vm.loadPlaylists() }; PlaylistHub(vm, nav) }
+                composable(Routes.ARTISTS) { LaunchedEffect(Unit) { vm.loadArtists() }; ArtistHub(vm, nav) }
+                composable(Routes.UPLOADS) { UploadsScreen(vm, nav) }
+                composable(Routes.DOWNLOADS) { DownloadsScreen(vm) }
+                composable(Routes.OFFLINE) { LaunchedEffect(Unit) { vm.loadOffline() }; CatalogList(vm, nav) }
+                composable(Routes.HISTORY) { LaunchedEffect(Unit) { vm.loadHistory() }; CatalogList(vm, nav) }
+                composable(Routes.STATS) { StatsScreen(vm) }
+                composable(Routes.WRAPPED) { LaunchedEffect(Unit) { vm.loadStats("year") }; StatsScreen(vm) }
+                composable(Routes.SUBSCRIPTION) { SubScreen(vm) }
+                composable(Routes.SETTINGS) { SettingsScreen() }
+                composable(Routes.WAVE) { WaveScreen(vm) }
+                composable(Routes.LOBBY) { LobbyScreen(nav) }
+                composable(Routes.NOW_PLAYING) { NowPlayingScreen(vm) }
+                composable(Routes.MSS_PLAYLIST, listOf(navArgument("id") { type = NavType.StringType })) { e ->
+                    val id = e.arguments?.getString("id") ?: return@composable
+                    LaunchedEffect(id) { vm.openMssPlaylist(id) }
+                    CatalogList(vm, nav)
+                }
+                composable(Routes.EXT_PLAYLIST, listOf(
+                    navArgument("source") { type = NavType.StringType },
+                    navArgument("id") { type = NavType.StringType },
+                )) { e ->
+                    val s = e.arguments?.getString("source") ?: return@composable
+                    val id = e.arguments?.getString("id") ?: return@composable
+                    LaunchedEffect(s, id) { vm.openExternalPlaylist(s, id) }
+                    CatalogList(vm, nav)
+                }
+                composable(Routes.ALBUM, listOf(
+                    navArgument("source") { type = NavType.StringType },
+                    navArgument("id") { type = NavType.StringType },
+                )) { e ->
+                    val s = e.arguments?.getString("source") ?: return@composable
+                    val id = e.arguments?.getString("id") ?: return@composable
+                    LaunchedEffect(s, id) { vm.openAlbum(s, id) }
+                    CatalogList(vm, nav)
+                }
+                composable(Routes.ARTIST, listOf(navArgument("name") { type = NavType.StringType })) { e ->
+                    val name = e.arguments?.getString("name") ?: return@composable
+                    LaunchedEffect(name) { vm.openArtist(name) }
+                    CatalogList(vm, nav)
+                }
+                composable(Routes.SIMILAR, listOf(
+                    navArgument("source") { type = NavType.StringType },
+                    navArgument("id") { type = NavType.StringType },
+                )) { e ->
+                    val id = e.arguments?.getString("id") ?: return@composable
+                    LaunchedEffect(id) {
+                        vm.loadSimilar(com.mss.core.model.UnifiedTrack(SourceId.YANDEX, id, "", ""))
+                    }
+                    CatalogList(vm, nav)
+                }
+                composable(Routes.SOURCE_HOME, listOf(navArgument("source") { type = NavType.StringType })) { e ->
+                    val s = e.arguments?.getString("source") ?: return@composable
+                    LaunchedEffect(s) { vm.setHomeSource(sourceFrom(s)) }
+                    HomeScreen(vm, nav)
                 }
             }
         }
     }
 }
 
-private fun titleFor(route: String) = when (route) {
-    Routes.HOME -> "MSS"
-    Routes.SEARCH -> "Поиск"
-    Routes.LIBRARY -> "Библиотека"
-    Routes.SETTINGS -> "Настройки"
+private fun titleFor(route: String) = when {
+    route == Routes.HOME -> "Главная"
+    route == Routes.SEARCH -> "Поиск"
+    route.startsWith("library") -> "Медиатека"
+    route == Routes.SETTINGS -> "Настройки"
+    route == Routes.NOW_PLAYING -> "Сейчас играет"
+    route == Routes.LOBBY -> "Лобби"
+    route == Routes.WAVE -> "Волна"
     else -> "MusicStreamService"
-}
-
-object Routes {
-    const val HOME = "home"
-    const val SEARCH = "search"
-    const val LIBRARY = "library"
-    const val LIBRARY_MSS = "library/mss"
-    const val SPOTIFY = "spotify"
-    const val YANDEX = "yandex"
-    const val STATS = "stats"
-    const val SUBSCRIPTION = "subscription"
-    const val WAVE = "wave"
-    const val SETTINGS = "settings"
 }

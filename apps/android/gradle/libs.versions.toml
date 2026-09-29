@@ -14,6 +14,7 @@ coroutines = "1.9.0"
 serialization = "1.7.3"
 okhttp = "4.12.0"
 browser = "1.8.0"
+coil = "2.7.0"
 
 [libraries]
 androidx-core-ktx = { module = "androidx.core:core-ktx", version = "1.15.0" }
@@ -33,12 +34,15 @@ security-crypto = { module = "androidx.security:security-crypto", version.ref = 
 work-runtime = { module = "androidx.work:work-runtime-ktx", version.ref = "work" }
 browser = { module = "androidx.browser:browser", version.ref = "browser" }
 media3-exoplayer = { module = "androidx.media3:media3-exoplayer", version.ref = "media3" }
+media3-exoplayer-hls = { module = "androidx.media3:media3-exoplayer-hls", version.ref = "media3" }
 media3-session = { module = "androidx.media3:media3-session", version.ref = "media3" }
 media3-ui = { module = "androidx.media3:media3-ui", version.ref = "media3" }
+coil-compose = { module = "io.coil-kt:coil-compose", version.ref = "coil" }
 hilt-android = { module = "com.google.dagger:hilt-android", version.ref = "hilt" }
 hilt-compiler = { module = "com.google.dagger:hilt-compiler", version.ref = "hilt" }
 hilt-navigation-compose = { module = "androidx.hilt:hilt-navigation-compose", version = "1.2.0" }
 hilt-work = { module = "androidx.hilt:hilt-work", version = "1.2.0" }
+hilt-androidx-compiler = { module = "androidx.hilt:hilt-compiler", version = "1.2.0" }
 ktor-client-core = { module = "io.ktor:ktor-client-core", version.ref = "ktor" }
 ktor-client-okhttp = { module = "io.ktor:ktor-client-okhttp", version.ref = "ktor" }
 ktor-client-content = { module = "io.ktor:ktor-client-content-negotiation", version.ref = "ktor" }

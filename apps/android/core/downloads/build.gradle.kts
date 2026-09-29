@@ -1,10 +1,10 @@
 plugins {
     alias(libs.plugins.android.library)
     alias(libs.plugins.kotlin.android)
+    alias(libs.plugins.kotlin.serialization)
     alias(libs.plugins.hilt)
     alias(libs.plugins.ksp)
 }
-
 
 android {
     namespace = "com.mss.core.downloads"
@@ -21,10 +21,14 @@ dependencies {
     implementation(project(":core:model"))
     implementation(project(":core:network"))
     implementation(project(":core:datastore"))
+    implementation(project(":core:offline"))
+    implementation(project(":core:connectors"))
     implementation(libs.work.runtime)
     implementation(libs.hilt.work)
     implementation(libs.okhttp)
     implementation(libs.kotlinx.coroutines.android)
+    implementation(libs.kotlinx.serialization.json)
     implementation(libs.hilt.android)
     ksp(libs.hilt.compiler)
+    ksp(libs.hilt.androidx.compiler)
 }

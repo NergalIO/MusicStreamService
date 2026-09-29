@@ -8,6 +8,14 @@ enum class SourceId {
     @SerialName("local") LOCAL,
     @SerialName("spotify") SPOTIFY,
     @SerialName("yandex") YANDEX,
+    @SerialName("vk") VK,
+}
+
+@Serializable
+enum class Quality {
+    @SerialName("lossless") LOSSLESS,
+    @SerialName("high") HIGH,
+    @SerialName("normal") NORMAL,
 }
 
 @Serializable
@@ -30,6 +38,15 @@ data class RegisterPending(
 data class RefreshResponse(val accessToken: String)
 
 @Serializable
+data class PlanFeatures(
+    @SerialName("max_offline_tracks") val maxOfflineTracks: Int? = null,
+    @SerialName("offline_enabled") val offlineEnabled: Boolean = false,
+    @SerialName("stream_quality") val streamQuality: String = "standard",
+    @SerialName("external_sources_enabled") val externalSourcesEnabled: Boolean = true,
+    val ads: Boolean = false,
+)
+
+@Serializable
 data class TrackDto(
     val id: String,
     val title: String,
@@ -40,12 +57,14 @@ data class TrackDto(
     val codec: String? = null,
     val coverUrl: String? = null,
     val streamUrl: String? = null,
+    val contentHash: String? = null,
     val availability: String? = null,
+    val userHolds: Boolean? = null,
     val loudnessLufs: Double? = null,
 )
 
 @Serializable
-data class TracksResponse(val items: List<TrackDto>)
+data class TracksResponse(val items: List<TrackDto> = emptyList())
 
 @Serializable
 data class PlaylistDto(
@@ -58,10 +77,52 @@ data class PlaylistDto(
 )
 
 @Serializable
-data class PlaylistsResponse(val items: List<PlaylistDto>)
+data class PlaylistsResponse(val items: List<PlaylistDto> = emptyList())
 
 @Serializable
 data class ArtistRef(val id: String, val name: String)
+
+@Serializable
+data class ExternalTrackSnapshot(
+    val title: String,
+    val artist: String,
+    val artists: List<ArtistRef>? = null,
+    val album: String? = null,
+    val albumId: String? = null,
+    val durationMs: Long? = null,
+    val coverUrl: String? = null,
+    val explicit: Boolean? = null,
+)
+
+@Serializable
+data class ExternalPlaylistRef(
+    val source: SourceId,
+    val id: String,
+    val snapshot: ExternalTrackSnapshot,
+)
+
+@Serializable
+data class PlaylistEntryDto(
+    val entryId: String? = null,
+    val position: Int? = null,
+    val id: String? = null,
+    val title: String? = null,
+    val artist: String? = null,
+    val album: String? = null,
+    val durationMs: Long? = null,
+    val status: String? = null,
+    val codec: String? = null,
+    val coverUrl: String? = null,
+    val streamUrl: String? = null,
+    val contentHash: String? = null,
+    val availability: String? = null,
+    val userHolds: Boolean? = null,
+    val loudnessLufs: Double? = null,
+    val external: ExternalPlaylistRef? = null,
+)
+
+@Serializable
+data class PlaylistTracksResponse(val items: List<PlaylistEntryDto> = emptyList())
 
 @Serializable
 data class UnifiedTrack(
@@ -78,6 +139,10 @@ data class UnifiedTrack(
     val playable: Boolean = true,
     val unplayableReason: String? = null,
     val streamUrl: String? = null,
+    val loudnessLufs: Double? = null,
+    val availability: String? = null,
+    val userHolds: Boolean? = null,
+    val contentHash: String? = null,
 )
 
 @Serializable
@@ -88,6 +153,38 @@ data class UnifiedArtist(
     val imageUrl: String? = null,
     val genres: List<String>? = null,
     val followers: Int? = null,
+    val trackCount: Int? = null,
+)
+
+@Serializable
+data class UnifiedAlbum(
+    val source: SourceId,
+    val id: String,
+    val title: String,
+    val artist: String,
+    val artists: List<ArtistRef>? = null,
+    val year: Int? = null,
+    val coverUrl: String? = null,
+    val trackCount: Int? = null,
+    val type: String? = null,
+    val genre: String? = null,
+)
+
+@Serializable
+data class AlbumWithTracks(
+    val source: SourceId,
+    val id: String,
+    val title: String,
+    val artist: String,
+    val artists: List<ArtistRef>? = null,
+    val year: Int? = null,
+    val coverUrl: String? = null,
+    val trackCount: Int? = null,
+    val type: String? = null,
+    val genre: String? = null,
+    val tracks: List<UnifiedTrack> = emptyList(),
+    val label: String? = null,
+    val durationMs: Long? = null,
 )
 
 @Serializable
@@ -114,6 +211,25 @@ data class PlaylistWithTracks(
 )
 
 @Serializable
+data class ArtistProfile(
+    val artist: UnifiedArtist,
+    val popularTracks: List<UnifiedTrack> = emptyList(),
+    val albums: List<UnifiedAlbum> = emptyList(),
+    val singles: List<UnifiedAlbum> = emptyList(),
+    val similar: List<UnifiedArtist> = emptyList(),
+)
+
+@Serializable
+data class LyricsLine(val timeMs: Long, val text: String)
+
+@Serializable
+data class TrackLyrics(
+    val synced: Boolean,
+    val lines: List<LyricsLine> = emptyList(),
+    val writers: List<String>? = null,
+)
+
+@Serializable
 data class ExternalAccount(
     val uid: String,
     val login: String? = null,
@@ -123,43 +239,62 @@ data class ExternalAccount(
 
 @Serializable
 data class DeviceCodePrompt(
+    val source: SourceId = SourceId.YANDEX,
     val userCode: String,
     val verificationUrl: String,
     val expiresIn: Int,
-    val interval: Int,
+    val interval: Int = 5,
 )
 
 @Serializable
-data class PlaybackHandleMediaUrl(
-    val kind: String = "mediaUrl",
-    val url: String,
-    val preview: Boolean? = null,
-    val codec: String? = null,
-    val bitrate: Int? = null,
+data class FeedItemPlaylist(val kind: String = "playlist", val playlist: UnifiedPlaylist)
+
+@Serializable
+data class FeedBlock(
+    val id: String,
+    val title: String,
+    val items: List<FeedItem> = emptyList(),
 )
 
 @Serializable
-data class PlaybackHandleSpotifySdk(
-    val kind: String = "spotifySdk",
-    val trackUri: String,
-    val previewUrl: String? = null,
+data class FeedItem(
+    val kind: String,
+    val playlist: UnifiedPlaylist? = null,
+    val album: UnifiedAlbum? = null,
+    val track: UnifiedTrack? = null,
+    val artist: UnifiedArtist? = null,
 )
 
 @Serializable
-data class UserSubscriptionDto(
-    val planCode: String,
-    val planName: String,
-    val status: String,
-    val endsAt: String? = null,
+data class HomeFeedSection(
+    val id: String,
+    val title: String,
+    val items: List<FeedItem> = emptyList(),
 )
 
 @Serializable
-data class ListeningStats(
-    val period: String,
-    val totalMinutes: Int = 0,
-    val totalPlays: Int = 0,
-    val topTracks: List<StatsTopTrack> = emptyList(),
-    val topArtists: List<StatsTopArtist> = emptyList(),
+data class WaveBatch(
+    val sessionId: String,
+    val batchId: String,
+    val tracks: List<UnifiedTrack> = emptyList(),
+)
+
+@Serializable
+data class WaveSettings(
+    val seed: String? = null,
+    val seedTitle: String? = null,
+    val diversity: String? = null,
+    val moodEnergy: String? = null,
+    val language: String? = null,
+)
+
+@Serializable
+data class PlaybackReport(
+    val trackId: String,
+    val albumId: String? = null,
+    val trackLengthSeconds: Double,
+    val totalPlayedSeconds: Double,
+    val endPositionSeconds: Double,
 )
 
 @Serializable
@@ -168,23 +303,185 @@ data class StatsTopTrack(
     val trackId: String,
     val title: String,
     val artist: String,
+    val artists: List<ArtistRef>? = null,
+    val album: String? = null,
+    val albumId: String? = null,
     val coverUrl: String? = null,
+    val durationMs: Long? = null,
     val plays: Int = 0,
+    val minutes: Double = 0.0,
 )
 
 @Serializable
 data class StatsTopArtist(
     val name: String,
     val id: String? = null,
-    val source: SourceId,
+    val source: SourceId = SourceId.LOCAL,
     val coverUrl: String? = null,
     val plays: Int = 0,
+    val minutes: Double = 0.0,
+)
+
+@Serializable
+data class ListeningStats(
+    val period: String,
+    val year: Int? = null,
+    val totalMinutes: Int = 0,
+    val totalPlays: Int = 0,
+    val uniqueTracks: Int = 0,
+    val uniqueArtists: Int = 0,
+    val activeDays: Int = 0,
+    val topTracks: List<StatsTopTrack> = emptyList(),
+    val topArtists: List<StatsTopArtist> = emptyList(),
+    val timeline: List<TimelineBucket> = emptyList(),
+    val timelineUnit: String? = null,
+    val sources: List<SourceMinutes> = emptyList(),
+    val peakHour: Int? = null,
+)
+
+@Serializable
+data class TimelineBucket(val bucket: String, val minutes: Double = 0.0)
+
+@Serializable
+data class SourceMinutes(val source: SourceId, val minutes: Double = 0.0)
+
+@Serializable
+data class HomeShelves(
+    val frequent: List<StatsTopTrack> = emptyList(),
+    val forgotten: List<StatsTopTrack> = emptyList(),
+    val topArtists: List<StatsTopArtist> = emptyList(),
+)
+
+@Serializable
+data class UserSubscriptionDto(
+    val planCode: String,
+    val planName: String,
+    val status: String,
+    val endsAt: String? = null,
+    val features: PlanFeatures = PlanFeatures(),
+)
+
+@Serializable
+data class PlayEvent(
+    val clientEventId: String,
+    val source: SourceId,
+    val trackId: String,
+    val title: String,
+    val artist: String,
+    val artists: List<ArtistRef>? = null,
+    val album: String? = null,
+    val albumId: String? = null,
+    val coverUrl: String? = null,
+    val durationMs: Long? = null,
+    val playedMs: Long,
+    val completed: Boolean,
+    val playedAt: String,
+)
+
+@Serializable
+data class DownloadRecord(
+    val key: String,
+    val path: String,
+    val codec: String = "bin",
+    val size: Long = 0,
+    val downloadedAt: String,
+    val track: UnifiedTrack,
+)
+
+@Serializable
+data class LobbyPlaybackState(
+    val track: UnifiedTrack? = null,
+    val paused: Boolean = true,
+    val positionMs: Long = 0,
+    val updatedAt: String? = null,
+)
+
+@Serializable
+data class LobbyMemberDto(
+    val userId: String,
+    val role: String,
+    val displayName: String? = null,
+    val joinedAt: String? = null,
+)
+
+@Serializable
+data class LobbyQueueItemDto(
+    val id: String,
+    val position: Int = 0,
+    val track: UnifiedTrack,
+    val suggestedBy: String? = null,
+    val status: String = "suggested",
+    val createdAt: String? = null,
+)
+
+@Serializable
+data class LobbyDto(
+    val id: String,
+    val inviteCode: String,
+    val title: String,
+    val maxMembers: Int = 16,
+    val isPublic: Boolean = false,
+    val hostUserId: String,
+    val createdAt: String? = null,
+    val endedAt: String? = null,
+    val members: List<LobbyMemberDto> = emptyList(),
+    val queue: List<LobbyQueueItemDto> = emptyList(),
+    val playback: LobbyPlaybackState = LobbyPlaybackState(),
+)
+
+@Serializable
+data class LobbySummaryDto(
+    val id: String,
+    val inviteCode: String,
+    val title: String,
+    val listeners: Int = 0,
+    val maxMembers: Int = 16,
+    val isPublic: Boolean = false,
+    val isMember: Boolean = false,
+    val hostUserId: String,
+    val hostDisplayName: String? = null,
+    val hostOnline: Boolean = false,
+    val hostRttMs: Int? = null,
+    val hostLossPct: Double? = null,
+    val createdAt: String? = null,
+)
+
+@Serializable
+data class LobbyListDto(
+    val items: List<LobbySummaryDto> = emptyList(),
+    val tookMs: Double = 0.0,
+)
+
+@Serializable
+data class CatalogArtistDto(
+    val name: String,
+    val trackCount: Int = 0,
+)
+
+@Serializable
+data class LocalHolding(
+    val trackId: String,
+    val uri: String,
+    val contentHash: String,
+    val displayName: String? = null,
+)
+
+@Serializable
+data class PlaybackSettings(
+    val quality: Quality = Quality.HIGH,
+    val eqEnabled: Boolean = false,
+    val eqBands: List<Float> = List(8) { 0f },
+    val normalize: Boolean = true,
+    val visualizer: Boolean = false,
+    val crossfadeMs: Int = 0,
+    val playbackRate: Float = 1f,
+    val accent: String = "violet",
 )
 
 fun TrackDto.toUnifiedTrack(apiBase: String): UnifiedTrack {
     val base = apiBase.trimEnd('/')
     val stream = streamUrl?.let { if (it.startsWith("http")) it else "$base/${it.trimStart('/')}" }
-        ?: "$base/stream/$id"
+        ?: if (availability == "cached" || availability == "online") "$base/stream/$id" else null
     return UnifiedTrack(
         source = SourceId.LOCAL,
         id = id,
@@ -193,9 +490,49 @@ fun TrackDto.toUnifiedTrack(apiBase: String): UnifiedTrack {
         album = album,
         durationMs = durationMs,
         coverUrl = coverUrl,
-        playable = streamUrl != null,
+        playable = stream != null || userHolds == true,
         streamUrl = stream,
+        loudnessLufs = loudnessLufs,
+        availability = availability,
+        userHolds = userHolds,
+        contentHash = contentHash,
     )
+}
+
+fun PlaylistEntryDto.toUnifiedTrack(apiBase: String): UnifiedTrack? {
+    val ext = external
+    if (ext != null) {
+        val snap = ext.snapshot
+        return UnifiedTrack(
+            source = ext.source,
+            id = ext.id,
+            title = snap.title,
+            artist = snap.artist,
+            artists = snap.artists,
+            album = snap.album,
+            albumId = snap.albumId,
+            durationMs = snap.durationMs,
+            coverUrl = snap.coverUrl,
+            explicit = snap.explicit,
+            playable = true,
+        )
+    }
+    val localId = id ?: return null
+    return TrackDto(
+        id = localId,
+        title = title ?: return null,
+        artist = artist ?: "",
+        album = album,
+        durationMs = durationMs,
+        status = status,
+        codec = codec,
+        coverUrl = coverUrl,
+        streamUrl = streamUrl,
+        contentHash = contentHash,
+        availability = availability,
+        userHolds = userHolds,
+        loudnessLufs = loudnessLufs,
+    ).toUnifiedTrack(apiBase)
 }
 
 fun PlaylistDto.toUnifiedPlaylist(): UnifiedPlaylist = UnifiedPlaylist(
@@ -207,3 +544,38 @@ fun PlaylistDto.toUnifiedPlaylist(): UnifiedPlaylist = UnifiedPlaylist(
     coverUrl = coverUrl,
     trackCount = trackCount,
 )
+
+fun StatsTopTrack.toUnifiedTrack(): UnifiedTrack = UnifiedTrack(
+    source = source,
+    id = trackId,
+    title = title,
+    artist = artist,
+    artists = artists,
+    album = album,
+    albumId = albumId,
+    coverUrl = coverUrl,
+    durationMs = durationMs,
+    playable = true,
+)
+
+fun parseLrc(lrc: String): List<LyricsLine> {
+    val stamp = Regex("""\[(\d+):(\d+(?:\.\d+)?)]""")
+    val lines = mutableListOf<LyricsLine>()
+    for (raw in lrc.split(Regex("\\r?\\n"))) {
+        val stamps = stamp.findAll(raw).toList()
+        if (stamps.isEmpty()) continue
+        val text = raw.replace(Regex("""\[[^\]]*\]"""), "").trim()
+        for (s in stamps) {
+            val ms = Math.round((s.groupValues[1].toDouble() * 60 + s.groupValues[2].toDouble()) * 1000)
+            lines += LyricsLine(ms, text)
+        }
+    }
+    return lines.sortedBy { it.timeMs }
+}
+
+fun sourceFrom(raw: String?): SourceId = when (raw?.lowercase()) {
+    "spotify" -> SourceId.SPOTIFY
+    "yandex" -> SourceId.YANDEX
+    "vk" -> SourceId.VK
+    else -> SourceId.LOCAL
+}

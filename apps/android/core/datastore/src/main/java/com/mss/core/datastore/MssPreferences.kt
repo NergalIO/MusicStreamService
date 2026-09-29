@@ -1,10 +1,12 @@
 package com.mss.core.datastore
 
 import android.content.Context
+import androidx.datastore.preferences.core.booleanPreferencesKey
 import androidx.datastore.preferences.core.edit
 import androidx.datastore.preferences.core.stringPreferencesKey
 import androidx.datastore.preferences.preferencesDataStore
 import com.mss.core.model.AuthSession
+import com.mss.core.model.PlaybackSettings
 import dagger.hilt.android.qualifiers.ApplicationContext
 import javax.inject.Inject
 import javax.inject.Singleton
@@ -29,6 +31,16 @@ class MssPreferences @Inject constructor(
 
     val session: Flow<AuthSession?> = context.dataStore.data.map { prefs ->
         prefs[KEY_SESSION]?.let { json.decodeFromString<AuthSession>(it) }
+    }
+
+    val playbackSettings: Flow<PlaybackSettings> = context.dataStore.data.map { prefs ->
+        prefs[KEY_PLAYBACK]?.let { json.decodeFromString<PlaybackSettings>(it) } ?: PlaybackSettings()
+    }
+
+    val onboarded: Flow<Boolean> = context.dataStore.data.map { it[KEY_ONBOARDED] ?: false }
+
+    val searchHistory: Flow<List<String>> = context.dataStore.data.map { prefs ->
+        prefs[KEY_SEARCH]?.let { json.decodeFromString<List<String>>(it) } ?: emptyList()
     }
 
     suspend fun setApiBaseUrl(url: String) {
@@ -60,6 +72,23 @@ class MssPreferences @Inject constructor(
         return id
     }
 
+    suspend fun savePlaybackSettings(settings: PlaybackSettings) {
+        context.dataStore.edit { it[KEY_PLAYBACK] = json.encodeToString(settings) }
+    }
+
+    suspend fun loadPlaybackSettings(): PlaybackSettings = playbackSettings.first()
+
+    suspend fun setOnboarded(value: Boolean) {
+        context.dataStore.edit { it[KEY_ONBOARDED] = value }
+    }
+
+    suspend fun addSearchQuery(query: String) {
+        val q = query.trim()
+        if (q.isEmpty()) return
+        val next = (listOf(q) + searchHistory.first().filter { it != q }).take(20)
+        context.dataStore.edit { it[KEY_SEARCH] = json.encodeToString(next) }
+    }
+
     fun connectorVault(): TokenVault = secureVault
 
     companion object {
@@ -67,6 +96,9 @@ class MssPreferences @Inject constructor(
         private val KEY_API_BASE = stringPreferencesKey("api_base")
         private val KEY_SESSION = stringPreferencesKey("session")
         private val KEY_DEVICE_ID = stringPreferencesKey("device_id")
+        private val KEY_PLAYBACK = stringPreferencesKey("playback")
+        private val KEY_SEARCH = stringPreferencesKey("search_history")
+        private val KEY_ONBOARDED = booleanPreferencesKey("onboarded")
     }
 }
 

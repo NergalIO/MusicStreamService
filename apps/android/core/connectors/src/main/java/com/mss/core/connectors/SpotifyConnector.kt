@@ -30,6 +30,8 @@ import kotlinx.serialization.json.Json
 @Singleton
 class SpotifyConnector @Inject constructor(
     private val vault: TokenVault,
+    private val web: SpotifyWebSession,
+    private val pathfinder: SpotifyPathfinder,
 ) : StreamConnector {
     override val id = SourceId.SPOTIFY
     override val displayName = "Spotify"
@@ -45,6 +47,7 @@ class SpotifyConnector @Inject constructor(
     private var pendingState: String? = null
 
     override fun authStatus(): AuthStatus {
+        if (web.loggedIn.value) return AuthStatus.CONNECTED
         val t = loadTokens() ?: return AuthStatus.DISCONNECTED
         return if (t.refreshToken.isNotBlank()) AuthStatus.CONNECTED else AuthStatus.DISCONNECTED
     }
@@ -105,6 +108,9 @@ class SpotifyConnector @Inject constructor(
     }
 
     override suspend fun search(query: String, limit: Int): List<UnifiedTrack> {
+        if (web.headers != null) {
+            runCatching { return pathfinder.searchTracks(query, limit) }
+        }
         val data = spotifyGet<SearchTracksResponse>(
             "/search",
             mapOf("q" to query, "type" to "track", "limit" to minOf(limit, 50).toString()),
@@ -113,6 +119,9 @@ class SpotifyConnector @Inject constructor(
     }
 
     override suspend fun listPlaylists(): List<UnifiedPlaylist> {
+        if (web.headers != null) {
+            runCatching { return pathfinder.listPlaylists() }
+        }
         val out = mutableListOf<UnifiedPlaylist>()
         var offset = 0
         while (out.size < 100) {
@@ -138,6 +147,9 @@ class SpotifyConnector @Inject constructor(
     }
 
     override suspend fun savedTracks(limit: Int): List<UnifiedTrack> {
+        if (web.headers != null) {
+            runCatching { return pathfinder.savedTracks(limit) }
+        }
         val out = mutableListOf<UnifiedTrack>()
         var offset = 0
         while (out.size < limit) {
@@ -154,6 +166,53 @@ class SpotifyConnector @Inject constructor(
         return out.take(limit)
     }
 
+    suspend fun playlist(id: String): com.mss.core.model.PlaylistWithTracks {
+        if (web.headers != null) {
+            runCatching { return pathfinder.playlist(id) }
+        }
+        val meta = spotifyGet<SpotifyPlaylistDetail>("/playlists/$id", emptyMap())
+        val tracks = mutableListOf<UnifiedTrack>()
+        var offset = 0
+        while (tracks.size < 500) {
+            val page = spotifyGet<PlaylistTracksPage>(
+                "/playlists/$id/tracks",
+                mapOf("limit" to "100", "offset" to offset.toString()),
+            )
+            page.items.forEach { row -> row.track?.let { tracks += mapTrack(it) } }
+            if (page.next == null) break
+            offset += 100
+        }
+        return com.mss.core.model.PlaylistWithTracks(
+            source = SourceId.SPOTIFY,
+            id = id,
+            title = meta.name,
+            owner = meta.owner.displayName,
+            description = meta.description,
+            coverUrl = meta.images.firstOrNull()?.url,
+            trackCount = tracks.size,
+            tracks = tracks,
+        )
+    }
+
+    suspend fun album(id: String): com.mss.core.model.AlbumWithTracks {
+        if (web.headers != null) {
+            runCatching { return pathfinder.album(id) }
+        }
+        val meta = spotifyGet<SpotifyAlbumDetail>("/albums/$id", emptyMap())
+        val tracks = meta.tracks.items.filterNotNull().map { t ->
+            mapTrack(t).copy(album = meta.name, coverUrl = meta.images.firstOrNull()?.url)
+        }
+        return com.mss.core.model.AlbumWithTracks(
+            source = SourceId.SPOTIFY,
+            id = id,
+            title = meta.name,
+            artist = meta.artists.joinToString { it.name },
+            coverUrl = meta.images.firstOrNull()?.url,
+            trackCount = tracks.size,
+            tracks = tracks,
+        )
+    }
+
     override suspend fun resolvePlaybackUrl(track: UnifiedTrack): String {
         val token = accessToken()
         val res = http.get("https://api.spotify.com/v1/tracks/${track.id}") {
@@ -161,8 +220,12 @@ class SpotifyConnector @Inject constructor(
         }
         if (!res.status.isSuccess()) throw ConnectorException(res.bodyAsText())
         val data = json.decodeFromString<SpotifyTrackDetail>(res.bodyAsText())
-        return data.previewUrl ?: throw ConnectorException("Полный трек Spotify — через Spotify Premium / SDK")
+        return data.previewUrl ?: throw ConnectorException("Полный трек Spotify — через веб-сессию")
     }
+
+    suspend fun homeFeed() = if (web.headers != null) {
+        runCatching { pathfinder.homeFeed() }.getOrDefault(emptyList())
+    } else emptyList()
 
     private suspend fun accessToken(): String {
         val t = loadTokens() ?: throw ConnectorException("Spotify не подключён")
@@ -198,8 +261,10 @@ class SpotifyConnector @Inject constructor(
         val url = buildString {
             append("https://api.spotify.com/v1")
             append(path)
-            append('?')
-            append(params.entries.joinToString("&") { "${it.key}=${java.net.URLEncoder.encode(it.value, Charsets.UTF_8)}" })
+            if (params.isNotEmpty()) {
+                append('?')
+                append(params.entries.joinToString("&") { "${it.key}=${java.net.URLEncoder.encode(it.value, Charsets.UTF_8)}" })
+            }
         }
         val res = http.get(url) { header(HttpHeaders.Authorization, "Bearer $token") }
         val body = res.bodyAsText()
@@ -299,6 +364,28 @@ private data class SpotifyArtistRef(val name: String)
 private data class SpotifyAlbumRef(val name: String? = null, val images: List<SpotifyImage> = emptyList())
 
 @Serializable
+private data class SpotifyPlaylistDetail(
+    val name: String,
+    val description: String? = null,
+    val owner: SpotifyOwner,
+    val images: List<SpotifyImage> = emptyList(),
+)
+
+@Serializable
+private data class PlaylistTracksPage(val items: List<SavedRow>, val next: String?)
+
+@Serializable
+private data class SpotifyAlbumDetail(
+    val name: String,
+    val artists: List<SpotifyArtistRef> = emptyList(),
+    val images: List<SpotifyImage> = emptyList(),
+    val tracks: AlbumTracksBlock,
+)
+
+@Serializable
+private data class AlbumTracksBlock(val items: List<SpotifyTrack?>)
+
+@Serializable
 private data class SpotifyTrackDetail(@SerialName("preview_url") val previewUrl: String? = null)
 
 private object SpotifyErrors {
@@ -309,8 +396,6 @@ private object SpotifyErrors {
         return raw.ifBlank { "Spotify API $status ($path)" }
     }
 }
-
-class ConnectorException(message: String) : Exception(message)
 
 private fun randomUrlSafe(bytes: Int): String {
     val buf = ByteArray(bytes)

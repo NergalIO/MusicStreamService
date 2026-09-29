@@ -1,12 +1,22 @@
 package com.mss.core.connectors
 
 import com.mss.core.datastore.TokenVault
+import com.mss.core.model.AlbumWithTracks
+import com.mss.core.model.ArtistProfile
 import com.mss.core.model.DeviceCodePrompt
+import com.mss.core.model.FeedBlock
+import com.mss.core.model.FeedItem
+import com.mss.core.model.PlaybackReport
+import com.mss.core.model.PlaylistWithTracks
 import com.mss.core.model.SourceId
+import com.mss.core.model.TrackLyrics
+import com.mss.core.model.UnifiedAlbum
 import com.mss.core.model.UnifiedPlaylist
 import com.mss.core.model.UnifiedTrack
+import com.mss.core.model.WaveBatch
+import com.mss.core.model.WaveSettings
+import com.mss.core.model.parseLrc
 import io.ktor.client.HttpClient
-import io.ktor.client.call.body
 import io.ktor.client.engine.okhttp.OkHttp
 import io.ktor.client.request.forms.FormDataContent
 import io.ktor.client.request.get
@@ -20,8 +30,6 @@ import io.ktor.http.Parameters
 import io.ktor.http.contentType
 import io.ktor.http.isSuccess
 import java.util.concurrent.atomic.AtomicReference
-import javax.crypto.Mac
-import javax.crypto.spec.SecretKeySpec
 import javax.inject.Inject
 import javax.inject.Singleton
 import kotlin.coroutines.cancellation.CancellationException
@@ -30,8 +38,11 @@ import kotlinx.coroutines.sync.Mutex
 import kotlinx.coroutines.sync.withLock
 import kotlinx.serialization.SerialName
 import kotlinx.serialization.Serializable
+import kotlinx.serialization.encodeToString
 import kotlinx.serialization.json.Json
+import kotlinx.serialization.json.JsonArray
 import kotlinx.serialization.json.JsonObject
+import kotlinx.serialization.json.contentOrNull
 import kotlinx.serialization.json.jsonArray
 import kotlinx.serialization.json.jsonObject
 import kotlinx.serialization.json.jsonPrimitive
@@ -49,8 +60,8 @@ class YandexConnector @Inject constructor(
     private val http = HttpClient(OkHttp)
     private val queueMutex = Mutex()
     private val loginAbort = AtomicReference(false)
-
     private var pendingPrompt: DeviceCodePrompt? = null
+    private var radioSession: WaveBatch? = null
 
     override fun authStatus(): AuthStatus {
         val t = loadTokens() ?: return AuthStatus.DISCONNECTED
@@ -72,6 +83,7 @@ class YandexConnector @Inject constructor(
             ),
         )
         val prompt = DeviceCodePrompt(
+            source = SourceId.YANDEX,
             userCode = deviceCode.userCode,
             verificationUrl = deviceCode.verificationUrl,
             expiresIn = deviceCode.expiresIn,
@@ -126,22 +138,109 @@ class YandexConnector @Inject constructor(
             "/search?text=${encode(query)}&type=track&page=0&pageSize=$limit",
         )
         val results = data["tracks"]?.jsonObject?.get("results")?.jsonArray ?: return emptyList()
-        return results.mapNotNull { parseYandexTrack(it.jsonObject) }
+        return results.mapNotNull { mapYandexTrack(it.jsonObject) }
+    }
+
+    suspend fun searchAlbums(query: String, limit: Int = 20): List<UnifiedAlbum> {
+        val data = apiGet<JsonObject>(
+            "/search?text=${encode(query)}&type=album&page=0&pageSize=$limit",
+        )
+        val results = data["albums"]?.jsonObject?.get("results")?.jsonArray ?: return emptyList()
+        return results.mapNotNull { mapYandexAlbum(it.jsonObject) }.take(limit)
+    }
+
+    suspend fun searchPlaylists(query: String, limit: Int = 20): List<UnifiedPlaylist> {
+        val data = apiGet<JsonObject>(
+            "/search?text=${encode(query)}&type=playlist&page=0&pageSize=$limit",
+        )
+        val results = data["playlists"]?.jsonObject?.get("results")?.jsonArray ?: return emptyList()
+        return results.map { mapYandexPlaylist(it.jsonObject) }.take(limit)
+    }
+
+    suspend fun suggest(part: String): List<String> {
+        val data = apiGet<JsonObject>("/search/suggest?part=${encode(part)}")
+        return data["suggestions"]?.jsonArray?.mapNotNull { it.jsonPrimitive.contentOrNull }?.take(8) ?: emptyList()
     }
 
     override suspend fun listPlaylists(): List<UnifiedPlaylist> {
         val uid = userId()
-        val own = apiGet<List<JsonObject>>("/users/$uid/playlists/list")
-        return own.map { pl ->
-            UnifiedPlaylist(
-                source = SourceId.YANDEX,
-                id = "${pl["owner"]?.jsonObject?.get("uid")?.jsonPrimitive?.content}:${pl["kind"]?.jsonPrimitive?.content}",
-                title = pl["title"]?.jsonPrimitive?.content ?: "Плейлист",
-                owner = pl["owner"]?.jsonObject?.get("name")?.jsonPrimitive?.content,
-                trackCount = pl["trackCount"]?.jsonPrimitive?.content?.toIntOrNull(),
-                coverUrl = pl["cover"]?.jsonObject?.get("uri")?.jsonPrimitive?.content?.let { "https://$it" },
-            )
+        val own = apiGet<JsonArray>("/users/$uid/playlists/list")
+        val liked = runCatching { apiGet<JsonArray>("/users/$uid/likes/playlists") }.getOrNull()
+        val all = own.map { mapYandexPlaylist(it.jsonObject) } +
+            (liked?.mapNotNull { it.jsonObject["playlist"]?.jsonObject?.let(::mapYandexPlaylist) } ?: emptyList())
+        val seen = mutableSetOf<String>()
+        return all.filter { seen.add(it.id) }
+    }
+
+    suspend fun playlist(id: String): PlaylistWithTracks {
+        val (ownerUid, kind) = id.split(":").let { it[0] to (it.getOrNull(1) ?: id) }
+        val data = apiGet<JsonObject>("/users/$ownerUid/playlists/$kind")
+        val entries = data["tracks"]?.jsonArray ?: JsonArray(emptyList())
+        val rich = entries.mapNotNull { it.jsonObject["track"]?.jsonObject?.let(::mapYandexTrack) }
+        val missing = entries.mapNotNull {
+            val o = it.jsonObject
+            if (o["track"] == null) o["id"]?.jsonPrimitive?.contentOrNull else null
         }
+        val tracks = if (missing.isEmpty()) rich else rich + tracksByIds(missing)
+        val meta = mapYandexPlaylist(data)
+        return PlaylistWithTracks(
+            source = meta.source,
+            id = meta.id,
+            title = meta.title,
+            owner = meta.owner,
+            description = meta.description,
+            coverUrl = meta.coverUrl,
+            trackCount = tracks.size,
+            tracks = tracks,
+        )
+    }
+
+    suspend fun album(id: String): AlbumWithTracks {
+        val data = apiGet<JsonObject>("/albums/$id/with-tracks")
+        val tracks = data["volumes"]?.jsonArray
+            ?.flatMap { vol -> vol.jsonArray.mapNotNull { mapYandexTrack(it.jsonObject) } }
+            ?: emptyList()
+        val meta = mapYandexAlbum(data) ?: UnifiedAlbum(SourceId.YANDEX, id, "Альбом", "")
+        val labels = data["labels"]?.jsonArray?.mapNotNull {
+            it.jsonObject["name"]?.jsonPrimitive?.contentOrNull ?: it.jsonPrimitive.contentOrNull
+        }?.joinToString()
+        return AlbumWithTracks(
+            source = meta.source,
+            id = meta.id,
+            title = meta.title,
+            artist = meta.artist,
+            artists = meta.artists,
+            year = meta.year,
+            coverUrl = meta.coverUrl,
+            trackCount = tracks.size,
+            type = meta.type,
+            genre = meta.genre,
+            tracks = tracks,
+            label = labels,
+            durationMs = tracks.sumOf { it.durationMs ?: 0 },
+        )
+    }
+
+    suspend fun artistProfile(id: String): ArtistProfile {
+        val brief = apiGet<JsonObject>("/artists/$id/brief-info")
+        val artist = mapYandexArtist(brief["artist"]?.jsonObject ?: JsonObject(emptyMap()))
+            ?: com.mss.core.model.UnifiedArtist(SourceId.YANDEX, id, "Исполнитель")
+        val popular = brief["popularTracks"]?.jsonArray?.mapNotNull { mapYandexTrack(it.jsonObject) } ?: emptyList()
+        val similar = brief["similarArtists"]?.jsonArray?.mapNotNull { mapYandexArtist(it.jsonObject) } ?: emptyList()
+        val direct = runCatching {
+            apiGet<JsonObject>("/artists/$id/direct-albums?page=0&page-size=100&sort-by=year")
+        }.getOrNull()
+        val releases = (direct?.get("albums")?.jsonArray ?: brief["albums"]?.jsonArray)
+            ?.mapNotNull { mapYandexAlbum(it.jsonObject) }
+            ?.sortedByDescending { it.year ?: 0 }
+            ?: emptyList()
+        return ArtistProfile(
+            artist = artist,
+            popularTracks = popular,
+            albums = releases.filter { it.type != "single" },
+            singles = releases.filter { it.type == "single" },
+            similar = similar,
+        )
     }
 
     override suspend fun savedTracks(limit: Int): List<UnifiedTrack> {
@@ -153,70 +252,199 @@ class YandexConnector @Inject constructor(
         return tracksByIds(ids.take(limit))
     }
 
+    suspend fun setLike(track: UnifiedTrack, liked: Boolean) {
+        val uid = userId()
+        val action = if (liked) "add-multiple" else "remove"
+        apiPostForm("/users/$uid/likes/tracks/$action", mapOf("track-ids" to trackKey(track)))
+    }
+
+    suspend fun dislike(track: UnifiedTrack) {
+        val uid = userId()
+        apiPostForm("/users/$uid/dislikes/tracks/add-multiple", mapOf("track-ids" to trackKey(track)))
+    }
+
+    suspend fun similarTracks(trackId: String): List<UnifiedTrack> {
+        val data = apiGet<JsonObject>("/tracks/${encode(trackBaseId(trackId))}/similar")
+        return data["similarTracks"]?.jsonArray?.mapNotNull { mapYandexTrack(it.jsonObject) } ?: emptyList()
+    }
+
+    suspend fun lyrics(trackId: String): TrackLyrics? {
+        val baseId = trackBaseId(trackId)
+        suspend fun load(format: String): Pair<String, List<String>?> {
+            val (ts, sign) = signTrack(trackId)
+            val info = apiGet<JsonObject>(
+                "/tracks/${encode(baseId)}/lyrics?format=$format&timeStamp=$ts&sign=${encode(sign)}",
+            )
+            val url = info["downloadUrl"]?.jsonPrimitive?.content ?: throw ConnectorException("lyrics url")
+            val text = http.get(url).bodyAsText()
+            val writers = info["writers"]?.jsonArray?.mapNotNull { it.jsonPrimitive.contentOrNull }
+            return text to writers
+        }
+        runCatching {
+            val (text, writers) = load("LRC")
+            val lines = parseLrc(text)
+            if (lines.isNotEmpty()) return TrackLyrics(true, lines, writers)
+        }
+        return runCatching {
+            val (text, writers) = load("TEXT")
+            TrackLyrics(false, text.split(Regex("\\r?\\n")).map { com.mss.core.model.LyricsLine(-1, it) }, writers)
+        }.getOrNull()
+    }
+
+    suspend fun feed(): List<FeedBlock> {
+        val data = apiGet<JsonObject>("/landing3?blocks=personalplaylists,new-releases,new-playlists,chart")
+        return data["blocks"]?.jsonArray?.mapNotNull { blockEl ->
+            val b = blockEl.jsonObject
+            val items = b["entities"]?.jsonArray?.mapNotNull { toFeedItem(it.jsonObject) } ?: emptyList()
+            if (items.isEmpty()) null
+            else FeedBlock(
+                id = b["id"]?.jsonPrimitive?.contentOrNull ?: b["type"]?.jsonPrimitive?.content.orEmpty(),
+                title = b["title"]?.jsonPrimitive?.contentOrNull ?: "",
+                items = items,
+            )
+        } ?: emptyList()
+    }
+
+    suspend fun chart(): List<UnifiedTrack> {
+        val data = apiGet<JsonObject>("/landing3/chart")
+        return data["chart"]?.jsonObject?.get("tracks")?.jsonArray
+            ?.mapNotNull { it.jsonObject["track"]?.jsonObject?.let(::mapYandexTrack) }
+            ?: emptyList()
+    }
+
+    fun currentWave(): WaveBatch? = radioSession
+
+    suspend fun waveStart(settings: WaveSettings = WaveSettings()): WaveBatch {
+        val seeds = mutableListOf(settings.seed ?: "user:onyourwave")
+        settings.diversity?.let { seeds += "settingDiversity:$it" }
+        settings.moodEnergy?.let { seeds += "settingMoodEnergy:$it" }
+        settings.language?.let { seeds += "settingLanguage:$it" }
+        val data = apiPostJson<JsonObject>(
+            "/rotor/session/new",
+            """{"seeds":${json.encodeToString(seeds)},"includeTracksInResponse":true}""",
+        )
+        val batch = parseWave(data, "")
+        radioSession = batch
+        runCatching { waveFeedback(batch.sessionId, batch.batchId, "radioStarted") }
+        return batch
+    }
+
+    suspend fun waveMore(sessionId: String, queue: List<String>): WaveBatch {
+        val data = apiPostJson<JsonObject>(
+            "/rotor/session/$sessionId/tracks",
+            """{"queue":${json.encodeToString(queue)}}""",
+        )
+        val batch = parseWave(data, sessionId)
+        radioSession = batch
+        return batch
+    }
+
+    suspend fun waveFeedback(
+        sessionId: String,
+        batchId: String,
+        type: String,
+        track: UnifiedTrack? = null,
+        totalPlayedSeconds: Double? = null,
+    ) {
+        val event = buildString {
+            append("""{"type":"$type","timestamp":"${java.time.Instant.now()}"""")
+            if (track != null) append(""","trackId":"${trackKey(track)}"""")
+            if (totalPlayedSeconds != null) append(""","totalPlayedSeconds":${totalPlayedSeconds.toInt()}""")
+            append("}")
+        }
+        apiPostJson<JsonObject>("/rotor/session/$sessionId/feedback", """{"event":$event,"batchId":"$batchId"}""")
+    }
+
+    suspend fun reportPlay(report: PlaybackReport) {
+        val uid = userId()
+        val now = java.time.Instant.now().toString()
+        apiPostForm(
+            "/play-audio",
+            mapOf(
+                "track-id" to trackBaseId(report.trackId),
+                "album-id" to (report.albumId ?: ""),
+                "from-cache" to "false",
+                "from" to "mss-android",
+                "play-id" to "",
+                "uid" to uid,
+                "timestamp" to now,
+                "track-length-seconds" to report.trackLengthSeconds.toInt().toString(),
+                "total-played-seconds" to report.totalPlayedSeconds.toInt().toString(),
+                "end-position-seconds" to report.endPositionSeconds.toInt().toString(),
+                "client-now" to now,
+            ),
+        )
+    }
+
     override suspend fun resolvePlaybackUrl(track: UnifiedTrack): String {
-        val trackId = track.id.substringBefore(':')
+        val trackId = trackBaseId(track.id)
         val ts = System.currentTimeMillis() / 1000
-        val sign = hmacBase64(ANDROID_SIGN_KEY, "$trackId$ts")
-        val items = apiGet<List<JsonObject>>(
+        val sign = YandexCrypto.signTrack(trackId, ts)
+        val items = apiGet<JsonArray>(
             "/tracks/${encode(trackId)}/download-info?can_use_streaming=true&ts=$ts&sign=${encode(sign)}",
         )
         val entry = items.firstOrNull {
-            val codec = it["codec"]?.jsonPrimitive?.content
-            (codec == "mp3" || codec == "aac") && it["downloadInfoUrl"] != null
+            val codec = it.jsonObject["codec"]?.jsonPrimitive?.content
+            (codec == "mp3" || codec == "aac") && it.jsonObject["downloadInfoUrl"] != null
         } ?: throw ConnectorException("download-info: нет формата")
-        val infoUrl = entry["downloadInfoUrl"]!!.jsonPrimitive.content
+        val infoUrl = entry.jsonObject["downloadInfoUrl"]!!.jsonPrimitive.content
         val xml = http.get(infoUrl).bodyAsText()
         fun tag(name: String) = Regex("<$name>([^<]+)</$name>").find(xml)?.groupValues?.get(1)
         val host = tag("host") ?: throw ConnectorException("Yandex storage")
         val path = tag("path") ?: throw ConnectorException("Yandex storage")
         val s = tag("s") ?: throw ConnectorException("Yandex storage")
         val linkTs = tag("ts") ?: throw ConnectorException("Yandex storage")
-        val signPath = hmacHex(DIRECT_LINK_SALT, DIRECT_LINK_SALT + path.substringAfter("/get/") + s + linkTs)
+        val signPath = YandexCrypto.signDirectLink(path.substringAfter("/get/"), s, linkTs)
         return "https://$host/get/$path/$signPath/$linkTs/mp3"
     }
 
     suspend fun tracksByIds(ids: List<String>): List<UnifiedTrack> {
         if (ids.isEmpty()) return emptyList()
-        val joined = ids.joinToString(",")
-        val data = apiGet<List<JsonObject>>("/tracks?track-ids=$joined")
-        return data.mapNotNull { parseYandexTrack(it) }
+        val out = mutableListOf<UnifiedTrack>()
+        for (chunk in ids.chunked(200)) {
+            val data = apiGet<JsonArray>("/tracks?track-ids=${chunk.joinToString(",")}")
+            out += data.mapNotNull { mapYandexTrack(it.jsonObject) }
+        }
+        return out
     }
 
-    suspend fun similarTracks(trackId: String): List<UnifiedTrack> {
-        val baseId = trackId.substringBefore(':')
-        val data = apiGet<JsonObject>("/tracks/${encode(baseId)}/similar")
-        val arr = data["similarTracks"]?.jsonArray ?: return emptyList()
-        return arr.mapNotNull { parseYandexTrack(it.jsonObject) }
-    }
-
-    suspend fun waveStart(): WaveBatch {
-        val data = apiPost<JsonObject>(
-            "/rotor/session/new",
-            """{"seeds":["user:onyourwave"],"includeTracksInResponse":true}""",
-        )
-        return parseWaveBatch(data, "")
-    }
-
-    private fun parseWaveBatch(data: JsonObject, sessionFallback: String): WaveBatch {
-        val sessionId = data["radioSessionId"]?.jsonPrimitive?.content ?: sessionFallback
-        val batchId = data["batchId"]?.jsonPrimitive?.content ?: ""
+    private fun parseWave(data: JsonObject, sessionFallback: String): WaveBatch {
+        val sessionId = data["radioSessionId"]?.jsonPrimitive?.contentOrNull ?: sessionFallback
+        val batchId = data["batchId"]?.jsonPrimitive?.contentOrNull.orEmpty()
         val tracks = data["sequence"]?.jsonArray
             ?.mapNotNull { it.jsonObject["track"]?.jsonObject }
-            ?.mapNotNull { parseYandexTrack(it) }
+            ?.mapNotNull { mapYandexTrack(it) }
             ?: emptyList()
         return WaveBatch(sessionId, batchId, tracks)
     }
 
+    private fun toFeedItem(entity: JsonObject): FeedItem? {
+        val type = entity["type"]?.jsonPrimitive?.contentOrNull ?: return null
+        val data = entity["data"]?.jsonObject ?: return null
+        return when (type) {
+            "personal-playlist" -> data["data"]?.jsonObject?.let { FeedItem("playlist", playlist = mapYandexPlaylist(it)) }
+            "playlist" -> FeedItem("playlist", playlist = mapYandexPlaylist(data))
+            "album" -> mapYandexAlbum(data)?.let { FeedItem("album", album = it) }
+            "chart-item" -> data["track"]?.jsonObject?.let { mapYandexTrack(it) }?.let { FeedItem("track", track = it) }
+            else -> null
+        }
+    }
+
     private suspend fun userId(): String {
-        vault.get(ACCOUNT_KEY)?.let { return Json.decodeFromString<AccountCache>(it).uid }
+        vault.get(ACCOUNT_KEY)?.let { return json.decodeFromString<AccountCache>(it).uid }
         val data = apiGet<JsonObject>("/account/status")
         val uid = data["account"]?.jsonObject?.get("uid")?.jsonPrimitive?.content
             ?: throw ConnectorException("Не удалось определить uid")
-        vault.set(ACCOUNT_KEY, Json.encodeToString(AccountCache.serializer(), AccountCache(uid)))
+        vault.set(ACCOUNT_KEY, json.encodeToString(AccountCache.serializer(), AccountCache(uid)))
         return uid
     }
 
-    private suspend inline fun <reified T> apiPost(path: String, jsonBody: String): T = queueMutex.withLock {
+    private fun signTrack(trackId: String): Pair<Long, String> {
+        val ts = System.currentTimeMillis() / 1000
+        return ts to YandexCrypto.signTrack(trackId, ts)
+    }
+
+    private suspend inline fun <reified T> apiPostJson(path: String, jsonBody: String): T = queueMutex.withLock {
         val token = accessToken()
         val res = http.post("https://api.music.yandex.net$path") {
             header(HttpHeaders.Authorization, "OAuth $token")
@@ -225,13 +453,18 @@ class YandexConnector @Inject constructor(
             contentType(ContentType.Application.Json)
             setBody(jsonBody)
         }
-        val text = res.bodyAsText()
-        if (!res.status.isSuccess()) throw ConnectorException("Yandex API ${res.status.value}: ${text.take(200)}")
-        val parsed = json.parseToJsonElement(text)
-        if (parsed is JsonObject && parsed.containsKey("result")) {
-            return json.decodeFromString<T>(parsed["result"]!!.toString())
+        unwrap(res.bodyAsText(), res.status.isSuccess(), res.status.value)
+    }
+
+    private suspend fun apiPostForm(path: String, fields: Map<String, String>) = queueMutex.withLock {
+        val token = accessToken()
+        val res = http.post("https://api.music.yandex.net$path") {
+            header(HttpHeaders.Authorization, "OAuth $token")
+            header("X-Yandex-Music-Client", "YandexMusicAndroid/24023621")
+            contentType(ContentType.Application.FormUrlEncoded)
+            setBody(FormDataContent(Parameters.build { fields.forEach { (k, v) -> append(k, v) } }))
         }
-        return json.decodeFromString(text)
+        if (!res.status.isSuccess()) throw ConnectorException("Yandex API ${res.status.value}: ${res.bodyAsText().take(200)}")
     }
 
     private suspend inline fun <reified T> apiGet(path: String): T = queueMutex.withLock {
@@ -241,13 +474,16 @@ class YandexConnector @Inject constructor(
             header("X-Yandex-Music-Client", "YandexMusicAndroid/24023621")
             header("Accept-Language", "ru")
         }
-        val body = res.bodyAsText()
-        if (!res.status.isSuccess()) throw ConnectorException("Yandex API ${res.status.value}: ${body.take(200)}")
-        val parsed = json.parseToJsonElement(body)
+        unwrap(res.bodyAsText(), res.status.isSuccess(), res.status.value)
+    }
+
+    private inline fun <reified T> unwrap(text: String, ok: Boolean, status: Int): T {
+        if (!ok) throw ConnectorException("Yandex API $status: ${text.take(200)}")
+        val parsed = json.parseToJsonElement(text)
         if (parsed is JsonObject && parsed.containsKey("result")) {
-            return json.decodeFromString<T>(parsed["result"]!!.toString())
+            return json.decodeFromString(parsed["result"]!!.toString())
         }
-        return json.decodeFromString(body)
+        return json.decodeFromString(text)
     }
 
     private suspend fun accessToken(): String {
@@ -285,23 +521,6 @@ class YandexConnector @Inject constructor(
         return json.decodeFromString(body)
     }
 
-    private fun parseYandexTrack(obj: JsonObject): UnifiedTrack? {
-        val id = obj["id"]?.jsonPrimitive?.content ?: return null
-        val title = obj["title"]?.jsonPrimitive?.content ?: return null
-        val artists = obj["artists"]?.jsonArray?.joinToString { it.jsonObject["name"]?.jsonPrimitive?.content ?: "" }
-            ?: "Неизвестный"
-        return UnifiedTrack(
-            source = SourceId.YANDEX,
-            id = id,
-            title = title,
-            artist = artists,
-            album = obj["albums"]?.jsonArray?.firstOrNull()?.jsonObject?.get("title")?.jsonPrimitive?.content,
-            durationMs = obj["durationMs"]?.jsonPrimitive?.content?.toLongOrNull(),
-            coverUrl = obj["coverUri"]?.jsonPrimitive?.content?.let { "https://$it/200x200" },
-            playable = true,
-        )
-    }
-
     private fun loadTokens(): YandexTokens? {
         val raw = vault.get(VAULT_KEY) ?: return null
         return json.decodeFromString(raw)
@@ -314,8 +533,6 @@ class YandexConnector @Inject constructor(
     companion object {
         private const val VAULT_KEY = "yandex_tokens"
         private const val ACCOUNT_KEY = "yandex_account"
-        private const val ANDROID_SIGN_KEY = "p93jhgh689SBReK6ghtw62"
-        private const val DIRECT_LINK_SALT = "XGRlBW9FXlekgbPrRHuSiA"
     }
 }
 
@@ -346,12 +563,6 @@ private data class YandexTokenResponse(
 @Serializable
 private data class AccountCache(val uid: String)
 
-data class WaveBatch(
-    val sessionId: String,
-    val batchId: String,
-    val tracks: List<UnifiedTrack>,
-)
-
 private fun encode(v: String) = java.net.URLEncoder.encode(v, Charsets.UTF_8)
 
 private fun randomHex(bytes: Int): String {
@@ -360,14 +571,3 @@ private fun randomHex(bytes: Int): String {
     return buf.joinToString("") { "%02x".format(it) }
 }
 
-private fun hmacBase64(key: String, data: String): String {
-    val mac = Mac.getInstance("HmacSHA256")
-    mac.init(SecretKeySpec(key.toByteArray(), "HmacSHA256"))
-    return android.util.Base64.encodeToString(mac.doFinal(data.toByteArray()), android.util.Base64.NO_WRAP)
-}
-
-private fun hmacHex(key: String, data: String): String {
-    val mac = Mac.getInstance("HmacSHA256")
-    mac.init(SecretKeySpec(key.toByteArray(), "HmacSHA256"))
-    return mac.doFinal(data.toByteArray()).joinToString("") { "%02x".format(it) }
-}

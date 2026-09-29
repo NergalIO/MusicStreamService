@@ -27,6 +27,7 @@ dependencies {
     implementation(libs.ktor.client.websockets)
     implementation(libs.kotlinx.serialization.json)
     implementation(libs.kotlinx.coroutines.android)
+    implementation(libs.androidx.core.ktx)
     implementation(libs.hilt.android)
     ksp(libs.hilt.compiler)
 }

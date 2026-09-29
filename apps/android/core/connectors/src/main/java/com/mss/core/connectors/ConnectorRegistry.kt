@@ -23,11 +23,15 @@ interface StreamConnector {
 class ConnectorRegistry @Inject constructor(
     val spotify: SpotifyConnector,
     val yandex: YandexConnector,
+    val vk: VkConnector,
 ) {
-    fun all(): List<StreamConnector> = listOf(spotify, yandex)
+    fun all(): List<StreamConnector> = listOf(spotify, yandex, vk)
     fun get(source: SourceId): StreamConnector? = when (source) {
         SourceId.SPOTIFY -> spotify
         SourceId.YANDEX -> yandex
+        SourceId.VK -> vk
         SourceId.LOCAL -> null
     }
 }
+
+class ConnectorException(message: String) : Exception(message)

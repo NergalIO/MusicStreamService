@@ -52,16 +52,29 @@ jobs:
           name: windows-installer
           path: apps/desktop/release/MusicStreamService-setup.exe
 
+  android-apk:
+    uses: ./.github/workflows/android-signed.yml
+    with:
+      artifact_name: android-apk
+      apk_name: mss-android.apk
+      require_signing: true
+      sync_version_tag: ${{ github.ref_name }}
+    secrets: inherit
+
   release:
-    needs: [windows-exe]
+    needs: [windows-exe, android-apk]
     runs-on: ubuntu-latest
     steps:
       - uses: actions/download-artifact@v4
         with:
           path: dist
       - name: Flatten artifacts
-        run: mv dist/windows-installer/MusicStreamService-setup.exe dist/
+        run: |
+          mv dist/windows-installer/MusicStreamService-setup.exe dist/
+          mv dist/android-apk/mss-android.apk dist/
       - uses: softprops/action-gh-release@v2
         with:
-          files: dist/MusicStreamService-setup.exe
+          files: |
+            dist/MusicStreamService-setup.exe
+            dist/mss-android.apk
           generate_release_notes: true

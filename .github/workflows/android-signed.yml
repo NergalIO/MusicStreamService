@@ -1,0 +1,114 @@
+name: Android signed APK
+
+on:
+  workflow_call:
+    inputs:
+      artifact_name:
+        description: Name of the uploaded artifact folder
+        type: string
+        default: android-apk
+      apk_name:
+        description: File name attached to GitHub Releases / landing
+        type: string
+        default: mss-android.apk
+      require_signing:
+        type: boolean
+        default: true
+      sync_version_tag:
+        description: Git tag like v0.1.0; empty skips version sync
+        type: string
+        default: ''
+
+jobs:
+  assemble:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-java@v5
+        with:
+          distribution: temurin
+          java-version: '21'
+          cache: gradle
+          cache-dependency-path: apps/android/gradle/wrapper/gradle-wrapper.properties
+
+      - uses: actions/setup-node@v4
+        if: inputs.sync_version_tag != ''
+        with:
+          node-version: '20'
+
+      - name: Sync version from tag
+        if: inputs.sync_version_tag != ''
+        run: node scripts/sync-version-from-tag.cjs "${{ inputs.sync_version_tag }}"
+
+      - name: Setup Android SDK
+        uses: android-actions/setup-android@v4
+        with:
+          packages: 'platform-tools platforms;android-35 build-tools;35.0.0'
+
+      - name: Write Gradle local.properties
+        working-directory: apps/android
+        env:
+          SPOTIFY_CLIENT_ID: ${{ secrets.SPOTIFY_CLIENT_ID }}
+          YANDEX_CLIENT_ID: ${{ secrets.YANDEX_CLIENT_ID }}
+          YANDEX_CLIENT_SECRET: ${{ secrets.YANDEX_CLIENT_SECRET }}
+          OFFLINE_HKDF_SECRET: ${{ secrets.OFFLINE_HKDF_SECRET }}
+        run: |
+          {
+            echo "SPOTIFY_CLIENT_ID=${SPOTIFY_CLIENT_ID}"
+            echo "YANDEX_CLIENT_ID=${YANDEX_CLIENT_ID}"
+            echo "YANDEX_CLIENT_SECRET=${YANDEX_CLIENT_SECRET}"
+            echo "OFFLINE_HKDF_SECRET=${OFFLINE_HKDF_SECRET:-offline-dev-secret}"
+          } > local.properties
+
+      - name: Decode release keystore
+        env:
+          MSS_KEYSTORE_BASE64: ${{ secrets.MSS_KEYSTORE_BASE64 }}
+          REQUIRE_SIGNING: ${{ inputs.require_signing }}
+        run: |
+          if [ -z "$MSS_KEYSTORE_BASE64" ]; then
+            if [ "$REQUIRE_SIGNING" = "true" ]; then
+              echo "Secret MSS_KEYSTORE_BASE64 is missing. Encode the .jks: base64 -w 0 mss-release.jks"
+              exit 1
+            fi
+            echo "No keystore secret — skip decode"
+            exit 0
+          fi
+          echo "$MSS_KEYSTORE_BASE64" | tr -d '\n\r ' | base64 -d > "$GITHUB_WORKSPACE/mss-release.jks"
+          test -s "$GITHUB_WORKSPACE/mss-release.jks"
+
+      - name: Assemble signed release
+        working-directory: apps/android
+        env:
+          MSS_KEYSTORE: ${{ github.workspace }}/mss-release.jks
+          MSS_KEYSTORE_PASSWORD: ${{ secrets.MSS_KEYSTORE_PASSWORD }}
+          MSS_KEY_ALIAS: ${{ secrets.MSS_KEY_ALIAS }}
+          MSS_KEY_PASSWORD: ${{ secrets.MSS_KEY_PASSWORD }}
+          MSS_REQUIRE_RELEASE_SIGNING: ${{ inputs.require_signing && '1' || '0' }}
+          SPOTIFY_CLIENT_ID: ${{ secrets.SPOTIFY_CLIENT_ID }}
+          YANDEX_CLIENT_ID: ${{ secrets.YANDEX_CLIENT_ID }}
+          YANDEX_CLIENT_SECRET: ${{ secrets.YANDEX_CLIENT_SECRET }}
+        run: |
+          chmod +x gradlew
+          ARGS=(:app:assembleRelease --no-daemon)
+          [ -n "$SPOTIFY_CLIENT_ID" ] && ARGS+=("-PSPOTIFY_CLIENT_ID=$SPOTIFY_CLIENT_ID")
+          [ -n "$YANDEX_CLIENT_ID" ] && ARGS+=("-PYANDEX_CLIENT_ID=$YANDEX_CLIENT_ID")
+          [ -n "$YANDEX_CLIENT_SECRET" ] && ARGS+=("-PYANDEX_CLIENT_SECRET=$YANDEX_CLIENT_SECRET")
+          ./gradlew "${ARGS[@]}"
+
+      - name: Verify APK signature
+        if: inputs.require_signing
+        run: |
+          "$ANDROID_SDK_ROOT/build-tools/35.0.0/apksigner" verify --verbose --print-certs \
+            apps/android/app/build/outputs/apk/release/app-release.apk
+
+      - name: Rename APK
+        run: |
+          mkdir -p dist
+          cp apps/android/app/build/outputs/apk/release/app-release.apk "dist/${{ inputs.apk_name }}"
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: ${{ inputs.artifact_name }}
+          path: dist/${{ inputs.apk_name }}
+          if-no-files-found: error
