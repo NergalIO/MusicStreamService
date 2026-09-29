@@ -351,7 +351,12 @@ private fun MainShell(vm: MssViewModel, nav: NavHostController) {
                 composable(Routes.WAVE) { WaveScreen(vm) }
                 composable(Routes.LOBBY) { LobbyScreen(nav) }
                 composable(Routes.NOW_PLAYING) {
-                    NowPlayingScreen(vm, onBack = { nav.popBackStack() }, onArtist = { nav.navigate(Routes.artist(it)) })
+                    NowPlayingScreen(
+                        vm,
+                        onBack = { nav.popBackStack() },
+                        onArtist = { nav.navigate(Routes.artist(it)) },
+                        onAlbum = { source, id -> nav.navigate(Routes.album(source, id)) },
+                    )
                 }
                 composable(Routes.MSS_PLAYLIST, listOf(navArgument("id") { type = NavType.StringType })) { e ->
                     val id = e.arguments?.getString("id") ?: return@composable

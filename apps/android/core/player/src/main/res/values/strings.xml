@@ -1,4 +1,9 @@
 <?xml version="1.0" encoding="utf-8"?>
 <resources>
     <string name="playback_channel">Воспроизведение</string>
+    <string name="notif_like">Лайк</string>
+    <string name="notif_unlike">Убрать лайк</string>
+    <string name="notif_repeat_off">Цикл выключен</string>
+    <string name="notif_repeat_all">Повтор списка</string>
+    <string name="notif_repeat_one">Повтор трека</string>
 </resources>

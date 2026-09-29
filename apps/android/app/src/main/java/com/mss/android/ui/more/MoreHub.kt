@@ -32,7 +32,7 @@ fun MoreHub(vm: MssViewModel, nav: NavHostController) {
     val sources by vm.sources.collectAsState()
     Column(Modifier.fillMaxSize().verticalScroll(rememberScrollState()).padding(bottom = 16.dp)) {
         ScreenTitle("Ещё")
-        HubRow("Настройки", "Качество, эквалайзер, сервер", Icons.Default.Settings) { nav.navigate(Routes.SETTINGS) }
+        HubRow("Настройки", "Качество, оформление, сервер", Icons.Default.Settings) { nav.navigate(Routes.SETTINGS) }
         HubRow("Статистика", "Что вы слушали", Icons.Default.BarChart) { nav.navigate(Routes.STATS) }
         HubRow("Итоги года", "Wrapped", Icons.Default.Star) { nav.navigate(Routes.WRAPPED) }
         HubRow("Подписка", "План и промокод", Icons.Default.CardMembership) { nav.navigate(Routes.SUBSCRIPTION) }

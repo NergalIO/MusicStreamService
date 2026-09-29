@@ -40,6 +40,8 @@ import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.SharingStarted
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.combine
+import kotlinx.coroutines.flow.distinctUntilChanged
+import kotlinx.coroutines.flow.map
 import kotlinx.coroutines.flow.stateIn
 import kotlinx.coroutines.launch
 
@@ -120,6 +122,17 @@ class MssViewModel @Inject constructor(
     init {
         refreshSources()
         viewModelScope.launch { spotifyWeb.loggedIn.collect { refreshSources() } }
+        player.onToggleLike = {
+            player.state.value.current?.let { toggleLike(it) }
+        }
+        viewModelScope.launch {
+            combine(
+                player.state.map { it.current?.id }.distinctUntilChanged(),
+                likedIds,
+            ) { id, ids -> id != null && id in ids }
+                .distinctUntilChanged()
+                .collect { player.setLiked(it) }
+        }
     }
 
     fun refreshSources() {

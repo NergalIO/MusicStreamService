@@ -6,7 +6,6 @@ import com.mss.android.data.MssRepository
 import com.mss.core.model.PlaybackSettings
 import com.mss.core.model.Quality
 import com.mss.core.network.SiteDownloads
-import com.mss.core.player.PlayerController
 import dagger.hilt.android.lifecycle.HiltViewModel
 import javax.inject.Inject
 import kotlinx.coroutines.flow.MutableStateFlow
@@ -18,7 +17,6 @@ import kotlinx.coroutines.launch
 @HiltViewModel
 class SettingsViewModel @Inject constructor(
     private val repo: MssRepository,
-    val player: PlayerController,
 ) : ViewModel() {
     val playbackSettings = repo.playbackSettings.stateIn(viewModelScope, SharingStarted.Eagerly, PlaybackSettings())
     val apiBase = repo.apiBase.stateIn(viewModelScope, SharingStarted.Eagerly, "")

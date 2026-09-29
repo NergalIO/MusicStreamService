@@ -47,6 +47,7 @@ data class PlayerUiState(
     val sleepEndsAt: Long? = null,
     val sleepUntilTrackEnd: Boolean = false,
     val volume: Float = 1f,
+    val liked: Boolean = false,
 )
 
 enum class RepeatMode { OFF, ALL, ONE }
@@ -133,6 +134,18 @@ class PlayerController @Inject constructor(
     fun sessionPlayer(): Player = nowPlaying
 
     fun audioSessionId(): Int = active.audioSessionId
+
+    @Volatile
+    var onToggleLike: (() -> Unit)? = null
+
+    fun setLiked(liked: Boolean) {
+        if (_state.value.liked == liked) return
+        _state.value = _state.value.copy(liked = liked)
+    }
+
+    fun toggleLike() {
+        scope.launch { onToggleLike?.invoke() }
+    }
 
     fun setWaveSession(sessionId: String, batchId: String) {
         waveSessionId = sessionId

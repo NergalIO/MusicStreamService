@@ -6,7 +6,6 @@ import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.material3.Button
-import androidx.compose.material3.Slider
 import androidx.compose.material3.Switch
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
@@ -35,12 +34,9 @@ fun SettingsScreen(vm: SettingsViewModel = hiltViewModel()) {
     val settings by vm.playbackSettings.collectAsState()
     val url by vm.apiBase.collectAsState()
     val apk by vm.apk.collectAsState()
-    val player by vm.player.state.collectAsState()
     var api by remember { mutableStateOf(url) }
     LaunchedEffect(url) { api = url }
     LaunchedEffect(Unit) { vm.checkApk() }
-    val bands = settings.eqBands.toMutableList().let { if (it.size < 8) it + List(8 - it.size) { 0f } else it }.take(8)
-    val labels = listOf("60", "150", "400", "1k", "2.4k", "6k", "10k", "15k")
     val qualityHint = when (settings.quality) {
         Quality.NORMAL -> "MP3 192 кбит/с — меньше трафика."
         Quality.HIGH -> "MP3 320 кбит/с."
@@ -55,35 +51,11 @@ fun SettingsScreen(vm: SettingsViewModel = hiltViewModel()) {
                     MssChip(settings.quality == Quality.LOSSLESS, "Lossless") { vm.setQuality(Quality.LOSSLESS) }
                 }
             }
-            val seconds = settings.crossfadeMs / 1000
-            SettingsRow("Плавный переход", if (seconds == 0) "Выключен" else "$seconds с между треками") {
-                Slider(
-                    value = seconds.toFloat(),
-                    onValueChange = { vm.savePlayback(settings.copy(crossfadeMs = it.toInt() * 1000)) },
-                    valueRange = 0f..12f,
-                    steps = 11,
-                    modifier = Modifier.fillMaxWidth(0.45f),
-                )
-            }
             SettingsRow("Выравнивать громкость", "Треки звучат одинаково громко") {
                 Switch(settings.normalize, { vm.savePlayback(settings.copy(normalize = it)) })
             }
         }
-        SettingsSection("Звук") {
-            SettingsRow("Эквалайзер") {
-                Switch(settings.eqEnabled, { vm.savePlayback(settings.copy(eqEnabled = it)) })
-            }
-            if (settings.eqEnabled) {
-                bands.forEachIndexed { i, v ->
-                    SettingsRow("${labels.getOrNull(i)} Гц", "${v.toInt()} dB") {
-                        Slider(v, { next ->
-                            val copy = bands.toMutableList()
-                            copy[i] = next
-                            vm.savePlayback(settings.copy(eqBands = copy))
-                        }, valueRange = -12f..12f, modifier = Modifier.fillMaxWidth(0.5f))
-                    }
-                }
-            }
+        SettingsSection("Экран") {
             SettingsRow("Визуализатор", "На экране «Сейчас играет»") {
                 Switch(settings.visualizer, { vm.savePlayback(settings.copy(visualizer = it)) })
             }
@@ -97,15 +69,6 @@ fun SettingsScreen(vm: SettingsViewModel = hiltViewModel()) {
             },
         ) {
             AccentSwatches(settings.accent, onSelect = { id -> vm.savePlayback(settings.copy(accent = id)) })
-        }
-        SettingsSection("Таймер сна") {
-            SettingsRow("Остановить воспроизведение") {
-                ChipFlow {
-                    MssChip(!player.sleepUntilTrackEnd && player.sleepEndsAt == null, "Выкл") { vm.player.setSleepTimer(null) }
-                    MssChip(player.sleepEndsAt != null, "30 мин") { vm.player.setSleepTimer(30) }
-                    MssChip(player.sleepUntilTrackEnd, "До конца трека") { vm.player.setSleepUntilEnd() }
-                }
-            }
         }
         SettingsSection("Сервер") {
             SettingsRow("Адрес сервера") {}
