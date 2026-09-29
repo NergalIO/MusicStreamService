@@ -84,6 +84,8 @@ class PlayerController @Inject constructor(
     private var index = 0
     private var playedMs = 0L
     private var tickJob: Job? = null
+    private var deviceProbe: Job? = null
+    private var spotifyTicks = 0
     private var usingSpotify = false
     private var waveSessionId: String? = null
     private var waveBatchId: String? = null
@@ -265,6 +267,16 @@ class PlayerController @Inject constructor(
         exoB.volume = v
         spotifyWeb.setVolume(v)
         _state.value = _state.value.copy(volume = v)
+    }
+
+    /** После выбора «это приложение» в списке устройств Spotify запускает текущий трек здесь. */
+    fun replaySpotifyHere() {
+        val track = _state.value.current ?: return
+        if (track.source != SourceId.SPOTIFY) return
+        val pos = _state.value.positionMs
+        usingSpotify = true
+        active.pause()
+        scope.launch { spotifyWeb.play(track.id, pos) }
     }
 
     fun tickProgress() {
@@ -490,7 +502,13 @@ class PlayerController @Inject constructor(
         tickJob = scope.launch {
             while (true) {
                 tickProgress()
-                if (usingSpotify) spotifyWeb.pollState()
+                if (usingSpotify) {
+                    spotifyWeb.pollState()
+                    spotifyTicks += 1
+                    if (spotifyTicks % 10 == 0 && deviceProbe?.isActive != true) {
+                        deviceProbe = scope.launch { spotifyWeb.refreshDevices() }
+                    }
+                }
                 delay(500)
             }
         }

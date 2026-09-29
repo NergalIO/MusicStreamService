@@ -17,7 +17,7 @@ let hold: { until: number; playing?: boolean; positionMs?: number } | null = nul
 
 const HOLD_MS = 1500;
 
-function ipcMessage(e: unknown): string {
+export function ipcMessage(e: unknown): string {
   const m = e instanceof Error ? e.message : String(e);
   return m.replace(/^Error invoking remote method '[^']+': (Error: )?/, '');
 }
@@ -131,6 +131,14 @@ export async function startSpotifyTrack(
   }
   const started = await window.electronAPI.spotifyConnect.play(track.id, startAtSeconds * 1000);
   if (activeTrackId !== track.id) return;
+  if (started?.remoteDevice) {
+    setAnchor(started.positionMs || startAtSeconds * 1000, false);
+    usePlaybackStore.setState({ playing: false, loading: false });
+    toast(`Spotify занят устройством «${started.remoteDevice}»`, {
+      description: 'Выберите устройство воспроизведения.',
+    });
+    return;
+  }
   if (started?.ad) {
     setAnchor(started.positionMs, started.playing);
     holdLocal({ playing: started.playing, positionMs: started.positionMs });

@@ -18,13 +18,23 @@ import kotlinx.coroutines.CompletableDeferred
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
+import kotlinx.coroutines.sync.Mutex
+import kotlinx.coroutines.sync.withLock
 import kotlinx.coroutines.withTimeout
+import kotlinx.coroutines.withTimeoutOrNull
+import org.json.JSONArray
 import org.json.JSONObject
 
 data class SpotifyWebHeaders(
     val authorization: String,
     val clientToken: String,
     val appVersion: String = "",
+)
+
+data class SpotifyDevice(
+    val name: String,
+    val active: Boolean,
+    val local: Boolean,
 )
 
 data class SpotifyDomState(
@@ -49,6 +59,9 @@ class SpotifyWebSession @Inject constructor(
     private val _dom = MutableStateFlow(SpotifyDomState())
     val dom: StateFlow<SpotifyDomState> = _dom
 
+    private val _remoteDevice = MutableStateFlow<String?>(null)
+    val remoteDevice: StateFlow<String?> = _remoteDevice
+
     @Volatile var headers: SpotifyWebHeaders? = null
         private set
 
@@ -59,6 +72,9 @@ class SpotifyWebSession @Inject constructor(
     private var loginAgent = false
     private val httpIds = AtomicInteger()
     private val httpWaiters = ConcurrentHashMap<String, CompletableDeferred<Pair<Int, String>>>()
+    private val deviceWaiters = ConcurrentHashMap<String, CompletableDeferred<String>>()
+    private val playWaiters = ConcurrentHashMap<String, CompletableDeferred<Unit>>()
+    private val pageMutex = Mutex()
 
     init {
         runCatching {
@@ -231,6 +247,7 @@ class SpotifyWebSession @Inject constructor(
     fun logout() {
         _visibleForLogin.value = false
         _loggedIn.value = false
+        _remoteDevice.value = null
         loginAgent = false
         headers = null
         hashes = emptyMap()
@@ -288,25 +305,103 @@ class SpotifyWebSession @Inject constructor(
         cm.flush()
     }
 
-    fun play(trackId: String, positionMs: Long = 0) {
-        eval(
-            """
-            (async () => {
-              $HELPERS
-              const href = '/track/$trackId';
-              if (!location.pathname.includes('$trackId')) location.href = 'https://open.spotify.com' + href;
-              for (let i = 0; i < 80 && !q('[data-testid="control-button-playpause"]'); i++) await sleep(250);
-              const btn = q('[data-testid="control-button-playpause"]');
-              if (btn && !isPauseLabel(btn)) btn.click();
-              if ($positionMs > 0) {
-                const progress = q('[data-testid="playback-progressbar"] input[type="range"]');
-                if (progress) setRange(progress, $positionMs);
-              }
-              MssSpotify.onState(JSON.stringify(readState()));
-            })();
-            """.trimIndent(),
-        )
+    suspend fun play(trackId: String, positionMs: Long = 0) {
+        pageMutex.withLock {
+            val id = httpIds.incrementAndGet().toString()
+            val done = CompletableDeferred<Unit>()
+            playWaiters[id] = done
+            eval(
+                """
+                (async () => {
+                  try {
+                    $HELPERS
+                    const href = '/track/$trackId';
+                    if (!location.pathname.includes('$trackId')) location.href = 'https://open.spotify.com' + href;
+                    for (let i = 0; i < 80 && !q('[data-testid="control-button-playpause"]'); i++) await sleep(250);
+                    const btn = q('[data-testid="control-button-playpause"]');
+                    if (btn && !isPauseLabel(btn)) btn.click();
+                    if ($positionMs > 0) {
+                      const progress = q('[data-testid="playback-progressbar"] input[type="range"]');
+                      if (progress) setRange(progress, $positionMs);
+                    }
+                    MssSpotify.onState(JSON.stringify(readState()));
+                  } finally {
+                    MssSpotify.onPlayDone('$id');
+                  }
+                })();
+                """.trimIndent(),
+            )
+            withTimeoutOrNull(25_000) { done.await() }
+            playWaiters.remove(id)
+            runCatching { applyDevices(queryDevices("list", "")) }
+        }
     }
+
+    /** Открывает меню устройств веб-плеера и возвращает, занят ли аккаунт чужим устройством. */
+    suspend fun refreshDevices() {
+        if (!pageMutex.tryLock()) return
+        try {
+            if (_visibleForLogin.value || webView == null) return
+            applyDevices(queryDevices("list", ""))
+        } finally {
+            pageMutex.unlock()
+        }
+    }
+
+    suspend fun listDevices(): List<SpotifyDevice> {
+        return pageMutex.withLock {
+            val status = queryDevices("list", "")
+            applyDevices(status)
+            status.devices
+        }
+    }
+
+    /** @return true, если выбрано это приложение (веб-плеер). */
+    suspend fun selectDevice(name: String): Boolean {
+        return pageMutex.withLock {
+            val status = queryDevices("select", name)
+            applyDevices(status)
+            status.selectedLocal
+        }
+    }
+
+    private fun applyDevices(status: DeviceQuery) {
+        _remoteDevice.value = status.remoteName
+    }
+
+    private suspend fun queryDevices(action: String, target: String): DeviceQuery {
+        if (webView == null) return DeviceQuery(null, emptyList(), false)
+        val id = httpIds.incrementAndGet().toString()
+        val done = CompletableDeferred<String>()
+        deviceWaiters[id] = done
+        eval(deviceScript(action, JSONObject.quote(target), id))
+        val json = try {
+            withTimeoutOrNull(8_000) { done.await() }
+        } finally {
+            deviceWaiters.remove(id)
+        } ?: return DeviceQuery(_remoteDevice.value, emptyList(), false)
+        val obj = runCatching { JSONObject(json) }.getOrNull()
+            ?: return DeviceQuery(_remoteDevice.value, emptyList(), false)
+        val err = obj.optString("error")
+        if (err.isNotBlank()) throw ConnectorException(err)
+        val remote = obj.optString("remoteName").ifBlank { null }
+        val arr = obj.optJSONArray("devices") ?: JSONArray()
+        val devices = buildList {
+            for (i in 0 until arr.length()) {
+                val d = arr.optJSONObject(i) ?: continue
+                val name = d.optString("name")
+                if (name.isBlank()) continue
+                add(SpotifyDevice(name, d.optBoolean("active"), d.optBoolean("local")))
+            }
+        }
+        return DeviceQuery(remote, devices, obj.optBoolean("selectedLocal"))
+    }
+
+    private data class DeviceQuery(
+        val remoteName: String?,
+        val devices: List<SpotifyDevice>,
+        val selectedLocal: Boolean,
+    )
 
     fun pause() = eval("document.querySelector('[data-testid=\"control-button-playpause\"]')?.click()")
 
@@ -336,6 +431,7 @@ class SpotifyWebSession @Inject constructor(
     }
 
     fun pollState() {
+        if (pageMutex.isLocked) return
         eval("MssSpotify.onState(JSON.stringify((function(){ $HELPERS return readState(); })()))")
     }
 
@@ -371,6 +467,16 @@ class SpotifyWebSession @Inject constructor(
         @JavascriptInterface
         fun onHttp(id: String, status: Int, body: String) {
             httpWaiters.remove(id)?.complete(status to body)
+        }
+
+        @JavascriptInterface
+        fun onPlayDone(id: String) {
+            playWaiters.remove(id)?.complete(Unit)
+        }
+
+        @JavascriptInterface
+        fun onDeviceResult(id: String, json: String) {
+            deviceWaiters.remove(id)?.complete(json)
         }
 
         @JavascriptInterface
@@ -461,6 +567,138 @@ class SpotifyWebSession @Inject constructor(
               for (const m of text.matchAll(re)) if (!ops[m[1]]) ops[m[1]] = m[2];
             }
             MssSpotify.onHashes(JSON.stringify(ops));
+          })();
+        """
+
+        private fun deviceScript(action: String, targetLiteral: String, id: String): String {
+            return DEVICE_SCRIPT
+                .replace("%%ACTION%%", action)
+                .replace("%%TARGET%%", targetLiteral)
+                .replace("%%ID%%", id)
+        }
+
+        private const val DEVICE_SCRIPT = """
+          (async () => {
+            const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
+            const action = '%%ACTION%%';
+            const target = %%TARGET%%;
+            const doneId = '%%ID%%';
+            const finish = (payload) => MssSpotify.onDeviceResult(doneId, JSON.stringify(payload));
+            try {
+              const IDLE = new Set([
+                'connect to a device',
+                'подключиться к устройству',
+                'подключение к устройству',
+                'conectar a un dispositivo',
+                'connecter à un appareil',
+                'mit einem gerät verbinden',
+                'connetti a un dispositivo',
+                'een apparaat verbinden',
+                'połącz z urządzeniem',
+                '连接到设备',
+                '接続先のデバイス',
+              ]);
+              const isIdle = (label) => IDLE.has(String(label || '').trim().toLowerCase());
+              const isLocal = (name) => {
+                const n = String(name || '').toLowerCase();
+                return n.includes('this web browser') || n.includes('этот веб-браузер') || n.includes('web player')
+                  || n.includes('веб-плеер') || n.includes('этот браузер') || n.includes('this computer') || n.includes('этот компьютер');
+              };
+              const listeningName = (text) => {
+                const t = String(text || '').replace(/\s+/g, ' ').trim();
+                const lower = t.toLowerCase();
+                const marks = ['listening on ', 'playing on ', 'слушаете на ', 'воспроизводится на ', 'воспроизведение на ', 'играет на '];
+                for (const mark of marks) {
+                  const i = lower.indexOf(mark);
+                  if (i >= 0) return t.slice(i + mark.length).trim();
+                }
+                return '';
+              };
+              const connectButton = () => {
+                const direct = document.querySelector('[data-testid="connect-device-picker"], [data-testid="device-picker-icon-button"], [data-testid="control-button-connect"]');
+                if (direct) return direct;
+                return [...document.querySelectorAll('button')].find((b) => {
+                  const label = (b.getAttribute('aria-label') || '').trim();
+                  return isIdle(label) || /устройств|device/i.test(label);
+                }) || null;
+              };
+              const rowActive = (b) => {
+                const cls = typeof b.className === 'string' ? b.className : '';
+                return b.getAttribute('aria-checked') === 'true' || b.getAttribute('aria-selected') === 'true'
+                  || b.getAttribute('aria-pressed') === 'true' || cls.split(/\s+/).includes('active');
+              };
+              const rowName = (b) => String(b.innerText || b.getAttribute('aria-label') || '').split('\n').map((s) => s.trim()).filter(Boolean)[0] || '';
+              const parseRoot = (root) => {
+                const opener = connectButton();
+                const buttons = [...root.querySelectorAll('[data-testid="device-picker-item"], button, [role="menuitemcheckbox"], [role="menuitem"], [role="option"]')];
+                const devices = [];
+                const seen = new Set();
+                for (const b of buttons) {
+                  if (b === opener) continue;
+                  const name = rowName(b);
+                  if (!name || name.length > 80 || isIdle(name) || seen.has(name)) continue;
+                  seen.add(name);
+                  devices.push({ name, active: rowActive(b), local: isLocal(name), el: b });
+                }
+                return devices;
+              };
+              const findMenu = () => {
+                const roots = [...document.querySelectorAll('[role="menu"], [role="dialog"], [data-testid="device-picker"], [data-testid*="device-picker"]')];
+                return roots.find((root) => parseRoot(root).length > 0) || null;
+              };
+              const btn = connectButton();
+              const wasOpen = !!btn && btn.getAttribute('aria-expanded') === 'true';
+              if (btn && !wasOpen) btn.click();
+              let menu = null;
+              for (let i = 0; i < 25; i++) {
+                menu = findMenu();
+                if (menu) break;
+                await sleep(80);
+              }
+              const rows = menu ? parseRoot(menu) : [];
+              const closeMenu = async () => {
+                if (!btn) return;
+                if (btn.getAttribute('aria-expanded') === 'true') btn.click();
+                await sleep(40);
+              };
+              if (action === 'select') {
+                const row = rows.find((d) => d.name === target) || rows.find((d) => target && d.name.includes(target));
+                if (!row) {
+                  await closeMenu();
+                  finish({ error: 'Устройство Spotify не найдено' });
+                  return;
+                }
+                row.el.click();
+                await sleep(200);
+                if (btn && btn.getAttribute('aria-expanded') === 'true') btn.click();
+                finish({
+                  remoteName: row.local ? null : row.name,
+                  selectedLocal: !!row.local,
+                  devices: rows.map(({ name, active, local }) => ({ name, active: name === row.name, local })),
+                });
+                return;
+              }
+              await closeMenu();
+              let remoteName = null;
+              const activeRemote = rows.find((d) => d.active && !d.local);
+              if (activeRemote) remoteName = activeRemote.name;
+              else if (!rows.some((d) => d.active && d.local)) {
+                const label = (btn && btn.getAttribute('aria-label')) || '';
+                const fromLabel = listeningName(label);
+                if (fromLabel && !isLocal(fromLabel)) remoteName = fromLabel;
+                else if (label && !isIdle(label) && !isLocal(label)) remoteName = label.trim();
+                if (!remoteName) {
+                  const bars = [...document.querySelectorAll('[class*="connectBar"], [data-testid*="connect-bar"]')];
+                  for (const bar of bars) {
+                    const name = listeningName(bar.textContent || '');
+                    if (name && !isLocal(name)) { remoteName = name; break; }
+                  }
+                }
+              }
+              finish({ remoteName, devices: rows.map(({ name, active, local }) => ({ name, active, local })) });
+            } catch (e) {
+              finish({ error: String(e && e.message || e) });
+            }
           })();
         """
     }

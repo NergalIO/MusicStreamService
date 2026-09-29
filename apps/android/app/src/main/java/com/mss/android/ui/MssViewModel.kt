@@ -26,6 +26,7 @@ import com.mss.core.model.TrackLyrics
 import com.mss.core.model.UnifiedAlbum
 import com.mss.core.model.UnifiedArtist
 import com.mss.core.model.UnifiedPlaylist
+import com.mss.core.localtracks.LocalTrackStore
 import com.mss.core.model.UnifiedTrack
 import com.mss.core.model.UserSubscriptionDto
 import com.mss.core.model.WaveSettings
@@ -53,6 +54,7 @@ class MssViewModel @Inject constructor(
     private val downloads: DownloadScheduler,
     private val lobby: LobbyClient,
     private val offline: OfflineStore,
+    private val localTracks: LocalTrackStore,
     private val presence: PresenceClient,
 ) : ViewModel() {
     val session = repo.session.stateIn(viewModelScope, SharingStarted.Eagerly, null)
@@ -91,8 +93,8 @@ class MssViewModel @Inject constructor(
     val feed: StateFlow<List<FeedBlock>> = _feed
     private val _artists = MutableStateFlow<List<CatalogArtistDto>>(emptyList())
     val artists: StateFlow<List<CatalogArtistDto>> = _artists
-    private val _lyrics = MutableStateFlow<TrackLyrics?>(null)
-    val lyrics: StateFlow<TrackLyrics?> = _lyrics
+    private val _lyrics = MutableStateFlow(LyricsUi())
+    val lyrics: StateFlow<LyricsUi> = _lyrics
     private val _yandexPrompt = MutableStateFlow<DeviceCodePrompt?>(null)
     val yandexPrompt: StateFlow<DeviceCodePrompt?> = _yandexPrompt
     private val _homeSource = MutableStateFlow(SourceId.LOCAL)
@@ -483,8 +485,24 @@ class MssViewModel @Inject constructor(
         _detailTitle.value = "Похожие"
     }
 
-    fun loadLyrics(track: UnifiedTrack) = launch {
-        _lyrics.value = if (track.source == SourceId.YANDEX) yandex.lyrics(track.id) else null
+    fun loadLyrics(track: UnifiedTrack) {
+        val key = "${track.source}:${track.id}"
+        _lyrics.value = LyricsUi(key = key, source = track.source, loading = true)
+        viewModelScope.launch {
+            val result = runCatching {
+                when (track.source) {
+                    SourceId.YANDEX -> yandex.lyrics(track.id)
+                    SourceId.SPOTIFY -> spotify.lyrics(track.id)
+                    SourceId.LOCAL -> localTracks.lyrics(track.id)
+                    else -> null
+                }
+            }
+            if (_lyrics.value.key != key) return@launch
+            _lyrics.value = result.fold(
+                onSuccess = { LyricsUi(key = key, source = track.source, data = it) },
+                onFailure = { LyricsUi(key = key, source = track.source, failed = true) },
+            )
+        }
     }
 
     fun download(track: UnifiedTrack) = launch {
@@ -593,6 +611,14 @@ class MssViewModel @Inject constructor(
     fun clearError() { _error.value = null }
     fun clearNotice() { _notice.value = null }
 }
+
+data class LyricsUi(
+    val key: String = "",
+    val source: SourceId? = null,
+    val loading: Boolean = false,
+    val failed: Boolean = false,
+    val data: TrackLyrics? = null,
+)
 
 data class SourceStatuses(
     val yandex: AuthStatus = AuthStatus.DISCONNECTED,

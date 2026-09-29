@@ -2,6 +2,7 @@ package com.mss.core.connectors
 
 import com.mss.core.datastore.TokenVault
 import com.mss.core.model.SourceId
+import com.mss.core.model.TrackLyrics
 import com.mss.core.model.UnifiedPlaylist
 import com.mss.core.model.UnifiedTrack
 import io.ktor.client.HttpClient
@@ -45,6 +46,12 @@ class SpotifyConnector @Inject constructor(
     }
 
     suspend fun trackRadio(track: UnifiedTrack) = pathfinder.trackRadio(track.id)
+
+    suspend fun lyrics(trackId: String): TrackLyrics? {
+        if (!useWebCatalog()) throw ConnectorException("Войдите в Spotify")
+        awaitWebPlayer()
+        return pathfinder.lyrics(trackId)
+    }
 
     override suspend fun search(query: String, limit: Int): List<UnifiedTrack> {
         if (useWebCatalog()) {

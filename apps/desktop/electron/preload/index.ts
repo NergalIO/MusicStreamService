@@ -176,7 +176,20 @@ const api = {
         playing: boolean;
         positionMs: number;
         durationMs: number;
+        remoteDevice: string | null;
       } | void>,
+    deviceStatus: () =>
+      ipcRenderer.invoke('spotify-connect:deviceStatus') as Promise<{
+        remoteName: string | null;
+        devices: { name: string; active: boolean; local: boolean }[];
+        selectedLocal?: boolean;
+      }>,
+    selectDevice: (name: string) =>
+      ipcRenderer.invoke('spotify-connect:selectDevice', name) as Promise<{
+        remoteName: string | null;
+        devices: { name: string; active: boolean; local: boolean }[];
+        selectedLocal?: boolean;
+      }>,
     pause: () => ipcRenderer.invoke('spotify-connect:pause') as Promise<void>,
     resume: () => ipcRenderer.invoke('spotify-connect:resume') as Promise<void>,
     seek: (positionMs: number) => ipcRenderer.invoke('spotify-connect:seek', positionMs) as Promise<void>,
@@ -196,6 +209,12 @@ const api = {
         adTitle: string | null;
       }) => void,
     ) => subscribe('spotify-connect:state', cb),
+    onDevice: (
+      cb: (state: {
+        remoteName: string | null;
+        devices: { name: string; active: boolean; local: boolean }[];
+      }) => void,
+    ) => subscribe('spotify-connect:device', cb),
     onEnded: (cb: (payload: { trackId: string }) => void) => subscribe('spotify-connect:ended', cb),
   },
   localTracks: {

@@ -3,6 +3,7 @@ package com.mss.android.ui.player
 import android.media.audiofx.Visualizer
 import android.os.Handler
 import android.os.Looper
+import android.os.SystemClock
 import androidx.compose.foundation.background
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.Arrangement
@@ -14,11 +15,13 @@ import androidx.compose.foundation.layout.fillMaxHeight
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
+import androidx.compose.foundation.layout.PaddingValues
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.itemsIndexed
+import androidx.compose.foundation.lazy.rememberLazyListState
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
@@ -33,6 +36,8 @@ import androidx.compose.material.icons.filled.RepeatOne
 import androidx.compose.material.icons.filled.Shuffle
 import androidx.compose.material.icons.filled.SkipNext
 import androidx.compose.material.icons.filled.SkipPrevious
+import androidx.compose.material3.AlertDialog
+import androidx.compose.material3.CircularProgressIndicator
 import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
 import androidx.compose.material3.LinearProgressIndicator
@@ -47,10 +52,17 @@ import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.collectAsState
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableFloatStateOf
+import androidx.compose.runtime.mutableLongStateOf
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
+import androidx.compose.runtime.rememberCoroutineScope
+import androidx.compose.runtime.snapshotFlow
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
+import androidx.compose.ui.geometry.Offset
+import androidx.compose.ui.input.nestedscroll.NestedScrollConnection
+import androidx.compose.ui.input.nestedscroll.NestedScrollSource
+import androidx.compose.ui.input.nestedscroll.nestedScroll
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.draw.clipToBounds
@@ -65,7 +77,9 @@ import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.min
+import androidx.compose.ui.unit.sp
 import coil.compose.AsyncImage
+import com.mss.android.ui.LyricsUi
 import com.mss.android.ui.MssViewModel
 import com.mss.android.ui.components.Cover
 import com.mss.android.ui.components.TrackRow
@@ -74,8 +88,11 @@ import com.mss.android.ui.theme.COVER_ACCENT
 import com.mss.android.ui.theme.MssTheme
 import com.mss.android.ui.theme.isolatedCoverBlur
 import com.mss.android.ui.theme.rememberCoverHsl
+import com.mss.core.connectors.SpotifyDevice
 import com.mss.core.model.LobbyDto
+import kotlinx.coroutines.launch
 import com.mss.core.model.SourceId
+import kotlinx.coroutines.flow.first
 import com.mss.core.model.UnifiedTrack
 import com.mss.core.model.WaveSettings
 import com.mss.core.player.RepeatMode
@@ -99,6 +116,104 @@ fun LobbyBar(lobby: LobbyDto?, onOpen: () -> Unit) {
 }
 
 @Composable
+private fun SpotifyDeviceBar(vm: MssViewModel, track: UnifiedTrack?) {
+    val remote by vm.spotifyWeb.remoteDevice.collectAsState()
+    if (track?.source != SourceId.SPOTIFY || remote.isNullOrBlank()) return
+    var open by remember { mutableStateOf(false) }
+    val scheme = MaterialTheme.colorScheme
+    Text(
+        "Воспроизведение на «$remote» — выбрать устройство",
+        color = scheme.primary,
+        style = MaterialTheme.typography.labelLarge,
+        maxLines = 2,
+        overflow = TextOverflow.Ellipsis,
+        textAlign = TextAlign.Center,
+        modifier = Modifier
+            .fillMaxWidth()
+            .padding(horizontal = 12.dp, vertical = 8.dp)
+            .clip(RoundedCornerShape(12.dp))
+            .background(scheme.primary.copy(alpha = 0.14f))
+            .clickable { open = true }
+            .padding(horizontal = 12.dp, vertical = 8.dp),
+    )
+    if (open) SpotifyDeviceDialog(vm, onClose = { open = false })
+}
+
+@Composable
+private fun SpotifyDeviceDialog(vm: MssViewModel, onClose: () -> Unit) {
+    val scope = rememberCoroutineScope()
+    var devices by remember { mutableStateOf<List<SpotifyDevice>>(emptyList()) }
+    var error by remember { mutableStateOf<String?>(null) }
+    var loading by remember { mutableStateOf(true) }
+    var pending by remember { mutableStateOf(false) }
+    LaunchedEffect(Unit) {
+        val result = runCatching { vm.spotifyWeb.listDevices() }
+        loading = false
+        result.onSuccess { devices = it }
+        result.onFailure { error = it.message ?: "Не удалось получить устройства Spotify" }
+        if (result.getOrNull().isNullOrEmpty() && error == null) {
+            error = "Spotify не показал устройства. Закройте окно и откройте его снова."
+        }
+    }
+    AlertDialog(
+        onDismissRequest = { if (!pending) onClose() },
+        title = { Text("Устройство воспроизведения") },
+        text = {
+            Column(verticalArrangement = Arrangement.spacedBy(4.dp)) {
+                Text(
+                    "Spotify играет только на одном устройстве. Выберите, где должен звучать трек.",
+                    style = MaterialTheme.typography.bodySmall,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                )
+                if (loading) {
+                    CircularProgressIndicator(Modifier.padding(top = 12.dp).size(24.dp), strokeWidth = 2.dp)
+                }
+                error?.let {
+                    Text(it, color = MaterialTheme.colorScheme.error, style = MaterialTheme.typography.bodySmall, modifier = Modifier.padding(top = 8.dp))
+                }
+                devices.forEach { device ->
+                    Row(
+                        Modifier
+                            .fillMaxWidth()
+                            .clip(RoundedCornerShape(10.dp))
+                            .clickable(enabled = !pending) {
+                                pending = true
+                                scope.launch {
+                                    val picked = runCatching { vm.spotifyWeb.selectDevice(device.name) }
+                                    picked.onSuccess { selectedHere ->
+                                        if (selectedHere || device.local) vm.player.replaySpotifyHere()
+                                        onClose()
+                                    }
+                                    picked.onFailure {
+                                        error = it.message
+                                        pending = false
+                                    }
+                                }
+                            }
+                            .padding(vertical = 10.dp, horizontal = 4.dp),
+                        horizontalArrangement = Arrangement.SpaceBetween,
+                        verticalAlignment = Alignment.CenterVertically,
+                    ) {
+                        Column(Modifier.weight(1f)) {
+                            Text(device.name, maxLines = 1, overflow = TextOverflow.Ellipsis)
+                            if (device.local) {
+                                Text("это приложение", style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
+                            }
+                        }
+                        if (device.active) {
+                            Text("сейчас", color = MaterialTheme.colorScheme.primary, style = MaterialTheme.typography.labelMedium)
+                        }
+                    }
+                }
+            }
+        },
+        confirmButton = {
+            TextButton(onClick = onClose, enabled = !pending) { Text("Закрыть") }
+        },
+    )
+}
+
+@Composable
 fun MiniPlayer(vm: MssViewModel, onOpen: () -> Unit) {
     val settings by vm.playbackSettings.collectAsState()
     val state by vm.playerState.collectAsState()
@@ -107,6 +222,7 @@ fun MiniPlayer(vm: MssViewModel, onOpen: () -> Unit) {
     val progress = if (state.durationMs == 0L) 0f else (state.positionMs / state.durationMs.toFloat()).coerceIn(0f, 1f)
     AccentPanelBackground(accent = settings.accent, coverUrl = track.coverUrl, modifier = Modifier.fillMaxWidth()) {
         Column(Modifier.fillMaxWidth()) {
+            SpotifyDeviceBar(vm, track)
             Box(Modifier.fillMaxWidth().height(2.dp).background(scheme.onSurface.copy(alpha = 0.10f))) {
                 Box(Modifier.fillMaxHeight().fillMaxWidth(progress).background(scheme.primary))
             }
@@ -194,7 +310,7 @@ private fun NowPlayingBody(vm: MssViewModel, onBack: () -> Unit, onArtist: (Stri
             return@Box
         }
         var tab by remember { mutableStateOf<Int?>(null) }
-        LaunchedEffect(track.id) {
+        LaunchedEffect(track.source, track.id) {
             vm.loadLyrics(track)
             tab = null
         }
@@ -223,7 +339,7 @@ private fun NowPlayingBody(vm: MssViewModel, onBack: () -> Unit, onArtist: (Stri
                     CoverSlot(track.coverUrl, blurred = tab != null, modifier = Modifier.fillMaxSize().zIndex(0f))
                     when (tab) {
                         0 -> QueuePane(state.queue, state.index, { vm.play(state.queue, it) }, Modifier.fillMaxSize().zIndex(1f))
-                        1 -> LyricsPane(lyrics, state.positionMs, Modifier.fillMaxSize().zIndex(1f))
+                        1 -> LyricsPane(vm, lyrics, state.positionMs, Modifier.fillMaxSize().zIndex(1f))
                         2 -> SimilarPane(similar, liked, state, vm, Modifier.fillMaxSize().zIndex(1f))
                         else -> Cover(track.coverUrl, Modifier.fillMaxSize().zIndex(1f), corner = 16.dp)
                     }
@@ -282,33 +398,111 @@ private fun QueuePane(queue: List<UnifiedTrack>, index: Int, onPlay: (Int) -> Un
     }
 }
 
+private const val LYRICS_LEAD_MS = 250L
+
 @Composable
-private fun LyricsPane(lyrics: com.mss.core.model.TrackLyrics?, positionMs: Long, modifier: Modifier) {
+private fun LyricsPane(vm: MssViewModel, lyrics: LyricsUi, positionMs: Long, modifier: Modifier) {
     val scheme = MaterialTheme.colorScheme
-    val lines = lyrics?.lines.orEmpty()
-    val currentIndex = if (lyrics?.synced == true) lines.indexOfLast { positionMs >= it.timeMs } else -1
-    LazyColumn(modifier.padding(horizontal = 16.dp, vertical = 12.dp), horizontalAlignment = Alignment.CenterHorizontally) {
-        if (lines.isEmpty()) {
-            item {
+    val message = lyricsMessage(lyrics)
+    if (lyrics.loading || message != null) {
+        Box(modifier, contentAlignment = Alignment.Center) {
+            if (lyrics.loading) {
+                CircularProgressIndicator(Modifier.size(28.dp), strokeWidth = 2.dp, color = scheme.onSurface)
+            } else {
                 Text(
-                    "Текст пока недоступен",
-                    color = scheme.onSurfaceVariant,
-                    modifier = Modifier.fillMaxWidth().padding(vertical = 32.dp),
+                    message.orEmpty(),
+                    color = scheme.onSurface.copy(alpha = 0.55f),
+                    modifier = Modifier.padding(horizontal = 20.dp),
                     textAlign = TextAlign.Center,
                 )
             }
         }
-        itemsIndexed(lines) { i, line ->
-            val active = i == currentIndex
-            Text(
-                line.text,
-                color = if (active) scheme.onSurface else scheme.onSurfaceVariant.copy(alpha = if (currentIndex >= 0) 0.55f else 1f),
-                fontWeight = if (active) FontWeight.SemiBold else FontWeight.Normal,
-                style = MaterialTheme.typography.titleMedium,
-                textAlign = TextAlign.Center,
-                modifier = Modifier.fillMaxWidth().padding(vertical = 6.dp),
-            )
+        return
+    }
+    val data = lyrics.data ?: return
+    val lines = data.lines
+    val active = if (data.synced) lines.indexOfLast { positionMs + LYRICS_LEAD_MS >= it.timeMs } else -1
+    val listState = rememberLazyListState()
+    var holdUntil by remember { mutableLongStateOf(0L) }
+    val userScroll = remember {
+        object : NestedScrollConnection {
+            override fun onPreScroll(available: Offset, source: NestedScrollSource): Offset {
+                if (source == NestedScrollSource.UserInput) holdUntil = SystemClock.elapsedRealtime() + 4_000
+                return Offset.Zero
+            }
         }
+    }
+    LaunchedEffect(active) {
+        if (active < 0) return@LaunchedEffect
+        val viewport = snapshotFlow { listState.layoutInfo.viewportSize.height }.first { it > 0 }
+        if (SystemClock.elapsedRealtime() < holdUntil) return@LaunchedEffect
+        val itemSize = listState.layoutInfo.visibleItemsInfo.firstOrNull()?.size ?: 0
+        listState.animateScrollToItem(active, -(viewport / 2 - itemSize / 2))
+    }
+    BoxWithConstraints(modifier) {
+        LazyColumn(
+            state = listState,
+            modifier = Modifier.fillMaxSize().nestedScroll(userScroll).padding(horizontal = 8.dp),
+            contentPadding = PaddingValues(vertical = maxHeight * 0.32f),
+            horizontalAlignment = Alignment.CenterHorizontally,
+        ) {
+            itemsIndexed(lines) { i, line ->
+                val current = i == active
+                val label = line.text.trim().ifEmpty { if (data.synced) "♪" else "" }
+                if (label.isEmpty()) return@itemsIndexed
+                Text(
+                    label,
+                    color = if (!data.synced) scheme.onSurface.copy(alpha = 0.85f)
+                    else if (current) scheme.onSurface
+                    else scheme.onSurface.copy(alpha = 0.35f),
+                    fontWeight = FontWeight.Bold,
+                    fontSize = if (data.synced && current) 26.sp else if (data.synced) 22.sp else 18.sp,
+                    textAlign = TextAlign.Center,
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .then(
+                            if (data.synced && line.timeMs >= 0) {
+                                Modifier.clickable { vm.player.seekTo(line.timeMs) }
+                            } else {
+                                Modifier
+                            },
+                        )
+                        .padding(vertical = if (line.text.isBlank()) 10.dp else 8.dp),
+                )
+            }
+            data.writers?.takeIf { it.isNotEmpty() }?.let { writers ->
+                item {
+                    Text(
+                        "Авторы: ${writers.joinToString(", ")}",
+                        color = scheme.onSurface.copy(alpha = 0.4f),
+                        style = MaterialTheme.typography.bodySmall,
+                        textAlign = TextAlign.Center,
+                        modifier = Modifier.fillMaxWidth().padding(top = 28.dp),
+                    )
+                }
+            }
+        }
+    }
+}
+
+private fun lyricsMessage(lyrics: LyricsUi): String? {
+    val source = lyrics.source
+    if (source != SourceId.YANDEX && source != SourceId.SPOTIFY && source != SourceId.LOCAL) {
+        return "Тексты песен недоступны для этого источника"
+    }
+    if (lyrics.loading) return null
+    if (lyrics.failed) {
+        return if (source == SourceId.SPOTIFY) {
+            "Не удалось загрузить текст. Подождите пару секунд и откройте «Текст» снова."
+        } else {
+            "Не удалось загрузить текст"
+        }
+    }
+    if (lyrics.data?.lines?.any { it.text.isNotBlank() } == true) return null
+    return when (source) {
+        SourceId.LOCAL -> "Нет текста. Положите .lrc или .txt рядом с файлом трека."
+        SourceId.SPOTIFY -> "У этого трека нет текста в Spotify."
+        else -> "У этого трека нет текста"
     }
 }
 
@@ -437,6 +631,7 @@ private fun PlayerTabs(tab: Int?, onTab: (Int) -> Unit) {
 @Composable
 private fun NowPlayingControls(vm: MssViewModel, state: com.mss.core.player.PlayerUiState) {
     val scheme = MaterialTheme.colorScheme
+    SpotifyDeviceBar(vm, state.current)
     val duration = state.durationMs.toFloat().coerceAtLeast(1f)
     Row(Modifier.fillMaxWidth().padding(top = 12.dp), horizontalArrangement = Arrangement.SpaceBetween) {
         Text(formatClock(state.positionMs), style = MaterialTheme.typography.labelMedium, color = scheme.onSurfaceVariant)

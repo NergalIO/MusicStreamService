@@ -18,6 +18,7 @@ import { Fragment, useState } from 'react';
 import { Link } from 'react-router-dom';
 import { Artwork } from '@/components/media/Artwork';
 import { SeekBar } from '@/components/player/SeekBar';
+import { SpotifyDeviceButton } from '@/components/player/SpotifyDeviceButton';
 import { WindowControls } from '@/components/layout/WindowControls';
 import { SoundSheet } from '@/components/player/SoundSheet';
 import { VolumeControl } from '@/components/player/VolumeControl';
@@ -246,6 +247,7 @@ export function TopPlayer() {
         )}
       </div>
 
+      <SpotifyDeviceButton />
       <SoundSheet open={soundOpen} onClose={() => setSoundOpen(false)} />
     </header>
   );

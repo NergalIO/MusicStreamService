@@ -332,6 +332,11 @@ export function setSpotifyControlled(active: boolean): void {
   }
 }
 
+export function isSpotifyWebAudible(): boolean {
+  const wc = view?.webContents;
+  return !!wc && !wc.isDestroyed() && wc.isCurrentlyAudible();
+}
+
 export function setSpotifyWebMuted(muted: boolean): void {
   const wc = view?.webContents;
   if (wc && !wc.isDestroyed()) wc.setAudioMuted(muted);

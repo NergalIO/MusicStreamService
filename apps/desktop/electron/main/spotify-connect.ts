@@ -1,6 +1,6 @@
 import { BrowserWindow, ipcMain } from 'electron';
 import { log } from './logger.js';
-import { setSpotifyControlled, setSpotifyWebMuted, spotifyWebExec } from './spotify-web-session.js';
+import { isSpotifyWebAudible, setSpotifyControlled, setSpotifyWebMuted, spotifyWebExec } from './spotify-web-session.js';
 
 /**
  * MSS ведёт встроенный веб-плеер Spotify через его же интерфейс: страница трека + кнопки,
@@ -28,6 +28,20 @@ export interface SpotifyPlayResult {
   playing: boolean;
   positionMs: number;
   durationMs: number;
+  /** Активное устройство Spotify Connect, если это не веб-плеер. */
+  remoteDevice: string | null;
+}
+
+export interface SpotifyDevice {
+  name: string;
+  active: boolean;
+  local: boolean;
+}
+
+export interface SpotifyDeviceStatus {
+  remoteName: string | null;
+  devices: SpotifyDevice[];
+  selectedLocal?: boolean;
 }
 
 interface DomState {
@@ -225,42 +239,242 @@ async function poll(): Promise<void> {
   schedulePoll(next);
 }
 
+const EMPTY_DEVICES: SpotifyDeviceStatus = { remoteName: null, devices: [] };
+let lastDevices: SpotifyDeviceStatus = EMPTY_DEVICES;
+let pageGate: Promise<void> = Promise.resolve();
+
+function withSpotifyPage<T>(fn: () => Promise<T>): Promise<T> {
+  const run = pageGate.then(fn, fn);
+  pageGate = run.then(
+    () => undefined,
+    () => undefined,
+  );
+  return run;
+}
+
+function publishDevices(status: SpotifyDeviceStatus): SpotifyDeviceStatus {
+  lastDevices = status;
+  send('spotify-connect:device', { remoteName: status.remoteName, devices: status.devices });
+  return status;
+}
+
+/** Меню «Подключиться к устройству» в веб-плеере. Web API Connect сюда не ходим: токен плеера ловит 429. */
+function spotifyDeviceScript(action: 'list' | 'select', targetJson: string): string {
+  return `(async () => {
+    const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
+    const action = ${JSON.stringify(action)};
+    const target = ${targetJson};
+    const IDLE = new Set([
+      'connect to a device',
+      'подключиться к устройству',
+      'подключение к устройству',
+      'conectar a un dispositivo',
+      'connecter à un appareil',
+      'mit einem gerät verbinden',
+      'connetti a un dispositivo',
+      'een apparaat verbinden',
+      'połącz z urządzeniem',
+      '连接到设备',
+      '接続先のデバイス',
+    ]);
+    const isIdle = (label) => IDLE.has(String(label || '').trim().toLowerCase());
+    const isLocal = (name) => {
+      const n = String(name || '').toLowerCase();
+      return n.includes('this web browser') || n.includes('этот веб-браузер') || n.includes('web player')
+        || n.includes('веб-плеер') || n.includes('этот браузер') || n.includes('this computer') || n.includes('этот компьютер');
+    };
+    const listeningName = (text) => {
+      const t = String(text || '').replace(/\\s+/g, ' ').trim();
+      const lower = t.toLowerCase();
+      const marks = ['listening on ', 'playing on ', 'слушаете на ', 'воспроизводится на ', 'воспроизведение на ', 'играет на '];
+      for (const mark of marks) {
+        const i = lower.indexOf(mark);
+        if (i >= 0) return t.slice(i + mark.length).trim();
+      }
+      return '';
+    };
+    const connectButton = () => {
+      const direct = document.querySelector('[data-testid="connect-device-picker"], [data-testid="device-picker-icon-button"], [data-testid="control-button-connect"]');
+      if (direct) return direct;
+      return [...document.querySelectorAll('button')].find((b) => {
+        const label = (b.getAttribute('aria-label') || '').trim();
+        return isIdle(label) || /устройств|device/i.test(label);
+      }) || null;
+    };
+    const rowActive = (b) => {
+      const cls = typeof b.className === 'string' ? b.className : '';
+      return b.getAttribute('aria-checked') === 'true' || b.getAttribute('aria-selected') === 'true'
+        || b.getAttribute('aria-pressed') === 'true' || cls.split(/\\s+/).includes('active');
+    };
+    const rowName = (b) => String(b.innerText || b.getAttribute('aria-label') || '')
+      .split('\\n').map((s) => s.trim()).filter(Boolean)[0] || '';
+    const parseRoot = (root) => {
+      const opener = connectButton();
+      const buttons = [...root.querySelectorAll('[data-testid="device-picker-item"], button, [role="menuitemcheckbox"], [role="menuitem"], [role="option"]')];
+      const devices = [];
+      const seen = new Set();
+      for (const b of buttons) {
+        if (b === opener) continue;
+        const name = rowName(b);
+        if (!name || name.length > 80 || isIdle(name) || seen.has(name)) continue;
+        seen.add(name);
+        devices.push({ name, active: rowActive(b), local: isLocal(name), el: b });
+      }
+      return devices;
+    };
+    const findMenu = () => {
+      const roots = [...document.querySelectorAll('[role="menu"], [role="dialog"], [data-testid="device-picker"], [data-testid*="device-picker"]')];
+      return roots.find((root) => parseRoot(root).length > 0) || null;
+    };
+    const btn = connectButton();
+    const wasOpen = !!btn && btn.getAttribute('aria-expanded') === 'true';
+    if (btn && !wasOpen) btn.click();
+    let menu = null;
+    for (let i = 0; i < 25; i++) {
+      menu = findMenu();
+      if (menu) break;
+      await sleep(80);
+    }
+    const rows = menu ? parseRoot(menu) : [];
+    const closeMenu = async () => {
+      if (!btn) return;
+      if (btn.getAttribute('aria-expanded') === 'true') btn.click();
+      await sleep(40);
+    };
+    if (action === 'select') {
+      const row = rows.find((d) => d.name === target) || rows.find((d) => target && d.name.includes(target));
+      if (!row) {
+        await closeMenu();
+        throw new Error('Устройство Spotify не найдено');
+      }
+      row.el.click();
+      await sleep(200);
+      if (btn && btn.getAttribute('aria-expanded') === 'true') btn.click();
+      return {
+        remoteName: row.local ? null : row.name,
+        selectedLocal: !!row.local,
+        devices: rows.map(({ name, active, local }) => ({ name, active: name === row.name, local })),
+      };
+    }
+    await closeMenu();
+    let remoteName = null;
+    const activeRemote = rows.find((d) => d.active && !d.local);
+    if (activeRemote) remoteName = activeRemote.name;
+    else if (!rows.some((d) => d.active && d.local)) {
+      const label = (btn && btn.getAttribute('aria-label')) || '';
+      const fromLabel = listeningName(label);
+      if (fromLabel && !isLocal(fromLabel)) remoteName = fromLabel;
+      else if (label && !isIdle(label) && !isLocal(label)) remoteName = label.trim();
+      if (!remoteName) {
+        const bars = [...document.querySelectorAll('[class*="connectBar"], [data-testid*="connect-bar"]')];
+        for (const bar of bars) {
+          const name = listeningName(bar.textContent || '');
+          if (name && !isLocal(name)) { remoteName = name; break; }
+        }
+      }
+    }
+    return { remoteName, devices: rows.map(({ name, active, local }) => ({ name, active, local })) };
+  })()`;
+}
+
+async function readDevices(): Promise<SpotifyDeviceStatus> {
+  try {
+    const status = await spotifyWebExec<SpotifyDeviceStatus>(spotifyDeviceScript('list', '""'));
+    const remoteName = status?.remoteName && !isSpotifyWebAudible() ? status.remoteName : null;
+    return publishDevices({
+      remoteName,
+      devices: Array.isArray(status?.devices) ? status.devices : [],
+    });
+  } catch (e) {
+    log.warn('spotify devices', e instanceof Error ? e.message : e);
+    return lastDevices;
+  }
+}
+
+async function remoteAfterPlay(fallback: SpotifyPlayResult): Promise<SpotifyPlayResult> {
+  if (!isSpotifyWebAudible()) await new Promise((r) => setTimeout(r, 900));
+  const status = await readDevices();
+  if (!status.remoteName) return { ...fallback, remoteDevice: null };
+  return { ...fallback, playing: false, remoteDevice: status.remoteName };
+}
+
 async function play(trackId: string, positionMs = 0): Promise<SpotifyPlayResult | undefined> {
   if (!/^[A-Za-z0-9]{10,40}$/.test(trackId)) throw new Error('Некорректный id трека Spotify');
-  const seq = ++playSeq;
-  active = true;
-  setSpotifyControlled(true);
-  expectedTrackId = trackId;
-  expectedTitle = null;
-  endedFor = null;
-  lastState = null;
-  const state = await spotifyWebExec<DomState>(playScript(trackId, positionMs));
-  if (seq !== playSeq) return;
-  expectedTitle = state.trackTitle || state.title;
-  lastState = state;
-  const sent = emitConnectState(state);
-  schedulePoll(state.ad ? 250 : 600);
-  return {
-    ad: sent.ad,
-    adTitle: sent.adTitle,
-    playing: sent.playing,
-    positionMs: sent.positionMs,
-    durationMs: sent.durationMs,
-  };
+  return withSpotifyPage(async () => {
+    const seq = ++playSeq;
+    active = true;
+    setSpotifyControlled(true);
+    expectedTrackId = trackId;
+    expectedTitle = null;
+    endedFor = null;
+    lastState = null;
+    try {
+      const state = await spotifyWebExec<DomState>(playScript(trackId, positionMs));
+      if (seq !== playSeq) return;
+      expectedTitle = state.trackTitle || state.title;
+      lastState = state;
+      const sent = emitConnectState(state);
+      schedulePoll(state.ad ? 250 : 600);
+      return remoteAfterPlay({
+        ad: sent.ad,
+        adTitle: sent.adTitle,
+        playing: sent.playing,
+        positionMs: sent.positionMs,
+        durationMs: sent.durationMs,
+        remoteDevice: null,
+      });
+    } catch (e) {
+      if (seq !== playSeq) return;
+      const status = await readDevices();
+      if (status.remoteName) {
+        schedulePoll(600);
+        return {
+          ad: false,
+          adTitle: null,
+          playing: false,
+          positionMs,
+          durationMs: 0,
+          remoteDevice: status.remoteName,
+        };
+      }
+      throw e;
+    }
+  });
 }
 
 async function setPlaying(playing: boolean): Promise<void> {
-  if (playing) {
-    active = true;
-    setSpotifyControlled(true);
-  }
-  await spotifyWebExec(clickPlayPauseScript(playing));
-  schedulePoll(400);
+  await withSpotifyPage(async () => {
+    if (playing) {
+      active = true;
+      setSpotifyControlled(true);
+    }
+    await spotifyWebExec(clickPlayPauseScript(playing));
+    schedulePoll(400);
+  });
 }
 
 async function seek(positionMs: number): Promise<void> {
-  await spotifyWebExec(seekScript(positionMs));
-  schedulePoll(400);
+  await withSpotifyPage(async () => {
+    await spotifyWebExec(seekScript(positionMs));
+    schedulePoll(400);
+  });
+}
+
+async function deviceStatus(): Promise<SpotifyDeviceStatus> {
+  return withSpotifyPage(() => readDevices());
+}
+
+async function selectDevice(name: string): Promise<SpotifyDeviceStatus> {
+  const trimmed = name.trim();
+  if (!trimmed) throw new Error('Устройство Spotify не найдено');
+  return withSpotifyPage(async () => {
+    const status = await spotifyWebExec<SpotifyDeviceStatus>(spotifyDeviceScript('select', JSON.stringify(trimmed)));
+    return publishDevices({
+      remoteName: status?.remoteName || null,
+      devices: Array.isArray(status?.devices) ? status.devices : [],
+      selectedLocal: !!status?.selectedLocal,
+    });
+  });
 }
 
 function clamp01(value: number): number {
@@ -366,4 +580,6 @@ export function registerSpotifyConnectIpc(): void {
   );
   ipcMain.handle('spotify-connect:setEndLead', (_e, ms: number) => setEndLead(ms));
   ipcMain.handle('spotify-connect:stop', () => stop());
+  ipcMain.handle('spotify-connect:deviceStatus', () => deviceStatus());
+  ipcMain.handle('spotify-connect:selectDevice', (_e, name: string) => selectDevice(name));
 }

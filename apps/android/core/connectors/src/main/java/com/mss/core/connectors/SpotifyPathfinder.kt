@@ -1,6 +1,7 @@
 package com.mss.core.connectors
 
 import com.mss.core.model.AlbumWithTracks
+import com.mss.core.model.TrackLyrics
 import com.mss.core.model.FeedBlock
 import com.mss.core.model.FeedItem
 import com.mss.core.model.PlaylistWithTracks
@@ -190,6 +191,24 @@ class SpotifyPathfinder @Inject constructor(
             throw ConnectorException("У этого трека нет радио в Spotify")
         }
         return playlist(idFromUri(uri) ?: throw ConnectorException("У этого трека нет радио в Spotify"))
+    }
+
+    suspend fun lyrics(trackId: String): TrackLyrics? {
+        val id = trackId.substringAfterLast(':').trim()
+        if (id.isEmpty()) return null
+        val encoded = java.net.URLEncoder.encode(id, Charsets.UTF_8).replace("+", "%20")
+        val (status, text) = exchange(
+            "GET",
+            "https://spclient.wg.spotify.com/color-lyrics/v2/track/$encoded?format=json&vocalRemoval=false&market=from_token",
+            null,
+        )
+        if (status == 404 || status == 403) return null
+        if (status !in 200..299) {
+            throw ConnectorException(
+                if (status == 429) "Spotify просит подождать — повторите через минуту" else "Spotify $status",
+            )
+        }
+        return mapSpotifyLyrics(json.parseToJsonElement(text).jsonObject)
     }
 
     private suspend fun query(name: String, variables: JsonObject): JsonObject {
