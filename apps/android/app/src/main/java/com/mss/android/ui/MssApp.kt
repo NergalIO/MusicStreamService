@@ -64,6 +64,7 @@ import androidx.navigation.compose.currentBackStackEntryAsState
 import androidx.navigation.compose.rememberNavController
 import androidx.navigation.navArgument
 import com.mss.android.ui.auth.LoginScreen
+import com.mss.android.ui.update.AppUpdatePrompt
 import com.mss.android.ui.catalog.AlbumScreen
 import com.mss.android.ui.catalog.ArtistScreen
 import com.mss.android.ui.catalog.CatalogList
@@ -127,6 +128,7 @@ fun MssApp(
     val trackHost = remember(vm, nav) { TrackHost(vm, nav) }
     CompositionLocalProvider(LocalTrackHost provides trackHost) {
     MssTheme(accent = settings.accent, cover = cover) {
+        AppUpdatePrompt(vm.updater)
         Box(Modifier.fillMaxSize()) {
             SpotifyWebLayer(
                 vm,

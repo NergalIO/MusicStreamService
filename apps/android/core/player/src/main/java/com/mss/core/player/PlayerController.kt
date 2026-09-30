@@ -305,7 +305,7 @@ class PlayerController @Inject constructor(
         skipPrevious()
     }
 
-    private fun skipPrevious() {
+    fun skipPrevious() {
         if (queue.isEmpty()) return
         index = if (index > 0) index - 1 else 0
         playCurrent(crossfade = false)

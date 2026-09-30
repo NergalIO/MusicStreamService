@@ -9,7 +9,7 @@ import com.mss.android.data.ContentCache
 import com.mss.android.data.MssRepository
 import com.mss.core.model.PlaybackSettings
 import com.mss.core.model.Quality
-import com.mss.core.network.SiteDownloads
+import com.mss.android.data.AppUpdater
 import dagger.hilt.android.lifecycle.HiltViewModel
 import dagger.hilt.android.qualifiers.ApplicationContext
 import javax.inject.Inject
@@ -34,11 +34,17 @@ class SettingsViewModel @Inject constructor(
     private val repo: MssRepository,
     @ApplicationContext private val context: Context,
     private val contentCache: ContentCache,
+    val updater: AppUpdater,
 ) : ViewModel() {
     val playbackSettings = repo.playbackSettings.stateIn(viewModelScope, SharingStarted.Eagerly, PlaybackSettings())
     val apiBase = repo.apiBase.stateIn(viewModelScope, SharingStarted.Eagerly, "")
-    private val _apk = MutableStateFlow<SiteDownloads?>(null)
-    val apk: StateFlow<SiteDownloads?> = _apk
+    private val _autoUpdate = MutableStateFlow(updater.autoCheck)
+    val autoUpdate: StateFlow<Boolean> = _autoUpdate
+
+    fun setAutoUpdate(enabled: Boolean) {
+        updater.autoCheck = enabled
+        _autoUpdate.value = enabled
+    }
     private val startLimit = CacheSettings.limitMb(context)
     private val _cache = MutableStateFlow(CacheUi(limitMb = startLimit))
     val cache: StateFlow<CacheUi> = _cache
@@ -50,10 +56,6 @@ class SettingsViewModel @Inject constructor(
     fun setQuality(quality: Quality) = viewModelScope.launch {
         val cur = repo.prefs.loadPlaybackSettings()
         repo.prefs.savePlaybackSettings(cur.copy(quality = quality))
-    }
-
-    fun checkApk() = viewModelScope.launch {
-        _apk.value = runCatching { repo.apiClient.siteDownloads() }.getOrNull()
     }
 
     fun refreshCache() = viewModelScope.launch {

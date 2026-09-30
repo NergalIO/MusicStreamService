@@ -10,6 +10,9 @@ import androidx.compose.animation.core.animate
 import androidx.compose.animation.core.animateFloatAsState
 import androidx.compose.animation.core.tween
 import androidx.compose.foundation.gestures.animateScrollBy
+import androidx.compose.foundation.gestures.detectHorizontalDragGestures
+import androidx.compose.animation.core.Animatable
+import androidx.compose.ui.input.pointer.pointerInput
 import androidx.compose.foundation.background
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.Arrangement
@@ -271,21 +274,54 @@ fun MiniPlayer(
             Box(Modifier.fillMaxWidth().height(2.dp).background(scheme.onSurface.copy(alpha = 0.10f))) {
                 Box(Modifier.fillMaxHeight().fillMaxWidth(progress).background(scheme.primary))
             }
+            val scope = rememberCoroutineScope()
+            val dragX = remember { Animatable(0f) }
+            val swipeThreshold = with(LocalDensity.current) { 72.dp.toPx() }
             Row(
-                Modifier.fillMaxWidth().height(64.dp).clickable(onClick = onOpen).padding(horizontal = 8.dp),
+                Modifier
+                    .fillMaxWidth()
+                    .height(64.dp)
+                    .clickable(onClick = onOpen)
+                    .pointerInput(Unit) {
+                        detectHorizontalDragGestures(
+                            onDragEnd = {
+                                val x = dragX.value
+                                when {
+                                    x <= -swipeThreshold -> vm.player.next()
+                                    x >= swipeThreshold -> vm.player.skipPrevious()
+                                }
+                                scope.launch { dragX.animateTo(0f) }
+                            },
+                            onDragCancel = { scope.launch { dragX.animateTo(0f) } },
+                        ) { change, amount ->
+                            change.consume()
+                            scope.launch { dragX.snapTo(dragX.value + amount) }
+                        }
+                    }
+                    .padding(horizontal = 8.dp),
                 verticalAlignment = Alignment.CenterVertically,
                 horizontalArrangement = Arrangement.spacedBy(4.dp),
             ) {
-                Cover(track.coverUrl, Modifier.size(44.dp))
-                Column(Modifier.weight(1f).padding(start = 8.dp)) {
-                    Text(track.title, maxLines = 1, overflow = TextOverflow.Ellipsis, style = MaterialTheme.typography.bodyLarge)
-                    Text(
-                        track.artist,
-                        style = MaterialTheme.typography.bodySmall,
-                        color = scheme.onSurfaceVariant,
-                        maxLines = 1,
-                        overflow = TextOverflow.Ellipsis,
-                    )
+                Row(
+                    Modifier
+                        .weight(1f)
+                        .graphicsLayer {
+                            translationX = dragX.value
+                            alpha = 1f - (kotlin.math.abs(dragX.value) / (swipeThreshold * 3)).coerceIn(0f, 0.6f)
+                        },
+                    verticalAlignment = Alignment.CenterVertically,
+                ) {
+                    Cover(track.coverUrl, Modifier.size(44.dp))
+                    Column(Modifier.weight(1f).padding(start = 8.dp)) {
+                        Text(track.title, maxLines = 1, overflow = TextOverflow.Ellipsis, style = MaterialTheme.typography.bodyLarge)
+                        Text(
+                            track.artist,
+                            style = MaterialTheme.typography.bodySmall,
+                            color = scheme.onSurfaceVariant,
+                            maxLines = 1,
+                            overflow = TextOverflow.Ellipsis,
+                        )
+                    }
                 }
                 IconButton({ vm.toggleLike(track) }) {
                     Icon(

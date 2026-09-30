@@ -487,8 +487,25 @@ class MssApiClient @Inject constructor(
 
 @Serializable
 data class SiteDownloads(
-    val androidApkUrl: String? = null,
-    val version: String? = null,
+    val androidApk: SiteDownload? = null,
+    val release: SiteRelease? = null,
+) {
+    /** Версия из тега релиза: v0.8.4 → 0.8.4. */
+    val version: String? get() = release?.tag?.removePrefix("v")?.removePrefix("V")?.takeIf { it.isNotBlank() }
+    val androidApkUrl: String? get() = androidApk?.href?.takeIf { androidApk.available }
+}
+
+@Serializable
+data class SiteDownload(
+    val available: Boolean = false,
+    val href: String? = null,
+    val fileName: String? = null,
+)
+
+@Serializable
+data class SiteRelease(
+    val tag: String? = null,
+    val githubReleasePage: String? = null,
 )
 
 class ApiException(message: String) : Exception(message)

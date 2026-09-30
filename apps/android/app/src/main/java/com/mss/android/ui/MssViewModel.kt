@@ -3,6 +3,7 @@ package com.mss.android.ui
 import android.net.Uri
 import androidx.lifecycle.ViewModel
 import androidx.lifecycle.viewModelScope
+import com.mss.android.data.AppUpdater
 import com.mss.android.data.ContentCache
 import com.mss.android.data.MssRepository
 import com.mss.android.ui.navigation.parseMssLink
@@ -65,6 +66,7 @@ class MssViewModel @Inject constructor(
     private val localTracks: LocalTrackStore,
     private val presence: PresenceClient,
     private val contentCache: ContentCache,
+    val updater: AppUpdater,
 ) : ViewModel() {
     val session = repo.session.stateIn(viewModelScope, SharingStarted.Eagerly, null)
     val playerState = player.state.stateIn(viewModelScope, SharingStarted.Eagerly, player.state.value)

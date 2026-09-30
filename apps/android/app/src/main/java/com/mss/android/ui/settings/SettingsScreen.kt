@@ -44,14 +44,12 @@ private fun formatMb(bytes: Long): String {
 fun SettingsScreen(vm: SettingsViewModel = hiltViewModel()) {
     val settings by vm.playbackSettings.collectAsState()
     val url by vm.apiBase.collectAsState()
-    val apk by vm.apk.collectAsState()
     val cache by vm.cache.collectAsState()
+    val update by vm.updater.state.collectAsState()
+    val autoUpdate by vm.autoUpdate.collectAsState()
     var api by remember { mutableStateOf(url) }
     LaunchedEffect(url) { api = url }
-    LaunchedEffect(Unit) {
-        vm.checkApk()
-        vm.refreshCache()
-    }
+    LaunchedEffect(Unit) { vm.refreshCache() }
     val qualityHint = when (settings.quality) {
         Quality.NORMAL -> "MP3 192 кбит/с — меньше трафика."
         Quality.HIGH -> "MP3 320 кбит/с."
@@ -115,7 +113,26 @@ fun SettingsScreen(vm: SettingsViewModel = hiltViewModel()) {
             SettingsRow("Адрес сервера") {}
             MssField(api, { api = it }, placeholder = "https://…", label = "URL API", modifier = Modifier.fillMaxWidth().padding(horizontal = 16.dp))
             Button({ vm.setApiBase(api) }, modifier = Modifier.fillMaxWidth().padding(horizontal = 16.dp, vertical = 8.dp)) { Text("Сохранить") }
-            apk?.version?.let { Text("Версия APK: $it", modifier = Modifier.padding(horizontal = 16.dp, vertical = 8.dp)) }
+        }
+        SettingsSection("Обновления") {
+            val status = when {
+                update.checking -> "Проверяем…"
+                update.progress != null -> "Скачиваем ${((update.progress ?: 0f) * 100).toInt()}%"
+                update.available -> "Доступна версия ${update.latest}"
+                update.error != null -> update.error
+                update.upToDate -> "Установлена последняя версия"
+                else -> null
+            }
+            SettingsRow("Версия ${update.current}", status) {
+                if (update.available) {
+                    Button({ vm.updater.download() }, enabled = update.progress == null) { Text("Обновить") }
+                } else {
+                    OutlinedButton({ vm.updater.checkNow() }, enabled = !update.checking) { Text("Проверить") }
+                }
+            }
+            SettingsRow("Проверять при запуске", "Предлагать установить новую версию") {
+                Switch(autoUpdate, { vm.setAutoUpdate(it) })
+            }
         }
     }
 }
