@@ -416,9 +416,6 @@ class PlayerController @Inject constructor(
         if (dur > 0 && dur - pos <= 30_000 && !preloadedNext) {
             preloadedNext = true
             preloadNext()
-            queue.getOrNull(index + 1)
-                ?.takeIf { usingSpotify && it.source == SourceId.SPOTIFY && _state.value.repeat != RepeatMode.ONE && !_state.value.shuffle }
-                ?.let { spotifyWeb.prefetch(it.id) }
         }
         maybeLoadWave()
     }

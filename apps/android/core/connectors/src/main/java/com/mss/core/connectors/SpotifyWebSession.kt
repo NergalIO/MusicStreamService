@@ -492,21 +492,6 @@ class SpotifyWebSession @Inject constructor(
         }
     }
 
-    /** Заранее открывает страницу следующего трека: при переключении останется один клик. Играющий трек не прерывается. */
-    fun prefetch(trackId: String) {
-        if (!TRACK_ID_RE.matches(trackId) || pageMutex.isLocked || _visibleForLogin.value) return
-        eval(
-            """
-            (function(){
-              const path = '/track/$trackId';
-              if (location.pathname === path || !document.querySelector('[data-testid="control-button-playpause"]')) return;
-              history.pushState({}, '', path);
-              dispatchEvent(new PopStateEvent('popstate', { state: {} }));
-            })();
-            """.trimIndent(),
-        )
-    }
-
     /** Открывает меню устройств веб-плеера и возвращает, занят ли аккаунт чужим устройством. */
     suspend fun refreshDevices() {
         if (!pageMutex.tryLock()) return
