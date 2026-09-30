@@ -28,15 +28,30 @@ import com.mss.android.ui.theme.AccentSwatches
 import com.mss.android.ui.theme.COVER_ACCENT
 import com.mss.android.ui.theme.ChipFlow
 import com.mss.core.model.Quality
+import com.mss.android.data.CacheSettings
+import androidx.compose.material3.OutlinedButton
+
+private fun formatMb(bytes: Long): String {
+    val mb = bytes / (1024.0 * 1024.0)
+    return when {
+        mb >= 1000 -> String.format(java.util.Locale.US, "%.1f ГБ", mb / 1024)
+        mb >= 10 -> "${mb.toInt()} МБ"
+        else -> String.format(java.util.Locale.US, "%.1f МБ", mb)
+    }
+}
 
 @Composable
 fun SettingsScreen(vm: SettingsViewModel = hiltViewModel()) {
     val settings by vm.playbackSettings.collectAsState()
     val url by vm.apiBase.collectAsState()
     val apk by vm.apk.collectAsState()
+    val cache by vm.cache.collectAsState()
     var api by remember { mutableStateOf(url) }
     LaunchedEffect(url) { api = url }
-    LaunchedEffect(Unit) { vm.checkApk() }
+    LaunchedEffect(Unit) {
+        vm.checkApk()
+        vm.refreshCache()
+    }
     val qualityHint = when (settings.quality) {
         Quality.NORMAL -> "MP3 192 кбит/с — меньше трафика."
         Quality.HIGH -> "MP3 320 кбит/с."
@@ -69,6 +84,27 @@ fun SettingsScreen(vm: SettingsViewModel = hiltViewModel()) {
             },
         ) {
             AccentSwatches(settings.accent, onSelect = { id -> vm.savePlayback(settings.copy(accent = id)) })
+        }
+        SettingsSection(
+            "Кеш",
+            if (cache.restartNeeded) "Новый лимит для обложек применится после перезапуска приложения"
+            else "Обложки, фото исполнителей, альбомы и тексты песен открываются без интернета",
+        ) {
+            SettingsRow(
+                "Занято",
+                cache.bytes?.let { "${formatMb(it)} из ${formatMb(cache.limitMb * 1024L * 1024L)}" } ?: "…",
+            ) {
+                OutlinedButton({ vm.clearCache() }, enabled = !cache.clearing && (cache.bytes ?: 0L) > 0L) {
+                    Text(if (cache.clearing) "Очищаем…" else "Очистить")
+                }
+            }
+            SettingsRow("Лимит размера") {
+                ChipFlow {
+                    CacheSettings.LIMITS_MB.forEach { mb ->
+                        MssChip(cache.limitMb == mb, if (mb >= 1000) "${mb / 1000} ГБ" else "$mb МБ") { vm.setCacheLimit(mb) }
+                    }
+                }
+            }
         }
         SettingsSection("Тестовые функции", "Могут работать нестабильно — при сбое отключите") {
             SettingsRow("Быстрый старт Spotify", "Трек запускается одним запросом к Spotify, без переходов в веб-плеере") {

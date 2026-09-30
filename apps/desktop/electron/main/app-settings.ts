@@ -28,6 +28,8 @@ export interface AppSettings {
   trayHintShown: boolean;
   /** REST API (как API_PUBLIC_URL на сервере), для presence и fallback без bake в сборке */
   apiPublicUrl?: string;
+  /** Лимит кеша обложек, альбомов и текстов на диске. */
+  cacheLimitMb?: number;
 }
 
 export interface SystemSettings extends AppSettings {

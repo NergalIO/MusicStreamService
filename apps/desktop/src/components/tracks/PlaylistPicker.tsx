@@ -5,6 +5,7 @@ import { create } from 'zustand';
 import { Button } from '@/components/ui/button';
 import { Dialog } from '@/components/ui/dialog';
 import { Input } from '@/components/ui/input';
+import { cachedImageUrl } from '@/lib/cached-image';
 import { formatTrackCount } from '@/lib/format';
 import { addTracksToPlaylist, createPlaylist } from '@/lib/mss-library';
 import { useMssPlaylists } from '@/lib/queries';
@@ -69,7 +70,7 @@ export function PlaylistPickerHost() {
             className="flex w-full items-center gap-3 rounded-lg px-2 py-2 text-left transition-colors hover:bg-foreground/[0.06]"
           >
             {p.coverUrl ? (
-              <img src={p.coverUrl} alt="" className="h-10 w-10 shrink-0 rounded-md object-cover" />
+              <img src={cachedImageUrl(p.coverUrl)} alt="" className="h-10 w-10 shrink-0 rounded-md object-cover" />
             ) : (
               <span className="flex h-10 w-10 shrink-0 items-center justify-center rounded-md bg-gradient-to-br from-primary/60 to-fuchsia-600/40">
                 <ListMusic size={18} className="text-white/80" />

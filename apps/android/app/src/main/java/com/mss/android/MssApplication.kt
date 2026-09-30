@@ -5,6 +5,8 @@ import androidx.hilt.work.HiltWorkerFactory
 import androidx.work.Configuration
 import coil.ImageLoader
 import coil.ImageLoaderFactory
+import coil.disk.DiskCache
+import com.mss.android.data.CacheSettings
 import com.mss.android.data.LobbyPlaybackCoordinator
 import com.mss.android.data.RelayCoordinator
 import com.mss.android.ui.components.SpotifyCoverInterceptor
@@ -22,8 +24,16 @@ class MssApplication : Application(), Configuration.Provider, ImageLoaderFactory
     override val workManagerConfiguration: Configuration
         get() = Configuration.Builder().setWorkerFactory(workerFactory).build()
 
-    override fun newImageLoader(): ImageLoader =
-        ImageLoader.Builder(this)
-            .components { add(SpotifyCoverInterceptor(spotifyWeb)) }
+    /** Обложки хранятся до вытеснения по лимиту: CDN площадок часто запрещают кеширование заголовками. */
+    override fun newImageLoader(): ImageLoader {
+        val diskCache = DiskCache.Builder()
+            .directory(CacheSettings.imageDir(this))
+            .maxSizeBytes(CacheSettings.imageBytes(this))
             .build()
+        return ImageLoader.Builder(this)
+            .diskCache(diskCache)
+            .respectCacheHeaders(false)
+            .components { add(SpotifyCoverInterceptor(spotifyWeb, diskCache)) }
+            .build()
+    }
 }

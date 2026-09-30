@@ -1,5 +1,6 @@
 package com.mss.android.ui.components
 
+import coil.disk.DiskCache
 import coil.intercept.Interceptor
 import coil.network.HttpException
 import coil.request.ErrorResult
@@ -32,13 +33,17 @@ object SpotifyCoverHealth {
  * Обложки Spotify: если прямой запрос к CDN не прошёл (в некоторых сетях он висит или сбрасывается),
  * картинка скачивается через страницу веб-плеера, у которой сеть до Spotify работает.
  */
-class SpotifyCoverInterceptor(private val web: SpotifyWebSession) : Interceptor {
+class SpotifyCoverInterceptor(
+    private val web: SpotifyWebSession,
+    private val diskCache: DiskCache,
+) : Interceptor {
     @Volatile private var directFailures = 0
 
     override suspend fun intercept(chain: Interceptor.Chain): ImageResult {
         val request = chain.request
         val url = request.data as? String
         if (url == null || !isSpotifyImage(url)) return chain.proceed(request)
+        if (cached(url)) return chain.proceed(request)
         val direct = if (directFailures < DIRECT_FAILURE_LIMIT) {
             withTimeoutOrNull(DIRECT_TIMEOUT_MS) { chain.proceed(request) }
         } else {
@@ -57,12 +62,29 @@ class SpotifyCoverInterceptor(private val web: SpotifyWebSession) : Interceptor 
             return direct ?: ErrorResult(null, request, IOException("Обложка Spotify недоступна"))
         }
         SpotifyCoverHealth.report(ok = true)
+        store(url, bytes)
         return chain.proceed(
             request.newBuilder()
                 .data(ByteBuffer.wrap(bytes))
                 .memoryCacheKey(url)
                 .build(),
         )
+    }
+
+    private fun cached(url: String): Boolean =
+        runCatching { diskCache.openSnapshot(url)?.use { true } ?: false }.getOrDefault(false)
+
+    /** Запись без метаданных ответа Coil отдаёт с диска как есть — следующий показ обойдётся без веб-плеера. */
+    private fun store(url: String, bytes: ByteArray) {
+        runCatching {
+            val editor = diskCache.openEditor(url) ?: return
+            try {
+                diskCache.fileSystem.write(editor.data) { write(bytes) }
+                editor.commit()
+            } catch (e: Exception) {
+                editor.abort()
+            }
+        }
     }
 
     private fun isSpotifyImage(url: String): Boolean =

@@ -1,4 +1,5 @@
 import { useEffect, useState } from 'react';
+import { cachedImageUrl } from '@/lib/cached-image';
 import { proxyUrl } from '@/lib/playback';
 
 const cache = new Map<string, string>();
@@ -21,7 +22,9 @@ export const WAVE_IDLE_PALETTE: CoverPalette = {
 
 function imageSource(src: string): string {
   const url = new URL(src, window.location.href);
-  return url.origin === window.location.origin ? url.href : proxyUrl(url.href);
+  if (url.origin === window.location.origin) return url.href;
+  if (window.electronAPI && url.protocol === 'https:') return cachedImageUrl(url.href)!;
+  return proxyUrl(url.href);
 }
 
 /** Saturation-weighted average colour of an image, as "r g b" for use in rgb(). */

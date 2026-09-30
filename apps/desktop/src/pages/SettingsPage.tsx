@@ -142,6 +142,54 @@ function DownloadsSection() {
   );
 }
 
+const CACHE_LIMIT_OPTIONS: { value: string; label: string }[] = [
+  { value: '200', label: '200 МБ' },
+  { value: '500', label: '500 МБ' },
+  { value: '1000', label: '1 ГБ' },
+  { value: '2000', label: '2 ГБ' },
+];
+
+function CacheSection() {
+  const queryClient = useQueryClient();
+  const [stats, setStats] = useState<{ bytes: number; limitMb: number } | null>(null);
+  const [clearing, setClearing] = useState(false);
+  useEffect(() => {
+    void window.electronAPI?.cache?.stats().then(setStats);
+  }, []);
+  if (!window.electronAPI?.cache) return null;
+  const clear = async () => {
+    setClearing(true);
+    try {
+      setStats(await window.electronAPI.cache.clear());
+      queryClient.removeQueries({ queryKey: ['album'] });
+      queryClient.removeQueries({ queryKey: ['lyrics'] });
+      toast.success('Кеш очищен');
+    } finally {
+      setClearing(false);
+    }
+  };
+  return (
+    <Section
+      title="Кеш"
+      footer="Обложки, фото исполнителей, списки треков в альбомах и тексты песен сохраняются на диске: повторно открываются мгновенно и без интернета. При превышении лимита удаляется то, что давно не открывали."
+    >
+      <Row title="Занято" subtitle={stats ? `${formatBytes(stats.bytes)} из ${formatBytes(stats.limitMb * 1024 * 1024)}` : '…'}>
+        <Button variant="secondary" size="sm" disabled={clearing || !stats?.bytes} onClick={() => void clear()}>
+          {clearing && <Loader2 size={14} className="animate-spin" />}
+          Очистить кеш
+        </Button>
+      </Row>
+      <Row title="Лимит размера">
+        <Segmented
+          value={String(stats?.limitMb ?? 500)}
+          options={CACHE_LIMIT_OPTIONS}
+          onChange={(v) => void window.electronAPI.cache.setLimit(Number(v)).then(setStats)}
+        />
+      </Row>
+    </Section>
+  );
+}
+
 export function useSystemSettings() {
   const [settings, setSettings] = useState<SystemSettings | null>(null);
   useEffect(() => {
@@ -708,6 +756,8 @@ export function SettingsPage() {
       </Section>
 
       <DownloadsSection />
+
+      <CacheSection />
 
       <Section title="Тестовые функции" footer="Могут работать нестабильно — при сбое отключите.">
         <Row title="Быстрый старт Spotify" subtitle="Трек запускается одной командой Spotify, без переходов в веб-плеере">

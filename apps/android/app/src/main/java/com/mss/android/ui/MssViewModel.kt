@@ -3,6 +3,7 @@ package com.mss.android.ui
 import android.net.Uri
 import androidx.lifecycle.ViewModel
 import androidx.lifecycle.viewModelScope
+import com.mss.android.data.ContentCache
 import com.mss.android.data.MssRepository
 import com.mss.android.ui.navigation.parseMssLink
 import com.mss.core.connectors.AuthStatus
@@ -63,6 +64,7 @@ class MssViewModel @Inject constructor(
     private val offline: OfflineStore,
     private val localTracks: LocalTrackStore,
     private val presence: PresenceClient,
+    private val contentCache: ContentCache,
 ) : ViewModel() {
     val session = repo.session.stateIn(viewModelScope, SharingStarted.Eagerly, null)
     val playerState = player.state.stateIn(viewModelScope, SharingStarted.Eagerly, player.state.value)
@@ -356,14 +358,25 @@ class MssViewModel @Inject constructor(
         viewModelScope.launch {
             val src = sourceFrom(source)
             val saved = downloads.albums.value.firstOrNull { it.source == src && it.id == decoded }
-            val album = saved?.takeIf { src == SourceId.LOCAL || src == SourceId.VK }
-                ?: runCatching { loadAlbum(src, decoded) }.getOrNull()
-                ?: saved
+            val savedFinal = saved?.takeIf { src == SourceId.LOCAL || src == SourceId.VK }
+            val quick = savedFinal ?: contentCache.album(src, decoded)
             if (token != albumToken) return@launch
-            _albumPage.value = AlbumPageUi(album = album, loading = false, error = if (album == null) "Альбом не найден" else null)
-            _detailTitle.value = album?.title ?: decoded
-            _tracks.value = album?.tracks.orEmpty()
-            if (album == null) return@launch
+            if (quick != null) showAlbum(quick)
+            val fresh = if (savedFinal != null) null else runCatching { loadAlbum(src, decoded) }.getOrNull()
+            if (token != albumToken) return@launch
+            if (fresh != null) {
+                contentCache.putAlbum(src, decoded, fresh)
+                val page = _albumPage.value
+                if (quick == null || (page.switching == null && page.album?.source == quick.source)) showAlbum(fresh)
+            }
+            val album = fresh ?: quick ?: saved
+            if (album == null) {
+                _albumPage.value = AlbumPageUi(loading = false, error = "Альбом не найден")
+                _detailTitle.value = decoded
+                _tracks.value = emptyList()
+                return@launch
+            }
+            if (fresh == null && quick == null) showAlbum(album)
             albumCache[album.source] = album
             val self = album.toUnifiedAlbum()
             _albumPage.value = _albumPage.value.copy(platforms = listOf(self), platformsLoading = true)
@@ -375,6 +388,12 @@ class MssViewModel @Inject constructor(
                 platformsLoading = false,
             )
         }
+    }
+
+    private fun showAlbum(album: AlbumWithTracks) {
+        _albumPage.value = _albumPage.value.copy(album = album, loading = false, error = null)
+        _detailTitle.value = album.title
+        _tracks.value = album.tracks
     }
 
     fun switchAlbumPlatform(source: SourceId) {
@@ -481,6 +500,10 @@ class MssViewModel @Inject constructor(
         if (name.isBlank()) return null
         val key = "${track.source}:${ref?.id ?: name.lowercase()}"
         if (artistImages.containsKey(key)) return artistImages[key]
+        contentCache.artistImage(key)?.let {
+            artistImages[key] = it
+            return it
+        }
         fun pick(list: List<UnifiedArtist>) =
             (ref?.id?.let { id -> list.firstOrNull { it.id == id } }
                 ?: list.firstOrNull { it.name.equals(name, ignoreCase = true) })?.imageUrl
@@ -499,6 +522,7 @@ class MssViewModel @Inject constructor(
             if (image != null) break
         }
         artistImages[key] = image
+        image?.let { contentCache.putArtistImage(key, it) }
         return image
     }
 
@@ -630,13 +654,18 @@ class MssViewModel @Inject constructor(
         return findAlbumEverywhere(idOrTitle)
     }
 
-    private suspend fun albumById(source: SourceId, id: String): AlbumWithTracks? = runCatching {
-        when (source) {
-            SourceId.YANDEX -> yandex.album(id)
-            SourceId.SPOTIFY -> spotify.album(id)
-            else -> null
+    /** Из сети с сохранением в кеш; без сети — сохранённая копия. */
+    private suspend fun albumById(source: SourceId, id: String): AlbumWithTracks? {
+        if (source != SourceId.YANDEX && source != SourceId.SPOTIFY) return null
+        val fresh = runCatching {
+            if (source == SourceId.YANDEX) yandex.album(id) else spotify.album(id)
+        }.getOrNull()
+        if (fresh != null && fresh.tracks.isNotEmpty()) {
+            contentCache.putAlbum(source, id, fresh)
+            return fresh
         }
-    }.getOrNull()
+        return contentCache.album(source, id) ?: fresh
+    }
 
     private suspend fun findAlbumEverywhere(query: String): AlbumWithTracks? {
         val q = query.trim()
@@ -947,7 +976,9 @@ class MssViewModel @Inject constructor(
         val key = "${track.source}:${track.id}"
         _lyrics.value = LyricsUi(key = key, source = track.source, loading = true)
         viewModelScope.launch {
-            val result = runCatching {
+            val remote = track.source == SourceId.YANDEX || track.source == SourceId.SPOTIFY
+            val cached = if (remote) contentCache.lyrics(track.source, track.id) else null
+            val result = if (cached != null) Result.success(cached) else runCatching {
                 when (track.source) {
                     SourceId.YANDEX -> yandex.lyrics(track.id)
                     SourceId.SPOTIFY -> spotify.lyrics(track.id)
@@ -955,6 +986,7 @@ class MssViewModel @Inject constructor(
                     else -> null
                 }
             }
+            if (remote && cached == null) result.getOrNull()?.let { contentCache.putLyrics(track.source, track.id, it) }
             if (_lyrics.value.key != key) return@launch
             _lyrics.value = result.fold(
                 onSuccess = { LyricsUi(key = key, source = track.source, data = it) },

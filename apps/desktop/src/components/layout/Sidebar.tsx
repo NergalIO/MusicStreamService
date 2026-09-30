@@ -27,6 +27,7 @@ import { SidebarLobbyRooms } from '@/components/lobby/SidebarLobbyRooms';
 import { Button } from '@/components/ui/button';
 import { Dialog } from '@/components/ui/dialog';
 import { clearSession, loadSession } from '@/lib/api';
+import { cachedImageUrl } from '@/lib/cached-image';
 import { lobbyPath } from '@/lib/lobby-route';
 import { leaveCurrentLobby } from '@/lib/lobby-session';
 import { playlistPath } from '@/lib/links';
@@ -94,7 +95,7 @@ function Item({
         <>
           <span className="relative shrink-0">
             {image ? (
-              <img src={image} alt="" draggable={false} className={cn('rounded-[3px] object-cover', collapsed ? 'h-5 w-5' : 'h-4 w-4')} />
+              <img src={cachedImageUrl(image)} alt="" draggable={false} className={cn('rounded-[3px] object-cover', collapsed ? 'h-5 w-5' : 'h-4 w-4')} />
             ) : (
               <Icon size={collapsed ? 18 : 16} className={cn(isActive ? 'text-primary' : 'text-primary/80')} />
             )}

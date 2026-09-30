@@ -87,6 +87,7 @@ dependencies {
     implementation(libs.compose.material.icons)
     implementation(libs.browser)
     implementation(libs.coil.compose)
+    implementation(libs.kotlinx.serialization.json)
     implementation(libs.work.runtime)
     implementation(libs.hilt.work)
     implementation("androidx.startup:startup-runtime:1.2.0")

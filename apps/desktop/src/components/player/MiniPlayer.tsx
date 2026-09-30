@@ -17,6 +17,7 @@ import {
 import { useEffect, useRef, useState } from 'react';
 import type { PlayerSnapshot } from '../../../electron/preload/index';
 import { Artwork } from '@/components/media/Artwork';
+import { cachedImageUrl } from '@/lib/cached-image';
 import { Visualizer } from '@/components/player/Visualizer';
 import { Range } from '@/components/ui/controls';
 import { useApplyAppearance } from '@/lib/appearance';
@@ -207,7 +208,7 @@ export function MiniPlayer() {
     >
       {state.coverUrl && (
         <img
-          src={state.coverUrl}
+          src={cachedImageUrl(state.coverUrl)}
           alt=""
           className="pointer-events-none absolute inset-0 h-full w-full scale-150 object-cover opacity-40 blur-3xl"
         />

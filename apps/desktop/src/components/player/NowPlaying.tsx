@@ -13,6 +13,7 @@ import { openTrackMenu } from '@/components/tracks/TrackContextMenu';
 import { Button } from '@/components/ui/button';
 import { TOP_PLAYER_HEIGHT_CLASS } from '@/components/player/TopPlayer';
 import { useDominantColor } from '@/hooks/useDominantColor';
+import { cachedImageUrl } from '@/lib/cached-image';
 import { trackAlbumPath, trackArtistLinks } from '@/lib/links';
 import { dislikeCurrent, skipNext, skipPrev, toggleLike, togglePlay } from '@/lib/player-actions';
 import { cn } from '@/lib/utils';
@@ -68,7 +69,7 @@ export function NowPlaying() {
           {current?.coverUrl && (
             <img
               key={current.coverUrl}
-              src={current.coverUrl}
+              src={cachedImageUrl(current.coverUrl)}
               alt=""
               className="absolute inset-0 h-full w-full scale-125 animate-fade-in object-cover opacity-60 blur-[90px] saturate-150"
             />

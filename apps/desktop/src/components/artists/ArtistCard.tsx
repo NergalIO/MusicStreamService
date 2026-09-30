@@ -4,6 +4,7 @@ import { Link } from 'react-router-dom';
 import { openContextMenu } from '@/components/ui/context-menu';
 import { EmptyState } from '@/components/ui/states';
 import { artistPath, type ArtistGroup } from '@/lib/artists';
+import { cachedImageUrl } from '@/lib/cached-image';
 import { artistMenu } from '@/lib/card-menus';
 import { SOURCE_LABEL } from '@/lib/sources';
 import { cn } from '@/lib/utils';
@@ -18,7 +19,7 @@ export function ArtistAvatar({
   className?: string;
 }) {
   if (imageUrl) {
-    return <img src={imageUrl} alt="" className={cn('rounded-full object-cover', className)} />;
+    return <img src={cachedImageUrl(imageUrl)} alt="" className={cn('rounded-full object-cover', className)} />;
   }
   return (
     <div

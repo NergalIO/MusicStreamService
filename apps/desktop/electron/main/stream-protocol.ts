@@ -2,6 +2,7 @@ import { app, net, protocol } from 'electron';
 import fs from 'node:fs';
 import path from 'node:path';
 import { Readable } from 'node:stream';
+import { cachedImage } from './content-cache.js';
 import { isDownloadedFile } from './downloads.js';
 import { isRegisteredLocalPath } from './local-tracks.js';
 import { serveVkAudio } from './vk-hls.js';
@@ -81,7 +82,18 @@ async function proxyRemote(target: string, rangeHeader: string | null): Promise<
   return new Response(upstream.body, { status: upstream.status, statusText: upstream.statusText, headers });
 }
 
+async function serveImage(target: string): Promise<Response> {
+  if (!/^https:\/\//i.test(target)) return new Response('Bad target', { status: 400, headers: CORS_HEADERS });
+  const image = await cachedImage(target);
+  if (!image) return new Response('Not found', { status: 404, headers: CORS_HEADERS });
+  return new Response(new Uint8Array(image.body), {
+    status: 200,
+    headers: { ...CORS_HEADERS, 'Content-Type': image.type, 'Cache-Control': 'max-age=31536000, immutable' },
+  });
+}
+
 /**
+ * mss-stream://img/?u=<url> — обложка из кеша на диске (при промахе скачивается);
  * mss-stream://proxy/?u=<url> — удалённый поток с CORS-заголовками (иначе Web Audio выдаёт тишину);
  * mss-stream://file/?p=<path> — локальный файл из temp/userData или папки загрузок с поддержкой Range;
  * mss-stream://vk/?u=<m3u8> — HLS VK, расшифровка и MPEG-TS → MP3.
@@ -94,6 +106,7 @@ export function handleStreamProtocol(): void {
       if (url.hostname === 'proxy') return await proxyRemote(url.searchParams.get('u') ?? '', range);
       if (url.hostname === 'file') return serveFile(url.searchParams.get('p') ?? '', range);
       if (url.hostname === 'vk') return await serveVkAudio(url.searchParams.get('u') ?? '', range);
+      if (url.hostname === 'img') return await serveImage(url.searchParams.get('u') ?? '');
     } catch (e) {
       return new Response(e instanceof Error ? e.message : 'Stream error', { status: 502, headers: CORS_HEADERS });
     }

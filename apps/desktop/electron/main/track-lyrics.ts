@@ -4,6 +4,7 @@ import { ipcMain } from 'electron';
 import type { SourceId, TrackLyrics } from '@mss/shared';
 import { fetchSpotifyLyrics, parseLrc } from '@mss/stream-connectors';
 import { getYandex } from './connectors.js';
+import { readCachedJson, writeCachedJson } from './content-cache.js';
 import { downloadPathFor } from './downloads.js';
 import { resolveLocalTrackPath } from './local-tracks.js';
 import { listOffline } from './offline-store.js';
@@ -68,6 +69,12 @@ async function lyricsForSource(source: SourceId, trackId: string): Promise<Track
 export function registerTrackLyricsIpc(): void {
   ipcMain.handle('lyrics:get', async (_e, source: SourceId, trackId: string) => {
     if (!LYRICS_SOURCES.has(source) || !trackId) return null;
-    return lyricsForSource(source, trackId);
+    if (source === 'local') return lyricsForSource(source, trackId);
+    const key = `${source}:${trackId}`;
+    const cached = await readCachedJson<TrackLyrics>('lyrics', key);
+    if (cached) return cached;
+    const lyrics = await lyricsForSource(source, trackId);
+    if (lyrics?.lines.length) await writeCachedJson('lyrics', key, lyrics);
+    return lyrics;
   });
 }

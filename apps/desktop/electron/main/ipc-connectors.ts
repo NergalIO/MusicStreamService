@@ -1,7 +1,8 @@
 import { ipcMain } from 'electron';
-import type { Quality, UnifiedTrack } from '@mss/shared';
+import type { AlbumWithTracks, Quality, TrackLyrics, UnifiedTrack } from '@mss/shared';
 import type { YandexMusicApi } from '@mss/stream-connectors';
 import { connectorRegistry, getYandex, resolveLoginReply, cancelPendingLogin } from './connectors.js';
+import { readCachedJson, writeCachedJson } from './content-cache.js';
 
 const YANDEX_METHODS = [
   'account',
@@ -135,7 +136,7 @@ export function registerConnectorIpc(): void {
   ipcMain.handle('connectors:album', async (_e, id: string, albumId: string) => {
     const c = connector(id);
     if (!c.getAlbum) throw new Error('Альбомы не поддерживаются');
-    return c.getAlbum(albumId);
+    return cachedAlbum(`${id}:${albumId}`, () => c.getAlbum!(albumId));
   });
 
   ipcMain.handle('connectors:trackRadio', async (_e, id: string, track: UnifiedTrack) => {
@@ -160,6 +161,32 @@ export function registerConnectorIpc(): void {
     }
     const api = getYandex().api;
     const fn = api[method as YandexMethod] as (...a: unknown[]) => Promise<unknown>;
+    if (method === 'album' && typeof args[0] === 'string') {
+      return cachedAlbum(`yandex:${args[0]}`, () => fn.apply(api, args) as Promise<AlbumWithTracks>);
+    }
+    if (method === 'lyrics' && typeof args[0] === 'string') {
+      const key = `yandex:${args[0]}`;
+      const cached = await readCachedJson<TrackLyrics>('lyrics', key);
+      if (cached) return cached;
+      const lyrics = (await fn.apply(api, args)) as TrackLyrics | null;
+      if (lyrics?.lines.length) await writeCachedJson('lyrics', key, lyrics);
+      return lyrics;
+    }
     return fn.apply(api, args);
   });
+}
+
+/** Сразу отдаёт сохранённый альбом и в фоне обновляет запись; без записи — ждёт сеть. */
+async function cachedAlbum(key: string, load: () => Promise<AlbumWithTracks>): Promise<AlbumWithTracks> {
+  const fetchFresh = async () => {
+    const album = await load();
+    if (album?.tracks?.length) await writeCachedJson('album', key, album);
+    return album;
+  };
+  const cached = await readCachedJson<AlbumWithTracks>('album', key);
+  if (cached) {
+    fetchFresh().catch(() => {});
+    return cached;
+  }
+  return fetchFresh();
 }

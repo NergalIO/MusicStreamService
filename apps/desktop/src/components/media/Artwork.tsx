@@ -1,5 +1,6 @@
 import { Music } from 'lucide-react';
 import { useState } from 'react';
+import { cachedImageUrl } from '@/lib/cached-image';
 import { cn } from '@/lib/utils';
 
 export function Artwork({
@@ -21,7 +22,7 @@ export function Artwork({
     <div className={cn('relative shrink-0 overflow-hidden bg-foreground/[0.07]', rounded, className)}>
       {show ? (
         <img
-          src={src}
+          src={cachedImageUrl(src)}
           alt={alt}
           loading="lazy"
           draggable={false}

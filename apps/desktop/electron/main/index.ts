@@ -1,6 +1,7 @@
 import dotenv from 'dotenv';
 import { app, BrowserWindow, clipboard, components, ipcMain, session, shell, type Session } from 'electron';
 import { repairChromiumDiskCache } from './cache-repair.js';
+import { registerContentCacheIpc } from './content-cache.js';
 import { randomUUID } from 'node:crypto';
 import fs from 'node:fs';
 import path from 'node:path';
@@ -265,6 +266,7 @@ app.whenReady().then(async () => {
   registerLobbyIpc();
   registerConnectorIpc();
   registerTrackLyricsIpc();
+  registerContentCacheIpc();
   registerDownloadsIpc();
   registerWindowControls();
   registerAppSettingsIpc();

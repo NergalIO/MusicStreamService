@@ -128,6 +128,11 @@ export type UpdateStatus = {
 
 export type LogLevel = 'error' | 'warn' | 'info' | 'debug';
 
+export interface CacheStats {
+  bytes: number;
+  limitMb: number;
+}
+
 const api = {
   getDeviceId: () => ipcRenderer.invoke('app:getDeviceId') as Promise<string>,
   clipboard: {
@@ -251,6 +256,11 @@ const api = {
   lyrics: {
     get: (source: SourceId, trackId: string) =>
       ipcRenderer.invoke('lyrics:get', source, trackId) as Promise<TrackLyrics | null>,
+  },
+  cache: {
+    stats: () => ipcRenderer.invoke('cache:stats') as Promise<CacheStats>,
+    clear: () => ipcRenderer.invoke('cache:clear') as Promise<CacheStats>,
+    setLimit: (mb: number) => ipcRenderer.invoke('cache:setLimit', mb) as Promise<CacheStats>,
   },
   offline: {
     list: () => ipcRenderer.invoke('offline:list') as Promise<{ trackId: string; path: string }[]>,
