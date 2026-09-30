@@ -1,7 +1,8 @@
 import type { UnifiedTrack } from '@mss/shared';
-import { useQuery } from '@tanstack/react-query';
+import { keepPreviousData, useQuery } from '@tanstack/react-query';
+import { Loader2 } from 'lucide-react';
 import { Fragment, useState } from 'react';
-import { Link, useParams } from 'react-router-dom';
+import { Link, useNavigate, useParams } from 'react-router-dom';
 import { CollectionHeader, TrackListSkeleton } from '@/components/media/CollectionHeader';
 import { DownloadAllButton } from '@/components/tracks/DownloadAllButton';
 import { TrackFilterInput, TrackList } from '@/components/tracks/TrackList';
@@ -12,7 +13,8 @@ import { EmptyState, ErrorState } from '@/components/ui/states';
 import { useTrackSort } from '@/hooks/useTrackSort';
 import { formatTotalDuration, formatTrackCount } from '@/lib/format';
 import { loadAlbum } from '@/lib/card-menus';
-import { trackArtistLinks } from '@/lib/links';
+import { albumMatchKey, findAlbumAlternatives } from '@/lib/album-match';
+import { albumPath, trackArtistLinks } from '@/lib/links';
 import { playCollection } from '@/lib/player-actions';
 
 const NO_TRACKS: UnifiedTrack[] = [];
@@ -34,6 +36,14 @@ export function AlbumPage() {
   });
   const { view, sort, cycle, filter, setFilter, isNatural } = useTrackSort(album?.tracks ?? NO_TRACKS);
   const [aboutOpen, setAboutOpen] = useState(false);
+  const navigate = useNavigate();
+  const alternatives = useQuery({
+    queryKey: ['album-alternatives', album ? albumMatchKey(album) : ''],
+    queryFn: () => findAlbumAlternatives(album!),
+    enabled: !!album,
+    staleTime: 30 * 60_000,
+    placeholderData: keepPreviousData,
+  });
 
   if (!supported) return <EmptyState title="Страницы альбомов доступны для Яндекс Музыки и Spotify" />;
   if (error) return <ErrorState title="Не удалось загрузить альбом" error={error} onRetry={() => void refetch()} />;
@@ -54,15 +64,32 @@ export function AlbumPage() {
 
   const context = { type: 'album' as const, title: album.title, path: `/album/${source}/${id}` };
   const artists = trackArtistLinks({ source: album.source, artist: album.artist, artists: album.artists });
-  const meta = [
-    SOURCE_LABEL[album.source],
-    album.genre,
-    album.year,
-    formatTrackCount(album.tracks.length),
+  const tags = [
+    album.year ? String(album.year) : null,
+    ...(album.genre ?? '')
+      .split(/[,/]/)
+      .map((g) => g.trim())
+      .filter(Boolean)
+      .slice(0, 3)
+      .map((g) => g[0].toUpperCase() + g.slice(1)),
+    album.tracks.some((t) => t.explicit) ? '18+' : null,
+    formatTrackCount(album.trackCount ?? album.tracks.length),
     album.durationMs ? formatTotalDuration(album.durationMs) : null,
-  ]
-    .filter(Boolean)
-    .join(' · ');
+    album.label ? `℗ ${album.label}` : null,
+  ].filter((t): t is string => !!t);
+  const platforms = (alternatives.data ?? []).some((a) => a.source === album.source && a.id === album.id)
+    ? alternatives.data!
+    : [];
+  const meta = (
+    <div className="mt-2 flex flex-wrap items-center justify-center gap-1.5 md:justify-start">
+      <span className="rounded-full bg-primary/20 px-2.5 py-0.5 text-xs font-medium text-primary">{SOURCE_LABEL[album.source]}</span>
+      {tags.map((tag) => (
+        <span key={tag} className="rounded-full bg-foreground/10 px-2.5 py-0.5 text-xs font-medium text-foreground/80">
+          {tag}
+        </span>
+      ))}
+    </div>
+  );
 
   return (
     <div>
@@ -83,6 +110,31 @@ export function AlbumPage() {
         onShuffle={album.tracks.length > 1 ? () => playCollection(album.tracks, context, true) : undefined}
         actions={<DownloadAllButton tracks={album.tracks} />}
       />
+      {(platforms.length > 1 || alternatives.isFetching) && (
+        <section className="-mt-4 mb-6 flex flex-wrap items-center gap-2" aria-label="Альбом на других площадках">
+          <span className="text-xs font-medium uppercase tracking-wider text-muted">Слушать на</span>
+          {platforms.map((p) => {
+            const active = p.source === album.source;
+            return (
+              <button
+                key={p.source}
+                type="button"
+                aria-pressed={active}
+                disabled={active}
+                onClick={() => navigate(albumPath(p.source, p.id), { replace: true })}
+                className={cn(
+                  'rounded-full px-3 py-1 text-sm transition-colors',
+                  active ? 'bg-foreground/15 font-medium text-foreground' : 'bg-foreground/5 text-muted hover:bg-foreground/10 hover:text-foreground',
+                )}
+              >
+                {SOURCE_LABEL[p.source]}
+                {p.trackCount ? <span className="ml-1.5 text-xs text-muted">{p.trackCount} тр.</span> : null}
+              </button>
+            );
+          })}
+          {alternatives.isFetching && <Loader2 size={14} className="animate-spin text-muted" aria-label="Ищем на других площадках" />}
+        </section>
+      )}
       {album.description && (
         <section className="mb-8 max-w-3xl">
           <h2 className="mb-1 text-lg font-semibold">Описание</h2>

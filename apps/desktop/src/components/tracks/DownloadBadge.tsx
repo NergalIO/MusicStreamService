@@ -9,7 +9,7 @@ export function DownloadBadge({ track }: { track: Pick<UnifiedTrack, 'source' | 
     const r = 5.5;
     const c = 2 * Math.PI * r;
     return (
-      <svg width={14} height={14} viewBox="0 0 14 14" className="shrink-0 -rotate-90 text-primary" aria-label="Скачивается">
+      <svg width={14} height={14} viewBox="0 0 14 14" className="shrink-0 -rotate-90 text-[#1DB954]" aria-label="Скачивается">
         <circle cx={7} cy={7} r={r} fill="none" stroke="currentColor" strokeOpacity={0.25} strokeWidth={2} />
         <circle
           cx={7}
@@ -28,8 +28,8 @@ export function DownloadBadge({ track }: { track: Pick<UnifiedTrack, 'source' | 
   }
   if (!record) return null;
   return (
-    <span title={`Скачано · ${record.codec.toUpperCase()}`} className="shrink-0 text-primary">
-      <CircleArrowDown size={14} />
+    <span title={`Скачано · ${record.codec.toUpperCase()}`} aria-label="Скачано" className="shrink-0">
+      <CircleArrowDown size={15} strokeWidth={2.5} className="fill-[#1DB954] text-background" />
     </span>
   );
 }

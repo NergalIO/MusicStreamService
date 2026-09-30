@@ -13,6 +13,7 @@ import androidx.media3.common.PlaybackException
 import androidx.media3.common.Player
 import androidx.media3.common.util.UnstableApi
 import androidx.media3.exoplayer.ExoPlayer
+import com.mss.core.connectors.SpotifyDomState
 import com.mss.core.connectors.SpotifyWebSession
 import com.mss.core.connectors.YandexConnector
 import com.mss.core.datastore.MssPreferences
@@ -101,6 +102,9 @@ class PlayerController @Inject constructor(
     private var seekTarget: Long? = null
     /** Пока веб-плеер переключается на новый трек, в DOM ещё старый — его позицию и конец не учитываем. */
     private var spotifyStarting = false
+    /** Веб-плеер уже показывал наш трек: смена заголовка после этого — автоплей Spotify, а не запоздалый DOM. */
+    private var sawOwnSpotifyTitle = false
+    private var lastSpotifyPos = 0L
 
     init {
         listOf(exoA, exoB).forEach { player ->
@@ -242,19 +246,52 @@ class PlayerController @Inject constructor(
 
     fun next() {
         recordPlay(false)
+        advance(auto = false)
+    }
+
+    /** Повтор трека действует только на естественный конец трека; кнопка «вперёд» всегда переключает. */
+    private fun advance(auto: Boolean) {
         if (queue.isEmpty()) return
         val mode = _state.value.repeat
-        index = when {
-            mode == RepeatMode.ONE -> index
+        val nextIdx = when {
+            auto && mode == RepeatMode.ONE -> index
             _state.value.shuffle && queue.size > 1 -> {
-                var nextIdx = index
-                while (nextIdx == index) nextIdx = (0 until queue.size).random()
-                nextIdx
+                var i = index
+                while (i == index) i = (0 until queue.size).random()
+                i
             }
-            mode == RepeatMode.ALL -> (index + 1) % queue.size
+            mode != RepeatMode.OFF -> (index + 1) % queue.size
             else -> if (index + 1 < queue.size) index + 1 else return
         }
+        if (nextIdx == index) {
+            restartCurrent()
+            return
+        }
+        index = nextIdx
         playCurrent(crossfade = false)
+    }
+
+    /**
+     * Веб-плеер Spotify игнорирует запуск уже открытого трека, поэтому повтор делаем перемоткой в начало.
+     * Если Spotify уже ушёл в автоплей, трек открываем заново.
+     */
+    private fun restartCurrent() {
+        val track = queue.getOrNull(index) ?: return
+        val d = spotifyWeb.dom.value
+        if (!usingSpotify || track.source != SourceId.SPOTIFY || !d.ready || !spotifyTitleMatches(d.title, track.title)) {
+            playCurrent(crossfade = false)
+            return
+        }
+        playGen += 1
+        playedMs = 0
+        preloadedNext = false
+        lastSpotifyPos = 0
+        awaitingStart = false
+        holdCommand()
+        seekTarget = 0
+        spotifyWeb.seek(0)
+        spotifyWeb.resume()
+        _state.value = _state.value.copy(positionMs = 0, playing = true)
     }
 
     fun prev() {
@@ -353,7 +390,12 @@ class PlayerController @Inject constructor(
                 pos = if (seekTarget != null) _state.value.positionMs else d.positionMs
                 playing = d.playing
             }
-            if (d.ready && dur > 0 && pos >= dur - 900 && playing && endedGen != playGen) {
+            if (d.ready && dur > 0 && pos >= dur - 1_500 && playing && endedGen != playGen) {
+                endedGen = playGen
+                onEnded()
+                return
+            }
+            if (spotifyLeftTrack(d, dur, holding)) {
                 endedGen = playGen
                 onEnded()
                 return
@@ -379,6 +421,34 @@ class PlayerController @Inject constructor(
         maybeLoadWave()
     }
 
+    /**
+     * Трек в Spotify — отдельный контекст, и после него Spotify сам включает автоплей.
+     * Секундные часы панели могут проскочить окно конца трека — тогда ловим смену трека в самом веб-плеере.
+     */
+    private fun spotifyLeftTrack(d: SpotifyDomState, dur: Long, holding: Boolean): Boolean {
+        val lastPos = lastSpotifyPos
+        lastSpotifyPos = d.positionMs
+        val stable = !spotifyStarting && !awaitingStart && !holding && seekTarget == null &&
+            d.ready && d.playing && !d.ad && endedGen != playGen
+        if (!stable) return false
+        val own = _state.value.current?.title?.let { spotifyTitleMatches(d.title, it) } ?: true
+        if (own) {
+            sawOwnSpotifyTitle = true
+            return false
+        }
+        val switched = sawOwnSpotifyTitle && d.title.isNotBlank()
+        val wrapped = dur > 0 && lastPos >= dur - 15_000 && d.positionMs < 5_000
+        return switched || wrapped
+    }
+
+    private fun spotifyTitleMatches(dom: String, title: String): Boolean {
+        fun norm(s: String) = s.lowercase().filter { it.isLetterOrDigit() }
+        val a = norm(dom)
+        val b = norm(title)
+        if (a.isEmpty() || b.isEmpty()) return true
+        return a == b || a.contains(b) || b.contains(a)
+    }
+
     private fun onEnded() {
         if (_state.value.sleepUntilTrackEnd) {
             recordPlay(true)
@@ -386,7 +456,7 @@ class PlayerController @Inject constructor(
             return
         }
         recordPlay(true)
-        next()
+        advance(auto = true)
     }
 
     private fun pauseSleep() {
@@ -403,6 +473,8 @@ class PlayerController @Inject constructor(
         _state.value = _state.value.copy(current = track, queue = queue.toList(), index = index, playing = true)
         playedMs = 0
         preloadedNext = false
+        sawOwnSpotifyTitle = false
+        lastSpotifyPos = 0
         ensurePlaybackService()
         startTicker()
         if (!track.playable) {

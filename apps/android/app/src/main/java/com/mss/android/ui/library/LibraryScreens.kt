@@ -51,7 +51,10 @@ import com.mss.android.ui.LibraryTab
 import com.mss.android.ui.LibraryUi
 import com.mss.android.ui.MssViewModel
 import com.mss.android.ui.components.EmptyState
+import com.mss.android.ui.components.DownloadedGreen
 import com.mss.android.ui.components.EntityRow
+import com.mss.core.downloads.DownloadScheduler
+import androidx.compose.material.icons.filled.DownloadForOffline
 import com.mss.android.ui.components.MssChip
 import com.mss.android.ui.components.MssField
 import com.mss.android.ui.components.ScreenTitle
@@ -106,7 +109,7 @@ fun LibraryScreen(vm: MssViewModel, nav: NavHostController) {
                 LibraryTab.TRACKS -> LikedTracksTab(vm, nav, library, activeSource)
                 LibraryTab.PLAYLISTS -> PlaylistsTab(vm, nav, library, activeSource)
                 LibraryTab.ARTISTS -> ArtistsTab(nav, library, activeSource)
-                LibraryTab.ALBUMS -> AlbumsTab(nav, library, activeSource)
+                LibraryTab.ALBUMS -> AlbumsTab(vm, nav, library, activeSource)
                 LibraryTab.DOWNLOADS -> DownloadsTab(vm, activeSource)
                 LibraryTab.UPLOADS -> UploadsTab(vm, nav, library)
                 LibraryTab.HISTORY -> HistoryTab(vm, nav, activeSource)
@@ -317,11 +320,16 @@ private fun ArtistsTab(nav: NavHostController, library: LibraryUi, source: Sourc
 private data class AlbumEntry(val key: String, val title: String, val artist: String, val count: Int, val cover: String?, val sample: UnifiedTrack)
 
 @Composable
-private fun AlbumsTab(nav: NavHostController, library: LibraryUi, source: SourceId?) {
-    val albums = remember(library.likes, source) {
+private fun AlbumsTab(vm: MssViewModel, nav: NavHostController, library: LibraryUi, source: SourceId?) {
+    val savedAll by vm.downloadedAlbums.collectAsState()
+    val downloadedKeys by vm.downloadedKeys.collectAsState()
+    val saved = savedAll.filter { source == null || it.source == source }
+    val savedKeys = saved.map { "${it.source}:${it.id}" }.toSet()
+    val albums = remember(library.likes, source, savedKeys) {
         library.likedTracks(source)
             .filter { !it.album.isNullOrBlank() || !it.albumId.isNullOrBlank() }
             .groupBy { "${it.source}:${it.albumId?.takeIf { id -> id.isNotBlank() } ?: it.album!!.lowercase()}" }
+            .filterKeys { it !in savedKeys }
             .map { (key, list) ->
                 val first = list.first()
                 AlbumEntry(key, first.album?.ifBlank { null } ?: "Альбом", first.artist, list.size, first.coverUrl, first)
@@ -329,22 +337,55 @@ private fun AlbumsTab(nav: NavHostController, library: LibraryUi, source: Source
             .sortedWith(compareByDescending<AlbumEntry> { it.count }.thenBy { it.title.lowercase() })
     }
     LoadingOr(
-        loading = library.loading || !library.loaded,
-        empty = albums.isEmpty(),
+        loading = saved.isEmpty() && (library.loading || !library.loaded),
+        empty = albums.isEmpty() && saved.isEmpty(),
         title = "Нет альбомов",
-        subtitle = "Альбомы понравившихся треков появятся здесь.",
+        subtitle = "Здесь появятся скачанные альбомы и альбомы понравившихся треков.",
     ) {
         LazyColumn(Modifier.fillMaxSize(), contentPadding = PaddingValues(bottom = 16.dp)) {
-            items(albums, key = { it.key }) { a ->
-                EntityRow(
-                    a.title,
-                    listOf(a.artist, sourceLabel(a.sample.source), "${tracksWord(a.count)} в лайках").filter { it.isNotBlank() }.joinToString(" · "),
-                    a.cover,
-                    { nav.navigate(Routes.album(a.sample)) },
-                )
+            if (saved.isNotEmpty()) {
+                item(key = "saved-label") { AlbumSection("Скачанные") }
+                items(saved, key = { "saved:${it.source}:${it.id}" }) { a ->
+                    val done = a.tracks.count { DownloadScheduler.keyOf(it) in downloadedKeys }
+                    EntityRow(
+                        a.title,
+                        listOf(a.artist, sourceLabel(a.source), "$done из ${a.tracks.size} скачано").filter { it.isNotBlank() }.joinToString(" · "),
+                        a.coverUrl,
+                        { nav.navigate(Routes.album(a.source.name.lowercase(), a.id)) },
+                        trailing = {
+                            Icon(
+                                Icons.Filled.DownloadForOffline,
+                                "Скачан",
+                                tint = DownloadedGreen,
+                                modifier = Modifier.padding(end = 12.dp),
+                            )
+                        },
+                    )
+                }
+            }
+            if (albums.isNotEmpty()) {
+                if (saved.isNotEmpty()) item(key = "liked-label") { AlbumSection("Из понравившихся") }
+                items(albums, key = { it.key }) { a ->
+                    EntityRow(
+                        a.title,
+                        listOf(a.artist, sourceLabel(a.sample.source), "${tracksWord(a.count)} в лайках").filter { it.isNotBlank() }.joinToString(" · "),
+                        a.cover,
+                        { nav.navigate(Routes.album(a.sample)) },
+                    )
+                }
             }
         }
     }
+}
+
+@Composable
+private fun AlbumSection(text: String) {
+    Text(
+        text,
+        style = MaterialTheme.typography.titleSmall,
+        fontWeight = FontWeight.SemiBold,
+        modifier = Modifier.padding(horizontal = 16.dp, vertical = 8.dp),
+    )
 }
 
 @Composable

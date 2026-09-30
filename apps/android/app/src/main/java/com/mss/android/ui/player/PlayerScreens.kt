@@ -59,8 +59,6 @@ import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
 import androidx.compose.material3.LinearProgressIndicator
 import androidx.compose.material3.MaterialTheme
-import androidx.compose.material3.Slider
-import androidx.compose.material3.SliderDefaults
 import androidx.compose.material3.Switch
 import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
@@ -69,6 +67,7 @@ import androidx.compose.runtime.DisposableEffect
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.collectAsState
 import androidx.compose.runtime.getValue
+import androidx.compose.runtime.produceState
 import androidx.compose.runtime.mutableFloatStateOf
 import androidx.compose.runtime.mutableLongStateOf
 import androidx.compose.runtime.mutableStateOf
@@ -111,7 +110,9 @@ import com.mss.android.ui.LyricsUi
 import com.mss.android.ui.MssViewModel
 import com.mss.android.ui.components.Cover
 import com.mss.android.ui.components.MssChip
+import com.mss.android.ui.components.MssSlider
 import com.mss.android.ui.components.coverRequest
+import com.mss.android.ui.components.TrackActionsSheet
 import com.mss.android.ui.components.TrackRow
 import com.mss.android.ui.theme.AccentPanelBackground
 import com.mss.android.ui.theme.COVER_ACCENT
@@ -251,15 +252,11 @@ private fun SpotifyDeviceDialog(vm: MssViewModel, onClose: () -> Unit) {
 fun MiniPlayer(
     vm: MssViewModel,
     onOpen: () -> Unit,
-    onArtist: (UnifiedTrack) -> Unit = {},
-    onAlbum: (UnifiedTrack) -> Unit = {},
-    onSimilar: (UnifiedTrack) -> Unit = {},
     below: @Composable () -> Unit = {},
 ) {
     val settings by vm.playbackSettings.collectAsState()
     val state by vm.playerState.collectAsState()
     val liked by vm.likedIds.collectAsState()
-    val canSuggest by vm.canSuggestToLobby.collectAsState()
     val scheme = MaterialTheme.colorScheme
     val track = state.current
     if (track == null) {
@@ -297,7 +294,7 @@ fun MiniPlayer(
                         tint = if (isLiked) scheme.primary else scheme.onSurface.copy(alpha = 0.85f),
                     )
                 }
-                MiniPlayerMenu(vm, track, canSuggest, onArtist, onAlbum, onSimilar)
+                MiniPlayerMenu(track)
                 IconButton({ vm.player.prev() }) {
                     Icon(Icons.Default.SkipPrevious, "Предыдущий", tint = scheme.onSurface.copy(alpha = 0.85f))
                 }
@@ -330,63 +327,12 @@ fun MiniPlayer(
 }
 
 @Composable
-private fun MiniPlayerMenu(
-    vm: MssViewModel,
-    track: UnifiedTrack,
-    canSuggest: Boolean,
-    onArtist: (UnifiedTrack) -> Unit,
-    onAlbum: (UnifiedTrack) -> Unit,
-    onSimilar: (UnifiedTrack) -> Unit,
-) {
+private fun MiniPlayerMenu(track: UnifiedTrack) {
     var open by remember { mutableStateOf(false) }
-    Box {
-        IconButton({ open = true }, Modifier.size(36.dp)) {
-            Icon(Icons.Default.MoreVert, "Ещё", tint = MaterialTheme.colorScheme.onSurface.copy(alpha = 0.85f))
-        }
-        DropdownMenu(open, { open = false }) {
-            DropdownMenuItem(
-                text = { Text("Скачать") },
-                onClick = { open = false; vm.download(track) },
-                leadingIcon = { Icon(Icons.Default.Download, null) },
-            )
-            DropdownMenuItem(
-                text = { Text("Похожие") },
-                onClick = { open = false; onSimilar(track) },
-            )
-            when (track.source) {
-                SourceId.YANDEX -> DropdownMenuItem(
-                    text = { Text("Волна по треку") },
-                    onClick = { open = false; vm.startWave(WaveSettings(seed = "track:${track.id}", seedTitle = track.title)) },
-                    leadingIcon = { Icon(Icons.Default.Radio, null) },
-                )
-                SourceId.SPOTIFY -> DropdownMenuItem(
-                    text = { Text("Радио по треку") },
-                    onClick = { open = false; vm.startSpotifyRadio(track) },
-                    leadingIcon = { Icon(Icons.Default.Radio, null) },
-                )
-                else -> {}
-            }
-            DropdownMenuItem(
-                text = { Text("К исполнителю") },
-                onClick = { open = false; onArtist(track) },
-                leadingIcon = { Icon(Icons.Default.Person, null) },
-            )
-            if (!track.album.isNullOrBlank() || !track.albumId.isNullOrBlank()) {
-                DropdownMenuItem(
-                    text = { Text("К альбому") },
-                    onClick = { open = false; onAlbum(track) },
-                    leadingIcon = { Icon(Icons.Default.Album, null) },
-                )
-            }
-            if (canSuggest) {
-                DropdownMenuItem(
-                    text = { Text("Предложить в лобби") },
-                    onClick = { open = false; vm.suggestToLobby(track) },
-                    leadingIcon = { Icon(Icons.Default.Send, null) },
-                )
-            }
-        }
+    IconButton({ open = true }, Modifier.size(36.dp)) {
+        Icon(Icons.Default.MoreVert, "Ещё", tint = MaterialTheme.colorScheme.onSurface.copy(alpha = 0.85f))
     }
+    if (open) TrackActionsSheet(track, onDismiss = { open = false })
 }
 
 @Composable
@@ -538,19 +484,14 @@ private fun NowPlayingBody(
                     }
                 }
                 item {
-                    NowPlayingEntityCard(
-                        caption = "Трек",
-                        title = track.title,
-                        subtitle = track.artist,
-                        coverUrl = track.coverUrl,
-                    )
-                }
-                item {
+                    val artistKey = "${track.source}:${track.artists?.firstOrNull()?.id ?: track.artist}"
+                    val artistImage by produceState<String?>(null, artistKey) { value = vm.artistImage(track) }
                     NowPlayingEntityCard(
                         caption = "Исполнитель",
                         title = track.artist,
                         subtitle = track.album?.takeIf { it.isNotBlank() },
-                        coverUrl = track.coverUrl,
+                        coverUrl = artistImage,
+                        round = true,
                         onClick = { onArtist(track) },
                     )
                 }
@@ -800,6 +741,7 @@ private fun NowPlayingEntityCard(
     title: String,
     subtitle: String?,
     coverUrl: String?,
+    round: Boolean = false,
     onClick: (() -> Unit)? = null,
 ) {
     val scheme = MaterialTheme.colorScheme
@@ -814,7 +756,7 @@ private fun NowPlayingEntityCard(
         verticalAlignment = Alignment.CenterVertically,
         horizontalArrangement = Arrangement.spacedBy(12.dp),
     ) {
-        Cover(coverUrl, Modifier.size(72.dp), corner = 12.dp)
+        Cover(coverUrl, Modifier.size(72.dp), corner = if (round) 36.dp else 12.dp)
         Column(Modifier.weight(1f)) {
             Text(caption, style = MaterialTheme.typography.labelSmall, color = scheme.onSurfaceVariant)
             Text(title, style = MaterialTheme.typography.titleMedium, fontWeight = FontWeight.SemiBold, maxLines = 2, overflow = TextOverflow.Ellipsis)
@@ -854,16 +796,11 @@ private fun PlaybackSettingsCard(vm: MssViewModel, settings: PlaybackSettings, s
             style = MaterialTheme.typography.bodySmall,
             color = scheme.onSurfaceVariant,
         )
-        Slider(
+        MssSlider(
             value = seconds.toFloat(),
             onValueChange = { vm.savePlayback(settings.copy(crossfadeMs = it.toInt() * 1000)) },
             valueRange = 0f..12f,
             steps = 11,
-            colors = SliderDefaults.colors(
-                thumbColor = scheme.onSurface,
-                activeTrackColor = scheme.onSurface,
-                inactiveTrackColor = scheme.onSurface.copy(alpha = 0.18f),
-            ),
         )
         Row(Modifier.fillMaxWidth(), verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.SpaceBetween) {
             Text("Эквалайзер", style = MaterialTheme.typography.labelLarge)
@@ -924,17 +861,12 @@ private fun VerticalEqBand(
                 .wrapContentSize(align = Alignment.Center, unbounded = true),
             contentAlignment = Alignment.Center,
         ) {
-            Slider(
+            MssSlider(
                 value = value,
                 onValueChange = onChange,
                 valueRange = -12f..12f,
                 steps = 23,
                 modifier = Modifier.requiredWidth(track).requiredHeight(36.dp).rotate(-90f),
-                colors = SliderDefaults.colors(
-                    thumbColor = scheme.onSurface,
-                    activeTrackColor = scheme.onSurface,
-                    inactiveTrackColor = scheme.onSurface.copy(alpha = 0.18f),
-                ),
             )
         }
         Text(label, style = MaterialTheme.typography.labelSmall, color = scheme.onSurfaceVariant, maxLines = 1)
@@ -1039,16 +971,11 @@ private fun NowPlayingControls(vm: MssViewModel, state: PlayerUiState) {
         Text(formatClock(state.positionMs), style = MaterialTheme.typography.labelMedium, color = scheme.onSurfaceVariant)
         Text(formatClock(state.durationMs), style = MaterialTheme.typography.labelMedium, color = scheme.onSurfaceVariant)
     }
-    Slider(
+    MssSlider(
         value = state.positionMs.toFloat().coerceIn(0f, duration),
         onValueChange = { vm.player.seekTo(it.toLong()) },
         valueRange = 0f..duration,
         modifier = Modifier.fillMaxWidth(),
-        colors = SliderDefaults.colors(
-            thumbColor = scheme.onSurface,
-            activeTrackColor = scheme.onSurface,
-            inactiveTrackColor = scheme.onSurface.copy(alpha = 0.18f),
-        ),
     )
     Row(
         Modifier.fillMaxWidth().padding(top = 4.dp),

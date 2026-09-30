@@ -161,6 +161,23 @@ class MssRepository @Inject constructor(
 
     suspend fun deletePlaylist(id: String) = api.deletePlaylist(id)
 
+    suspend fun addToPlaylist(playlistId: String, track: UnifiedTrack) {
+        if (track.source == SourceId.LOCAL) {
+            api.addPlaylistTrack(playlistId, track.id)
+        } else {
+            api.addPlaylistExternal(
+                playlistId,
+                track.source.name.lowercase(),
+                track.id,
+                track.title,
+                track.artist,
+                track.album,
+                track.coverUrl,
+                track.durationMs,
+            )
+        }
+    }
+
     suspend fun renamePlaylist(id: String, name: String) = api.updatePlaylist(id, name)
 
     val connectorsRegistry get() = connectors

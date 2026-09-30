@@ -13,6 +13,7 @@ import com.mss.core.connectors.VkAuthException
 import com.mss.core.connectors.VkConnector
 import com.mss.core.connectors.YandexConnector
 import com.mss.core.downloads.DownloadScheduler
+
 import com.mss.core.lobby.LobbyClient
 import com.mss.core.model.DeviceCodePrompt
 import com.mss.core.model.FeedBlock
@@ -71,6 +72,11 @@ class MssViewModel @Inject constructor(
         room != null && uid != null && room.hostUserId != uid
     }.stateIn(viewModelScope, SharingStarted.Eagerly, false)
     val downloadRecords = downloads.records
+    val activeDownloads = downloads.active
+    val downloadedAlbums = downloads.albums
+    val downloadedKeys: StateFlow<Set<String>> = downloads.records
+        .map { list -> list.map { it.key }.toSet() }
+        .stateIn(viewModelScope, SharingStarted.Eagerly, emptySet())
     val playbackSettings = repo.playbackSettings.stateIn(viewModelScope, SharingStarted.Eagerly, PlaybackSettings())
     val apiBase = repo.apiBase.stateIn(viewModelScope, SharingStarted.Eagerly, "")
     val searchHistory = repo.searchHistory.stateIn(viewModelScope, SharingStarted.Eagerly, emptyList())
@@ -123,6 +129,11 @@ class MssViewModel @Inject constructor(
     val sources: StateFlow<SourceStatuses> = _sources
     private val _vkLogin = MutableStateFlow(VkLoginUi())
     val vkLogin: StateFlow<VkLoginUi> = _vkLogin
+    private val _pickerPlaylists = MutableStateFlow<List<UnifiedPlaylist>>(emptyList())
+    val pickerPlaylists: StateFlow<List<UnifiedPlaylist>> = _pickerPlaylists
+    private val albumCache = mutableMapOf<SourceId, AlbumWithTracks>()
+    private var albumAlternatives = mapOf<SourceId, UnifiedAlbum>()
+    private var albumToken = 0
     private val _library = MutableStateFlow(LibraryUi())
     val library: StateFlow<LibraryUi> = _library
     private val _libraryTab = MutableStateFlow(LibraryTab.TRACKS)
@@ -338,13 +349,113 @@ class MssViewModel @Inject constructor(
 
     fun openAlbum(source: String, id: String) {
         val decoded = java.net.URLDecoder.decode(id, Charsets.UTF_8)
+        val token = ++albumToken
+        albumCache.clear()
+        albumAlternatives = emptyMap()
         _albumPage.value = AlbumPageUi(loading = true)
         viewModelScope.launch {
-            val album = runCatching { loadAlbum(sourceFrom(source), decoded) }.getOrNull()
+            val src = sourceFrom(source)
+            val saved = downloads.albums.value.firstOrNull { it.source == src && it.id == decoded }
+            val album = saved?.takeIf { src == SourceId.LOCAL || src == SourceId.VK }
+                ?: runCatching { loadAlbum(src, decoded) }.getOrNull()
+                ?: saved
+            if (token != albumToken) return@launch
             _albumPage.value = AlbumPageUi(album = album, loading = false, error = if (album == null) "Альбом не найден" else null)
             _detailTitle.value = album?.title ?: decoded
             _tracks.value = album?.tracks.orEmpty()
+            if (album == null) return@launch
+            albumCache[album.source] = album
+            val self = album.toUnifiedAlbum()
+            _albumPage.value = _albumPage.value.copy(platforms = listOf(self), platformsLoading = true)
+            val found = runCatching { findAlbumAlternatives(album) }.getOrDefault(emptyMap())
+            if (token != albumToken) return@launch
+            albumAlternatives = found + (album.source to self)
+            _albumPage.value = _albumPage.value.copy(
+                platforms = LIBRARY_SOURCES.mapNotNull { albumAlternatives[it] },
+                platformsLoading = false,
+            )
         }
+    }
+
+    fun switchAlbumPlatform(source: SourceId) {
+        val page = _albumPage.value
+        if (page.album?.source == source || page.switching != null) return
+        val target = albumAlternatives[source] ?: return
+        val token = albumToken
+        _albumPage.value = page.copy(switching = source)
+        viewModelScope.launch {
+            val album = albumCache[source] ?: runCatching { loadAlbumAlternative(target) }.getOrNull()
+            if (token != albumToken) return@launch
+            if (album == null || album.tracks.isEmpty()) {
+                _albumPage.value = _albumPage.value.copy(switching = null)
+                _error.value = "Не удалось открыть альбом в ${sourceName(source)}"
+                return@launch
+            }
+            albumCache[source] = album
+            _albumPage.value = _albumPage.value.copy(album = album, switching = null, error = null)
+            _detailTitle.value = album.title
+            _tracks.value = album.tracks
+        }
+    }
+
+    private suspend fun loadAlbumAlternative(target: UnifiedAlbum): AlbumWithTracks? = when (target.source) {
+        SourceId.YANDEX, SourceId.SPOTIFY -> albumById(target.source, target.id)
+        SourceId.VK -> {
+            val tracks = vk.search("${target.artist} ${target.title}", 40)
+                .filter { it.albumId == target.id || it.album.equals(target.title, true) }
+            if (tracks.isEmpty()) null
+            else AlbumWithTracks(SourceId.VK, target.id, target.title, target.artist, year = target.year, coverUrl = target.coverUrl, tracks = tracks)
+        }
+        SourceId.LOCAL -> null
+    }
+
+    private suspend fun findAlbumAlternatives(album: AlbumWithTracks): Map<SourceId, UnifiedAlbum> = coroutineScope {
+        val artist = album.artists?.firstOrNull()?.name ?: album.artist.split(',', '&').first()
+        val query = "$artist ${album.title}".trim()
+        val count = album.tracks.size.takeIf { it > 0 } ?: album.trackCount ?: 0
+        fun best(list: List<UnifiedAlbum>): UnifiedAlbum? = list
+            .filter { sameAlbum(it.title, it.artist, album.title, artist) }
+            .minByOrNull { kotlin.math.abs((it.trackCount ?: count) - count) }
+        LIBRARY_SOURCES
+            .filter { it != album.source && sourceConnected(it) }
+            .map { src ->
+                async {
+                    val hit = runCatching {
+                        when (src) {
+                            SourceId.YANDEX -> best(yandex.searchAlbums(query, 10))
+                            SourceId.SPOTIFY -> best(spotify.searchAlbums(query, 10))
+                            SourceId.VK -> best(vk.searchAlbums(query, 10))
+                            SourceId.LOCAL -> {
+                                val tracks = repo.mssTracks(query, 50)
+                                    .filter { sameAlbum(it.album.orEmpty(), it.artist, album.title, artist) }
+                                tracks.firstOrNull()?.let { first ->
+                                    val local = AlbumWithTracks(
+                                        SourceId.LOCAL,
+                                        first.albumId ?: first.album.orEmpty(),
+                                        first.album.orEmpty(),
+                                        first.artist,
+                                        coverUrl = first.coverUrl,
+                                        tracks = tracks,
+                                    )
+                                    albumCache[SourceId.LOCAL] = local
+                                    local.toUnifiedAlbum()
+                                }
+                            }
+                        }
+                    }.getOrNull()
+                    hit?.let { src to it }
+                }
+            }
+            .awaitAll()
+            .filterNotNull()
+            .toMap()
+    }
+
+    private fun sourceName(source: SourceId) = when (source) {
+        SourceId.LOCAL -> "MSS"
+        SourceId.YANDEX -> "Яндекс Музыке"
+        SourceId.SPOTIFY -> "Spotify"
+        SourceId.VK -> "VK"
     }
 
     fun openArtist(name: String, source: String = "local", id: String = "-") {
@@ -359,6 +470,36 @@ class MssViewModel @Inject constructor(
             _artistPage.value = page
             _tracks.value = page.tracksBySource.values.flatten()
         }
+    }
+
+    private val artistImages = mutableMapOf<String, String?>()
+
+    /** Фото профиля основного исполнителя трека: сначала с площадки трека, затем с остальных подключённых. */
+    suspend fun artistImage(track: UnifiedTrack): String? {
+        val ref = track.artists?.firstOrNull()
+        val name = ref?.name ?: track.artist.substringBefore(',').trim()
+        if (name.isBlank()) return null
+        val key = "${track.source}:${ref?.id ?: name.lowercase()}"
+        if (artistImages.containsKey(key)) return artistImages[key]
+        fun pick(list: List<UnifiedArtist>) =
+            (ref?.id?.let { id -> list.firstOrNull { it.id == id } }
+                ?: list.firstOrNull { it.name.equals(name, ignoreCase = true) })?.imageUrl
+        val order = listOf(track.source, SourceId.YANDEX, SourceId.SPOTIFY).distinct()
+        var image: String? = null
+        for (src in order) {
+            if (!sourceConnected(src)) continue
+            image = runCatching {
+                when (src) {
+                    SourceId.YANDEX -> pick(yandex.searchArtists(name, 8))
+                    SourceId.SPOTIFY -> pick(spotify.searchArtists(name, 8))
+                        ?: ref?.id?.takeIf { track.source == SourceId.SPOTIFY }?.let { spotify.artist(it)?.imageUrl }
+                    else -> null
+                }
+            }.getOrNull()
+            if (image != null) break
+        }
+        artistImages[key] = image
+        return image
     }
 
     private suspend fun loadArtistPage(name: String, preferred: SourceId, preferredId: String?): ArtistPageUi = coroutineScope {
@@ -823,6 +964,34 @@ class MssViewModel @Inject constructor(
     }
 
     fun download(track: UnifiedTrack) = launch {
+        enqueueDownload(track)
+        _notice.value = "Скачиваем «${track.title}»"
+    }
+
+    fun downloadAlbum(album: AlbumWithTracks) = launch {
+        if (album.source == SourceId.SPOTIFY) error("Альбомы Spotify нельзя скачать")
+        val tracks = album.tracks.filter { it.source != SourceId.SPOTIFY }
+        if (tracks.isEmpty()) error("В альбоме нет треков для скачивания")
+        downloads.saveAlbum(album)
+        val have = downloadedKeys.value + activeDownloads.value
+        var failed = 0
+        var lastError: String? = null
+        tracks.filter { DownloadScheduler.keyOf(it) !in have }.forEach { t ->
+            runCatching { enqueueDownload(t) }.onFailure { failed++; lastError = it.message }
+        }
+        _notice.value = if (failed == 0) {
+            "Скачиваем альбом «${album.title}»"
+        } else {
+            "Альбом скачивается, но $failed из ${tracks.size} треков не получится скачать: $lastError"
+        }
+    }
+
+    fun removeAlbumDownload(album: AlbumWithTracks) {
+        album.tracks.forEach { downloads.remove(DownloadScheduler.keyOf(it)) }
+        downloads.removeAlbum(album)
+    }
+
+    private suspend fun enqueueDownload(track: UnifiedTrack) {
         if (track.source == SourceId.LOCAL) {
             val sub = _subscription.value ?: runCatching { repo.subscription() }.getOrNull()
             val max = sub?.features?.maxOfflineTracks
@@ -833,14 +1002,40 @@ class MssViewModel @Inject constructor(
         when (track.source) {
             SourceId.LOCAL -> downloads.enqueueOfflineMss(track)
             SourceId.YANDEX -> downloads.enqueueYandex(track)
-            else -> {
-                val url = track.streamUrl ?: return@launch
-                downloads.enqueue(url, "${track.source}_${track.id}.bin", track)
+            SourceId.VK -> {
+                val url = track.streamUrl?.takeIf { it.isNotBlank() } ?: vk.resolvePlaybackUrl(track)
+                if (".m3u8" in url) error("Этот трек VK отдаётся потоком — скачать его на телефоне нельзя")
+                downloads.enqueue(url, "vk_${track.id.replace(Regex("[^A-Za-z0-9_-]"), "_")}.mp3", track)
             }
+            SourceId.SPOTIFY -> error("Треки Spotify нельзя скачать")
         }
     }
 
     fun removeDownload(key: String) = downloads.remove(key)
+
+    fun removeDownload(track: UnifiedTrack) = downloads.remove(DownloadScheduler.keyOf(track))
+
+    fun playNext(track: UnifiedTrack) = player.playNext(track)
+
+    fun dislike(track: UnifiedTrack) = launch {
+        yandex.dislike(track)
+        _likedIds.value = _likedIds.value - track.id
+        _notice.value = "Трек не будет попадать в рекомендации"
+    }
+
+    fun loadPickerPlaylists() = launch { _pickerPlaylists.value = repo.mssPlaylists() }
+
+    fun addToPlaylist(playlist: UnifiedPlaylist, track: UnifiedTrack) = launch {
+        repo.addToPlaylist(playlist.id, track)
+        _notice.value = "Добавлено в «${playlist.title}»"
+    }
+
+    fun createPlaylistWith(name: String, track: UnifiedTrack) = launch {
+        val playlist = repo.createPlaylist(name.trim())
+        repo.addToPlaylist(playlist.id, track)
+        _notice.value = "Добавлено в «${playlist.title}»"
+        reloadLibraryMssPlaylists()
+    }
 
     fun registerUpload(uri: Uri, title: String, artist: String) = launch {
         repo.registerLocalFile(uri, title, artist)
@@ -1014,7 +1209,42 @@ data class AlbumPageUi(
     val album: AlbumWithTracks? = null,
     val loading: Boolean = false,
     val error: String? = null,
+    /** Этот же релиз на других площадках, включая текущую. */
+    val platforms: List<UnifiedAlbum> = emptyList(),
+    val platformsLoading: Boolean = false,
+    val switching: SourceId? = null,
 )
+
+private fun AlbumWithTracks.toUnifiedAlbum() = UnifiedAlbum(
+    source = source,
+    id = id,
+    title = title,
+    artist = artist,
+    artists = artists,
+    year = year,
+    coverUrl = coverUrl,
+    trackCount = trackCount ?: tracks.size.takeIf { it > 0 },
+    type = type,
+    genre = genre,
+)
+
+private val BRACKETS = Regex("""\s*[(\[][^)\]]*[)\]]""")
+private val EDITION_SUFFIX = Regex("""\s+[-–—]\s+.*\b(remaster\w*|deluxe|edition|version|expanded|anniversary)\b.*$""", RegexOption.IGNORE_CASE)
+private val NON_ALNUM = Regex("""[^\p{L}\p{N}]+""")
+
+private fun normAlbumTitle(s: String) = s.lowercase().replace(BRACKETS, "").replace(EDITION_SUFFIX, "").replace(NON_ALNUM, "")
+
+private fun normName(s: String) = s.lowercase().replace(NON_ALNUM, "")
+
+/** Один и тот же релиз: названия совпадают без пометок вроде «(Deluxe)», исполнитель пересекается. */
+internal fun sameAlbum(title: String, artist: String, targetTitle: String, targetArtist: String): Boolean {
+    val t = normAlbumTitle(title)
+    if (t.isEmpty() || t != normAlbumTitle(targetTitle)) return false
+    val a = normName(artist)
+    val b = normName(targetArtist)
+    if (a.isEmpty() || b.isEmpty()) return true
+    return a.contains(b) || b.contains(a)
+}
 
 data class SourceStatuses(
     val yandex: AuthStatus = AuthStatus.DISCONNECTED,

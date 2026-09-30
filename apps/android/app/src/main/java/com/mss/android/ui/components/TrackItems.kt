@@ -5,6 +5,8 @@ import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Row
+import androidx.compose.foundation.layout.Spacer
+import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.padding
@@ -125,11 +127,12 @@ fun TrackRow(
             .fillMaxWidth()
             .background(if (active) scheme.onSurface.copy(alpha = 0.06f) else scheme.background.copy(alpha = 0f))
             .clickable(onClick = onPlay)
-            .padding(horizontal = 16.dp, vertical = 8.dp),
+            .padding(start = 16.dp, end = 4.dp, top = 8.dp, bottom = 8.dp),
         verticalAlignment = Alignment.CenterVertically,
-        horizontalArrangement = Arrangement.spacedBy(12.dp),
+        horizontalArrangement = Arrangement.spacedBy(0.dp),
     ) {
         Cover(track.coverUrl, Modifier.size(48.dp))
+        Spacer(Modifier.width(8.dp))
         Column(Modifier.weight(1f)) {
             Row(Modifier.fillMaxWidth(), verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(6.dp)) {
                 Text(
@@ -155,15 +158,21 @@ fun TrackRow(
                 SourceTag(track.source)
             }
         }
-        IconButton(onClick = onLike) {
+        IconButton(onClick = onLike, modifier = Modifier.size(40.dp)) {
             Icon(
                 if (liked) Icons.Default.Favorite else Icons.Default.FavoriteBorder,
                 contentDescription = if (liked) "Убрать из библиотеки" else "Добавить в библиотеку",
                 tint = if (liked) scheme.primary else scheme.onSurfaceVariant,
             )
         }
-        IconButton(onClick = { menu = true }) {
+        DownloadButton(track)
+        val host = LocalTrackHost.current
+        IconButton(onClick = { menu = true }, modifier = Modifier.size(40.dp)) {
             Icon(Icons.Default.MoreVert, contentDescription = "Ещё", tint = scheme.onSurfaceVariant)
+            if (host != null) {
+                if (menu) TrackActionsSheet(track, onDismiss = { menu = false })
+                return@IconButton
+            }
             DropdownMenu(menu, { menu = false }) {
                 DropdownMenuItem(
                     text = { Text(if (liked) "Убрать лайк" else "Лайк") },

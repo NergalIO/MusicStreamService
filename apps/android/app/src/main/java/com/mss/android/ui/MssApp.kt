@@ -76,7 +76,11 @@ import com.mss.android.ui.more.YandexLoginDialog
 import com.mss.android.ui.navigation.Routes
 import com.mss.android.ui.navigation.parseMssLink
 import com.mss.android.ui.player.LobbyBar
+import com.mss.android.ui.components.LocalTrackHost
 import com.mss.android.ui.components.SpotifyCoverHealth
+import com.mss.android.ui.components.TrackHost
+import androidx.compose.runtime.CompositionLocalProvider
+import androidx.compose.runtime.remember
 import com.mss.android.ui.player.MiniPlayer
 import com.mss.android.ui.player.NowPlayingScreen
 import com.mss.android.ui.search.SearchScreen
@@ -120,6 +124,8 @@ fun MssApp(
     }
 
     val spotifyVisible = spotifyLogin && !spotifyLoggedIn
+    val trackHost = remember(vm, nav) { TrackHost(vm, nav) }
+    CompositionLocalProvider(LocalTrackHost provides trackHost) {
     MssTheme(accent = settings.accent, cover = cover) {
         Box(Modifier.fillMaxSize()) {
             SpotifyWebLayer(
@@ -154,6 +160,7 @@ fun MssApp(
                 YandexLoginDialog(prompt, onCancel = { vm.cancelYandexLogin() }, modifier = Modifier.zIndex(3f))
             }
         }
+    }
     }
 }
 
@@ -257,13 +264,7 @@ private fun MainShell(vm: MssViewModel, nav: NavHostController) {
             if (route != Routes.NOW_PLAYING) {
                 Column {
                     LobbyBar(lobby) { nav.navigate(Routes.LOBBY) }
-                    MiniPlayer(
-                        vm,
-                        onOpen = { nav.navigate(Routes.NOW_PLAYING) },
-                        onArtist = { track -> nav.navigate(Routes.artist(track)) },
-                        onAlbum = { track -> nav.navigate(Routes.album(track)) },
-                        onSimilar = { track -> nav.navigate(Routes.similar(track.source.name.lowercase(), track.id)) },
-                    ) {
+                    MiniPlayer(vm, onOpen = { nav.navigate(Routes.NOW_PLAYING) }) {
                         NavigationBar(containerColor = Color.Transparent, tonalElevation = 0.dp) {
                             listOf(
                                 Triple(Routes.HOME, "Главная", Icons.Default.Home),

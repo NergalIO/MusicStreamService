@@ -41,6 +41,23 @@ import com.mss.android.ui.ArtistPlatformUi
 import com.mss.android.ui.MssViewModel
 import com.mss.android.ui.components.Cover
 import com.mss.android.ui.components.MediaTile
+import com.mss.android.ui.components.MssChip
+import com.mss.android.ui.components.DownloadedGreen
+import com.mss.android.ui.components.canDownload
+import com.mss.core.downloads.DownloadScheduler
+import androidx.compose.material.icons.Icons
+import androidx.compose.material.icons.filled.DownloadForOffline
+import androidx.compose.material.icons.filled.PlayArrow
+import androidx.compose.material.icons.outlined.DownloadForOffline
+import androidx.compose.material3.AlertDialog
+import androidx.compose.material3.Button
+import androidx.compose.material3.Icon
+import androidx.compose.material3.OutlinedButton
+import androidx.compose.material3.TextButton
+import androidx.compose.runtime.remember
+import com.mss.core.model.AlbumWithTracks
+import androidx.compose.foundation.layout.ExperimentalLayoutApi
+import androidx.compose.foundation.layout.FlowRow
 import com.mss.android.ui.components.SourceTag
 import com.mss.android.ui.components.TrackRow
 import com.mss.android.ui.components.sourceLabel
@@ -249,18 +266,37 @@ fun AlbumScreen(vm: MssViewModel, nav: NavHostController) {
                             modifier = Modifier.clickable { nav.navigate(Routes.artist(a.artist, a.source.name.lowercase(), "-")) },
                         )
                     }
-                    SourceTag(a.source)
-                    val meta = listOfNotNull(
-                        a.year?.toString(),
-                        a.genre,
-                        (a.trackCount ?: a.tracks.size.takeIf { it > 0 })?.let { "$it треков" },
-                        (a.durationMs ?: a.tracks.sumOf { it.durationMs ?: 0 }).takeIf { it > 0 }?.let(::formatLength),
-                    )
-                    if (meta.isNotEmpty()) {
-                        Text(meta.joinToString(" · "), style = MaterialTheme.typography.bodySmall, color = scheme.onSurfaceVariant, textAlign = TextAlign.Center)
+                    AlbumTags(a, Modifier.padding(top = 6.dp))
+                    AlbumActions(vm, a, Modifier.padding(top = 10.dp))
+                }
+            }
+        }
+        if (album != null && (page.platforms.size > 1 || page.platformsLoading)) {
+            item {
+                Column(Modifier.fillMaxWidth().padding(bottom = 4.dp)) {
+                    Row(
+                        Modifier.padding(horizontal = 16.dp, vertical = 4.dp),
+                        verticalAlignment = Alignment.CenterVertically,
+                        horizontalArrangement = Arrangement.spacedBy(8.dp),
+                    ) {
+                        Text("Слушать на", style = MaterialTheme.typography.labelLarge, color = scheme.onSurfaceVariant)
+                        if (page.platformsLoading) CircularProgressIndicator(Modifier.size(14.dp), strokeWidth = 2.dp)
                     }
-                    a.label?.takeIf { it.isNotBlank() }?.let {
-                        Text("Лейбл: $it", style = MaterialTheme.typography.bodySmall, color = scheme.onSurfaceVariant, textAlign = TextAlign.Center)
+                    LazyRow(
+                        contentPadding = PaddingValues(horizontal = 16.dp, vertical = 4.dp),
+                        horizontalArrangement = Arrangement.spacedBy(8.dp),
+                    ) {
+                        items(page.platforms, key = { "alt:${it.source}" }) { alt ->
+                            MssChip(
+                                selected = alt.source == album.source,
+                                label = sourceLabel(alt.source),
+                                caption = when {
+                                    page.switching == alt.source -> "загрузка…"
+                                    alt.trackCount != null -> "${alt.trackCount} тр."
+                                    else -> null
+                                },
+                            ) { vm.switchAlbumPlatform(alt.source) }
+                        }
                     }
                 }
             }
@@ -296,6 +332,91 @@ fun AlbumScreen(vm: MssViewModel, nav: NavHostController) {
         val tracks = album?.tracks.orEmpty()
         itemsIndexed(tracks, key = { i, t -> "${t.source}:${t.id}:$i" }) { index, track ->
             trackRow(vm, nav, tracks, index, track, liked, canSuggest, currentKey)
+        }
+    }
+}
+
+@Composable
+private fun AlbumActions(vm: MssViewModel, album: AlbumWithTracks, modifier: Modifier = Modifier) {
+    val downloadedKeys by vm.downloadedKeys.collectAsState()
+    val active by vm.activeDownloads.collectAsState()
+    val savedAlbums by vm.downloadedAlbums.collectAsState()
+    var confirm by remember { mutableStateOf(false) }
+    val scheme = MaterialTheme.colorScheme
+    val tracks = album.tracks.filter { canDownload(it) }
+    val keys = tracks.map { DownloadScheduler.keyOf(it) }
+    val done = keys.count { it in downloadedKeys }
+    val running = keys.count { it in active }
+    val saved = savedAlbums.any { it.source == album.source && it.id == album.id }
+    val complete = tracks.isNotEmpty() && done == tracks.size
+    Row(modifier, horizontalArrangement = Arrangement.spacedBy(8.dp), verticalAlignment = Alignment.CenterVertically) {
+        Button(onClick = { vm.play(album.tracks, 0) }, enabled = album.tracks.isNotEmpty()) {
+            Icon(Icons.Default.PlayArrow, null, Modifier.size(18.dp))
+            Text("Слушать", Modifier.padding(start = 4.dp))
+        }
+        when {
+            album.source == SourceId.SPOTIFY || tracks.isEmpty() -> {}
+            running > 0 -> OutlinedButton(onClick = {}, enabled = false) {
+                CircularProgressIndicator(Modifier.size(16.dp), strokeWidth = 2.dp, color = DownloadedGreen)
+                Text("Скачано $done из ${tracks.size}", Modifier.padding(start = 8.dp))
+            }
+            complete && saved -> OutlinedButton(onClick = { confirm = true }) {
+                Icon(Icons.Filled.DownloadForOffline, null, Modifier.size(18.dp), tint = DownloadedGreen)
+                Text("Скачано", Modifier.padding(start = 6.dp), color = DownloadedGreen)
+            }
+            else -> OutlinedButton(onClick = { vm.downloadAlbum(album) }) {
+                Icon(Icons.Outlined.DownloadForOffline, null, Modifier.size(18.dp))
+                Text(
+                    if (done > 0) "Докачать (${tracks.size - done})" else "Скачать альбом",
+                    Modifier.padding(start = 6.dp),
+                )
+            }
+        }
+    }
+    if (confirm) {
+        AlertDialog(
+            onDismissRequest = { confirm = false },
+            title = { Text("Удалить альбом с устройства?") },
+            text = { Text("Все скачанные треки «${album.title}» будут удалены из «Скачанного», а альбом — из «Альбомов».") },
+            confirmButton = {
+                TextButton({ vm.removeAlbumDownload(album); confirm = false }) { Text("Удалить", color = scheme.error) }
+            },
+            dismissButton = { TextButton({ confirm = false }) { Text("Отмена") } },
+        )
+    }
+}
+
+@OptIn(ExperimentalLayoutApi::class)
+@Composable
+private fun AlbumTags(album: AlbumWithTracks, modifier: Modifier = Modifier) {
+    val scheme = MaterialTheme.colorScheme
+    val tags = buildList {
+        add(albumKind(album.type) ?: "Альбом")
+        album.year?.let { add(it.toString()) }
+        album.genre?.split(',', '/')?.map { it.trim() }?.filter { it.isNotBlank() }?.take(3)?.forEach { add(it.replaceFirstChar(Char::uppercase)) }
+        if (album.tracks.any { it.explicit == true }) add("18+")
+        (album.trackCount ?: album.tracks.size.takeIf { it > 0 })?.let { add("$it треков") }
+        (album.durationMs ?: album.tracks.sumOf { it.durationMs ?: 0 }).takeIf { it > 0 }?.let { add(formatLength(it)) }
+        album.label?.takeIf { it.isNotBlank() }?.let { add("℗ $it") }
+    }
+    FlowRow(
+        modifier,
+        horizontalArrangement = Arrangement.spacedBy(6.dp, Alignment.CenterHorizontally),
+        verticalArrangement = Arrangement.spacedBy(6.dp),
+    ) {
+        SourceTag(album.source, Modifier.align(Alignment.CenterVertically))
+        tags.forEach { tag ->
+            Text(
+                tag,
+                style = MaterialTheme.typography.labelMedium,
+                color = scheme.onSurfaceVariant,
+                maxLines = 1,
+                overflow = TextOverflow.Ellipsis,
+                modifier = Modifier
+                    .clip(RoundedCornerShape(50))
+                    .background(scheme.onSurface.copy(alpha = 0.07f))
+                    .padding(horizontal = 10.dp, vertical = 4.dp),
+            )
         }
     }
 }

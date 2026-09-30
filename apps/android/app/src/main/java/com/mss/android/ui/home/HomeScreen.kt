@@ -45,6 +45,7 @@ import com.mss.android.ui.components.TrackRow
 import com.mss.android.ui.components.greeting
 import com.mss.android.ui.theme.rememberMssWindow
 import com.mss.android.ui.navigation.Routes
+import com.mss.core.connectors.AuthStatus
 import com.mss.core.model.SourceId
 import com.mss.core.model.WaveSettings
 import com.mss.core.model.toUnifiedTrack
@@ -61,48 +62,55 @@ fun HomeScreen(vm: MssViewModel, nav: NavHostController) {
     val sources by vm.sources.collectAsState()
     val canSuggest by vm.canSuggestToLobby.collectAsState()
     val window = rememberMssWindow()
+    val tabs = listOfNotNull(
+        Triple(SourceId.LOCAL, "MSS", null),
+        Triple(SourceId.YANDEX, "Яндекс", sources.yandex).takeIf { sources.yandex != AuthStatus.DISCONNECTED },
+        Triple(SourceId.SPOTIFY, "Spotify", sources.spotify).takeIf { sources.spotify != AuthStatus.DISCONNECTED },
+        Triple(SourceId.VK, "VK", sources.vk).takeIf { sources.vk != AuthStatus.DISCONNECTED },
+    )
+    LaunchedEffect(tabs.map { it.first }) {
+        if (tabs.none { it.first == source }) vm.setHomeSource(SourceId.LOCAL)
+    }
     LaunchedEffect(source) { vm.loadHome() }
     val empty = shelves == null && feed.isEmpty() && playlists.isEmpty() && tracks.isEmpty()
     val currentKey = player.current?.let { "${it.source}:${it.id}" }
 
     LazyColumn(Modifier.fillMaxSize(), contentPadding = PaddingValues(bottom = 16.dp)) {
         item { ScreenTitle(greeting()) }
-        item {
-            WaveHero(
-                playing = player.playing && player.radio,
-                title = player.current?.let { "${it.title} — ${it.artist}" },
-                onPlay = { vm.startWave() },
-                onOpen = { nav.navigate(Routes.WAVE) },
-            )
-        }
-        item {
-            LazyRow(
-                Modifier.padding(vertical = 8.dp),
-                contentPadding = PaddingValues(horizontal = 16.dp),
-                horizontalArrangement = Arrangement.spacedBy(8.dp),
-            ) {
-                items(
-                    listOf(
-                        Triple(SourceId.LOCAL, "MSS", null),
-                        Triple(SourceId.YANDEX, "Яндекс", sources.yandex),
-                        Triple(SourceId.SPOTIFY, "Spotify", sources.spotify),
-                        Triple(SourceId.VK, "VK", sources.vk),
-                    ),
-                ) { (s, label, status) ->
-                    MssChip(
-                        selected = source == s,
-                        label = label,
-                        caption = status?.let { sourceCaption(it) },
-                        onClick = { vm.setHomeSource(s) },
-                    )
+        if (tabs.size > 1) {
+            item {
+                LazyRow(
+                    Modifier.padding(vertical = 8.dp),
+                    contentPadding = PaddingValues(horizontal = 16.dp),
+                    horizontalArrangement = Arrangement.spacedBy(8.dp),
+                ) {
+                    items(tabs) { (s, label, status) ->
+                        MssChip(
+                            selected = source == s,
+                            label = label,
+                            caption = status?.takeIf { it == AuthStatus.EXPIRED }?.let { "войти снова" },
+                            onClick = { vm.setHomeSource(s) },
+                        )
+                    }
                 }
+            }
+        }
+        if (source == SourceId.YANDEX) {
+            item {
+                WaveHero(
+                    playing = player.playing && player.radio,
+                    title = player.current?.let { "${it.title} — ${it.artist}" },
+                    onPlay = { vm.startWave() },
+                    onOpen = { nav.navigate(Routes.WAVE) },
+                )
             }
         }
         if (empty) {
             item {
                 EmptyState(
                     "Здесь появится ваша музыка",
-                    "Подключите Яндекс, Spotify или VK в разделе «Ещё» — на чипе будет видно, какой сервис уже работает.",
+                    if (tabs.size > 1) "Слушайте треки — подборки соберутся из вашей статистики."
+                    else "Подключите Яндекс, Spotify или VK в разделе «Ещё» — их вкладки появятся здесь.",
                 )
             }
         }
@@ -249,10 +257,3 @@ private fun WaveHero(playing: Boolean, title: String?, onPlay: () -> Unit, onOpe
         }
     }
 }
-
-private fun sourceCaption(status: com.mss.core.connectors.AuthStatus): String = when (status) {
-    com.mss.core.connectors.AuthStatus.CONNECTED -> "подключён"
-    com.mss.core.connectors.AuthStatus.EXPIRED -> "войти снова"
-    com.mss.core.connectors.AuthStatus.DISCONNECTED -> "не подключён"
-}
-
