@@ -294,10 +294,6 @@ fun MiniPlayer(
                         tint = if (isLiked) scheme.primary else scheme.onSurface.copy(alpha = 0.85f),
                     )
                 }
-                MiniPlayerMenu(track)
-                IconButton({ vm.player.prev() }) {
-                    Icon(Icons.Default.SkipPrevious, "Предыдущий", tint = scheme.onSurface.copy(alpha = 0.85f))
-                }
                 Box(
                     Modifier
                         .size(48.dp)
@@ -317,9 +313,6 @@ fun MiniPlayer(
                         )
                     }
                 }
-                IconButton({ vm.player.next() }) {
-                    Icon(Icons.Default.SkipNext, "Следующий", tint = scheme.onSurface.copy(alpha = 0.85f))
-                }
             }
             below()
         }
@@ -327,10 +320,10 @@ fun MiniPlayer(
 }
 
 @Composable
-private fun MiniPlayerMenu(track: UnifiedTrack) {
+private fun TrackMenuButton(track: UnifiedTrack) {
     var open by remember { mutableStateOf(false) }
-    IconButton({ open = true }, Modifier.size(36.dp)) {
-        Icon(Icons.Default.MoreVert, "Ещё", tint = MaterialTheme.colorScheme.onSurface.copy(alpha = 0.85f))
+    IconButton({ open = true }) {
+        Icon(Icons.Default.MoreVert, "Ещё", tint = MaterialTheme.colorScheme.onSurface)
     }
     if (open) TrackActionsSheet(track, onDismiss = { open = false })
 }
@@ -463,6 +456,7 @@ private fun NowPlayingBody(
                         { vm.toggleLike(track) },
                         { onArtist(track) },
                         Modifier.padding(top = 16.dp),
+                        menu = { TrackMenuButton(track) },
                     )
                 }
                 if (showVisualizer) {
@@ -909,8 +903,9 @@ private fun TrackHeading(
     onLike: () -> Unit,
     onArtist: () -> Unit,
     modifier: Modifier = Modifier,
+    menu: @Composable () -> Unit = {},
 ) {
-    Row(modifier.fillMaxWidth(), verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+    Row(modifier.fillMaxWidth(), verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(4.dp)) {
         Column(Modifier.weight(1f)) {
             Text(title, style = MaterialTheme.typography.titleLarge, maxLines = 2, overflow = TextOverflow.Ellipsis)
             Text(
@@ -928,6 +923,7 @@ private fun TrackHeading(
                 tint = if (liked) MaterialTheme.colorScheme.primary else MaterialTheme.colorScheme.onSurface,
             )
         }
+        menu()
     }
 }
 

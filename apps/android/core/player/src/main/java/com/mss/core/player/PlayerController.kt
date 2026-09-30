@@ -105,6 +105,7 @@ class PlayerController @Inject constructor(
     /** Веб-плеер уже показывал наш трек: смена заголовка после этого — автоплей Spotify, а не запоздалый DOM. */
     private var sawOwnSpotifyTitle = false
     private var lastSpotifyPos = 0L
+    private var foreignTitleTicks = 0
 
     init {
         listOf(exoA, exoB).forEach { player ->
@@ -286,6 +287,7 @@ class PlayerController @Inject constructor(
         playedMs = 0
         preloadedNext = false
         lastSpotifyPos = 0
+        foreignTitleTicks = 0
         awaitingStart = false
         holdCommand()
         seekTarget = 0
@@ -434,11 +436,18 @@ class PlayerController @Inject constructor(
         val own = _state.value.current?.title?.let { spotifyTitleMatches(d.title, it) } ?: true
         if (own) {
             sawOwnSpotifyTitle = true
+            foreignTitleTicks = 0
             return false
         }
-        val switched = sawOwnSpotifyTitle && d.title.isNotBlank()
         val wrapped = dur > 0 && lastPos >= dur - 15_000 && d.positionMs < 5_000
-        return switched || wrapped
+        if (wrapped) return true
+        // Автоплей начинает новый трек с нуля; чужое название посреди трека — не переключение.
+        if (!sawOwnSpotifyTitle || d.title.isBlank() || d.positionMs >= AUTOPLAY_START_MS) {
+            foreignTitleTicks = 0
+            return false
+        }
+        foreignTitleTicks += 1
+        return foreignTitleTicks >= 2
     }
 
     private fun spotifyTitleMatches(dom: String, title: String): Boolean {
@@ -475,6 +484,7 @@ class PlayerController @Inject constructor(
         preloadedNext = false
         sawOwnSpotifyTitle = false
         lastSpotifyPos = 0
+        foreignTitleTicks = 0
         ensurePlaybackService()
         startTicker()
         if (!track.playable) {
@@ -745,5 +755,6 @@ class PlayerController @Inject constructor(
 
     private companion object {
         const val COMMAND_HOLD_MS = 1_500L
+        const val AUTOPLAY_START_MS = 10_000L
     }
 }

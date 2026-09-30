@@ -730,12 +730,17 @@ class SpotifyWebSession @Inject constructor(
             input.dispatchEvent(new Event('input', { bubbles: true }));
             input.dispatchEvent(new Event('change', { bubbles: true }));
           };
+          const barTitle = () => {
+            const bar = q('[data-testid="now-playing-bar"]') || q('footer');
+            const el = bar?.querySelector('[data-testid="context-item-info-title"]') || q('[data-testid="context-item-info-title"]');
+            return (el?.textContent || '').trim();
+          };
           const readState = () => {
             const button = q('[data-testid="control-button-playpause"]');
             const progress = q('[data-testid="playback-progressbar"] input[type="range"]');
             return {
               ready: !!button,
-              title: (q('[data-testid="context-item-info-title"]')?.textContent || '').trim(),
+              title: barTitle(),
               playing: isPauseLabel(button),
               ad: isAd(),
               positionMs: parseClock(q('[data-testid="playback-position"]')?.textContent),
@@ -812,7 +817,9 @@ class SpotifyWebSession @Inject constructor(
               const g = (s) => document.querySelector(s);
               const button = g('[data-testid="control-button-playpause"]');
               const progress = g('[data-testid="playback-progressbar"] input[type="range"]');
-              const title = (g('[data-testid="context-item-info-title"]')?.textContent || '').trim();
+              const bar = pick();
+              const titleEl = bar?.querySelector('[data-testid="context-item-info-title"]') || g('[data-testid="context-item-info-title"]');
+              const title = (titleEl?.textContent || '').trim();
               return {
                 ready: !!button,
                 title,
