@@ -423,7 +423,8 @@ object VkAuth {
         throw VkAuthException("VK не вернул токен сессии")
     }
 
-    private suspend fun upgradeKate(androidToken: String): VkTokenPair {
+    /** Подтверждает QR Kate токеном VK ID / официального Android: только токен Kate даёт доступ к audio.*. */
+    suspend fun upgradeKate(androidToken: String): VkTokenPair {
         val qr = startQr()
         if (qr.authCode.isBlank()) throw VkAuthException("VK не выдал код для обмена токена")
         postForm(

@@ -233,8 +233,11 @@ class MssViewModel @Inject constructor(
                 _tracks.value = spotify.savedTracks(40)
             }
             SourceId.VK -> {
-                _playlists.value = vk.listPlaylists()
-                _tracks.value = vk.savedTracks(40)
+                val tracks = runCatching { vk.savedTracks(40) }
+                val playlists = runCatching { vk.listPlaylists() }
+                _tracks.value = tracks.getOrDefault(emptyList())
+                _playlists.value = playlists.getOrDefault(emptyList())
+                (tracks.exceptionOrNull() ?: playlists.exceptionOrNull())?.let { throw it }
             }
         }
     }

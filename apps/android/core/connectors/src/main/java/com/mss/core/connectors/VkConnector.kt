@@ -22,6 +22,8 @@ import io.ktor.http.contentType
 import javax.inject.Inject
 import javax.inject.Singleton
 import kotlinx.coroutines.delay
+import kotlinx.coroutines.sync.Mutex
+import kotlinx.coroutines.sync.withLock
 import kotlinx.serialization.SerialName
 import kotlinx.serialization.Serializable
 import kotlinx.serialization.encodeToString
@@ -321,59 +323,97 @@ class VkConnector @Inject constructor(
     }
 
     private suspend fun call(method: String, params: Map<String, String>): JsonObject {
-        val t = loadTokens() ?: throw ConnectorException("Войдите во VK")
+        val response = invoke(method, params)
+        return if (response is JsonObject) response else JsonObject(mapOf("items" to response))
+    }
+
+    private suspend fun callArray(method: String, params: Map<String, String>): List<kotlinx.serialization.json.JsonElement> =
+        (invoke(method, params) as? JsonArray)?.toList() ?: emptyList()
+
+    /**
+     * Токен VK ID (или не обменянный при входе) даёт на audio.* «Invalid request» / отказ в доступе —
+     * тогда один раз меняем его на токен Kate и повторяем запрос.
+     */
+    private suspend fun invoke(method: String, params: Map<String, String>): kotlinx.serialization.json.JsonElement {
         var last: ConnectorException? = null
-        repeat(4) { attempt ->
-            delay(if (attempt == 0) 0 else 400L * attempt)
+        var upgraded = false
+        var attempt = 0
+        while (attempt < 4) {
+            val t = loadTokens() ?: throw ConnectorException("Войдите во VK")
+            throttle()
             val body = Parameters.build {
                 append("access_token", t.accessToken)
                 append("v", API_VERSION)
                 params.forEach { (k, v) -> if (v.isNotBlank()) append(k, v) }
             }
-            val res = http.post("https://api.vk.com/method/$method") {
-                header("User-Agent", KATE_UA)
-                header("X-Requested-With", "com.perm.kate_new_6")
-                contentType(ContentType.Application.FormUrlEncoded)
-                setBody(FormDataContent(body))
-            }
-            val text = res.bodyAsText()
-            val obj = json.parseToJsonElement(text).jsonObject
-            val err = obj["error"]?.jsonObject
-            if (err != null) {
-                val code = err["error_code"]?.jsonPrimitive?.intOrNull ?: 0
-                val msg = err["error_msg"]?.jsonPrimitive?.contentOrNull ?: "VK error"
-                if (code == 6 || code == 9) {
-                    last = ConnectorException(msg)
-                    return@repeat
+            val obj = try {
+                val res = http.post("https://api.vk.com/method/$method") {
+                    header("User-Agent", KATE_UA)
+                    header("X-Requested-With", "com.perm.kate_new_6")
+                    contentType(ContentType.Application.FormUrlEncoded)
+                    setBody(FormDataContent(body))
                 }
-                if (code == 5) {
+                json.parseToJsonElement(res.bodyAsText()).jsonObject
+            } catch (e: kotlinx.coroutines.CancellationException) {
+                throw e
+            } catch (e: Exception) {
+                last = ConnectorException("VK недоступен — проверьте интернет")
+                attempt++
+                delay(400L * attempt)
+                continue
+            }
+            val err = obj["error"]?.jsonObject
+            if (err == null) return obj["response"] ?: throw ConnectorException("Пустой ответ VK")
+            val code = err["error_code"]?.jsonPrimitive?.intOrNull ?: 0
+            val msg = err["error_msg"]?.jsonPrimitive?.contentOrNull.orEmpty()
+            when {
+                code == 6 || code == 9 || code == 10 -> {
+                    last = ConnectorException("VK: слишком много запросов, попробуйте позже")
+                    attempt++
+                    delay(400L * attempt)
+                }
+                code == 5 -> {
                     disconnect()
                     throw ConnectorException("Сессия VK истекла — войдите заново")
                 }
-                throw ConnectorException(msg)
+                code == 14 -> throw ConnectorException("VK запросил капчу — отключите VK в настройках и войдите снова")
+                method.startsWith("audio.") && code in AUDIO_DENIED_CODES -> {
+                    if (!upgraded && tryUpgradeKate(t)) {
+                        upgraded = true
+                        continue
+                    }
+                    throw ConnectorException("VK не даёт доступ к музыке с этим входом — отключите VK в настройках и войдите заново")
+                }
+                else -> throw ConnectorException(msg.ifBlank { "Ошибка VK $code" })
             }
-            val response = obj["response"] ?: throw ConnectorException("Пустой ответ VK")
-            return if (response is JsonObject) response else JsonObject(mapOf("items" to response))
         }
-        throw last ?: ConnectorException("VK API")
+        throw last ?: ConnectorException("VK не ответил")
     }
 
-    private suspend fun callArray(method: String, params: Map<String, String>): List<kotlinx.serialization.json.JsonElement> {
-        val t = loadTokens() ?: throw ConnectorException("Войдите во VK")
-        val body = Parameters.build {
-            append("access_token", t.accessToken)
-            append("v", API_VERSION)
-            params.forEach { (k, v) -> if (v.isNotBlank()) append(k, v) }
+    private val kateUpgradeMutex = Mutex()
+    @Volatile private var kateUpgradeFailedFor: String? = null
+
+    private suspend fun tryUpgradeKate(current: VkTokens): Boolean = kateUpgradeMutex.withLock {
+        val latest = loadTokens() ?: return@withLock false
+        if (latest.accessToken != current.accessToken) return@withLock true
+        if (kateUpgradeFailedFor == current.accessToken) return@withLock false
+        val pair = runCatching { VkAuth.upgradeKate(current.accessToken) }.getOrNull()
+        if (pair == null) {
+            kateUpgradeFailedFor = current.accessToken
+            return@withLock false
         }
-        val res = http.post("https://api.vk.com/method/$method") {
-            header("User-Agent", KATE_UA)
-            header("X-Requested-With", "com.perm.kate_new_6")
-            contentType(ContentType.Application.FormUrlEncoded)
-            setBody(FormDataContent(body))
-        }
-        val obj = json.parseToJsonElement(res.bodyAsText()).jsonObject
-        obj["error"]?.let { throw ConnectorException(it.toString()) }
-        return obj["response"]?.jsonArray?.toList() ?: emptyList()
+        saveTokens(VkTokens(pair.accessToken, pair.userId))
+        true
+    }
+
+    private val throttleMutex = Mutex()
+    private var lastCallAt = 0L
+
+    /** VK режет частые audio.* запросы с одного токена. */
+    private suspend fun throttle() = throttleMutex.withLock {
+        val wait = MIN_CALL_GAP_MS - (android.os.SystemClock.elapsedRealtime() - lastCallAt)
+        if (wait > 0) delay(wait)
+        lastCallAt = android.os.SystemClock.elapsedRealtime()
     }
 
     private fun loadTokens(): VkTokens? {
@@ -391,6 +431,9 @@ class VkConnector @Inject constructor(
         private const val DEVICE_KEY = "vk_device_id"
         private const val API_VERSION = "5.131"
         private const val KATE_UA = VkAuth.KATE_UA
+        private const val MIN_CALL_GAP_MS = 350L
+        /** 8 — Invalid request, 15/201/1133 — нет доступа к аудио, 113 — неверный пользователь у чужого токена. */
+        private val AUDIO_DENIED_CODES = setOf(8, 15, 113, 201, 1133)
     }
 }
 
