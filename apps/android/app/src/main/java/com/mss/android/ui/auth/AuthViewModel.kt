@@ -3,6 +3,7 @@ package com.mss.android.ui.auth
 import androidx.lifecycle.ViewModel
 import androidx.lifecycle.viewModelScope
 import com.mss.android.data.MssRepository
+import com.mss.android.data.SessionLog
 import com.mss.core.network.EmailNotVerifiedException
 import dagger.hilt.android.lifecycle.HiltViewModel
 import javax.inject.Inject
@@ -15,6 +16,7 @@ import kotlinx.coroutines.launch
 @HiltViewModel
 class AuthViewModel @Inject constructor(
     private val repo: MssRepository,
+    private val sessionLog: SessionLog,
 ) : ViewModel() {
     val session = repo.session.stateIn(viewModelScope, SharingStarted.Eagerly, null)
     val apiBase = repo.apiBase.stateIn(viewModelScope, SharingStarted.Eagerly, "")
@@ -47,15 +49,21 @@ class AuthViewModel @Inject constructor(
                     val pending = repo.register(email, password)
                     _authVerify.value = true
                     _authInfo.value = "Код отправлен на ${pending.email}"
+                    sessionLog.info("auth", "register mss pending verify")
                 } else {
                     repo.login(email, password)
                     _authVerify.value = false
+                    sessionLog.info("auth", "login mss")
                 }
             }.onFailure { e ->
                 if (e is EmailNotVerifiedException) {
                     _authVerify.value = true
                     _authInfo.value = e.message
-                } else _error.value = e.message
+                    sessionLog.info("auth", "login mss needs verify")
+                } else {
+                    sessionLog.error("auth", e.message ?: "login failed")
+                    _error.value = e.message
+                }
             }
             _busy.value = false
         }
@@ -65,14 +73,21 @@ class AuthViewModel @Inject constructor(
         runCatching {
             repo.verifyEmail(email, code)
             _authVerify.value = false
-        }.onFailure { _error.value = it.message }
+            sessionLog.info("auth", "verify email")
+        }.onFailure {
+            sessionLog.error("auth", it.message ?: "verify failed")
+            _error.value = it.message
+        }
     }
 
     fun resendVerification(email: String, password: String) = viewModelScope.launch {
         runCatching {
             repo.resendVerification(email, password)
             _authInfo.value = "Новый код отправлен"
-        }.onFailure { _error.value = it.message }
+        }.onFailure {
+            sessionLog.error("auth", it.message ?: "resend failed")
+            _error.value = it.message
+        }
     }
 
     fun cancelVerify() {

@@ -1,5 +1,6 @@
 import { useEffect } from 'react';
 import { toast } from 'sonner';
+import { sessionEvent } from '@/lib/logger';
 import { applyEqualizer, getAnalyser, getAudioEngine } from '@/hooks/useAudioEngine';
 import { useSpotifyConnected, useVkConnected, useYandexConnected } from '@/lib/connectors';
 import {
@@ -226,6 +227,7 @@ async function startCurrent(playId: number): Promise<void> {
       await startSpotifyTrack(current, startAt, { fadeIn });
       if (usePlayerStore.getState().playId !== playId) return;
       consecutiveErrors = 0;
+      sessionEvent('info', 'player', `play ${current.source} ${current.id} «${current.title}»`);
       usePlayerStore.getState().pushHistory(current);
       notifyTrack(current);
       publishSnapshot();
@@ -256,6 +258,7 @@ async function startCurrent(playId: number): Promise<void> {
       return;
     }
     consecutiveErrors = 0;
+    sessionEvent('info', 'player', `play ${current.source} ${current.id} «${current.title}»`);
     void syncLobbyPlay(current, Math.round(startAt * 1000));
     usePlayerStore.getState().pushHistory(current);
     notifyTrack(current);
@@ -278,6 +281,12 @@ async function startCurrent(playId: number): Promise<void> {
 function handlePlaybackFailure(message: string, autoAdvance: boolean): void {
   if (/AbortError|interrupted by a new load/i.test(message)) return;
   consecutiveErrors += 1;
+  const failed = usePlayerStore.getState().current;
+  sessionEvent(
+    'error',
+    'player',
+    `fail ${failed?.source ?? '?'} ${failed?.id ?? ''} «${failed?.title ?? ''}» ${message} n=${consecutiveErrors}`,
+  );
   usePlaybackStore.setState({ error: message, loading: false, playing: false });
   toast.error(message || 'Не удалось воспроизвести трек');
   const { upNext, order, position, radio, playId } = usePlayerStore.getState();

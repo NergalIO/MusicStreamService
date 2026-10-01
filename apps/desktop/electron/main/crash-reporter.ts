@@ -2,7 +2,7 @@ import { app, BrowserWindow, crashReporter, dialog, ipcMain, shell } from 'elect
 import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
-import { log, logsDir, maskSecrets } from './logger.js';
+import { log, logsDir, maskSecrets, sessionTranscript } from './logger.js';
 
 /** Локальные дампы, без отправки на сервер и без токенов в extra. */
 export function initCrashReporter(): void {
@@ -68,7 +68,7 @@ export function buildCrashReport(): string {
       })
     : ['(дампов нет)'];
   return [
-    'MusicStreamService — отчёт о сбое',
+    'MusicStreamService — дамп сессии',
     `Версия: ${app.getVersion()}`,
     `Electron: ${process.versions.electron}`,
     `Chrome: ${process.versions.chrome}`,
@@ -79,6 +79,9 @@ export function buildCrashReport(): string {
     '',
     '--- Дампы ---',
     ...dumpLines,
+    '',
+    '--- Сессия ---',
+    sessionTranscript(),
     '',
     '--- Хвост лога ---',
     tailLogs(),
@@ -97,11 +100,11 @@ export function registerCrashIpc(): void {
     const stamp = new Date().toISOString().slice(0, 19).replace(/[:T]/g, '-');
     const result = win
       ? await dialog.showSaveDialog(win, {
-          defaultPath: path.join(app.getPath('documents'), `mss-report-${stamp}.txt`),
+          defaultPath: path.join(app.getPath('documents'), `mss-session-${stamp}.txt`),
           filters: [{ name: 'Текст', extensions: ['txt'] }],
         })
       : await dialog.showSaveDialog({
-          defaultPath: path.join(app.getPath('documents'), `mss-report-${stamp}.txt`),
+          defaultPath: path.join(app.getPath('documents'), `mss-session-${stamp}.txt`),
           filters: [{ name: 'Текст', extensions: ['txt'] }],
         });
     if (result.canceled || !result.filePath) return null;

@@ -11,6 +11,7 @@ import {
   type AuthSession,
   type RegisterPending,
 } from '@/lib/api';
+import { sessionEvent } from '@/lib/logger';
 import { getApiBaseUrl, setApiBaseUrl } from '@/lib/api-base';
 
 type Step = 'credentials' | 'verify';
@@ -61,7 +62,9 @@ export function LoginPage() {
         setInfo('Подтвердите email — введите код из письма');
         return;
       }
-      setError(e instanceof Error ? e.message : 'Ошибка входа');
+      const message = e instanceof Error ? e.message : 'Ошибка входа';
+      sessionEvent('error', 'auth', message);
+      setError(message);
     } finally {
       setSubmitting(false);
     }
@@ -76,7 +79,9 @@ export function LoginPage() {
       await completeLogin(session);
       nav('/');
     } catch (e) {
-      setError(e instanceof Error ? e.message : 'Неверный код');
+      const message = e instanceof Error ? e.message : 'Неверный код';
+      sessionEvent('error', 'auth', message);
+      setError(message);
     } finally {
       setSubmitting(false);
     }

@@ -478,7 +478,7 @@ function AboutSection() {
 
   const exportReport = async () => {
     const saved = await window.electronAPI.system.exportReport();
-    if (saved) toast.success('Отчёт сохранён');
+    if (saved) toast.success('Сессия сохранена');
   };
 
   const updateSubtitle = (() => {
@@ -526,12 +526,12 @@ function AboutSection() {
               <FolderOpen size={14} /> Открыть папку
             </Button>
           </Row>
-          <Row title="Отчёт о сбое" subtitle="Дампы и хвост лога без токенов. Можно приложить к обращению">
+          <Row title="Выгрузить сессию" subtitle="Без паролей и токенов. Можно приложить к обращению.">
             <Button variant="ghost" size="sm" onClick={() => void window.electronAPI.system.openCrashes()}>
               Дампы
             </Button>
             <Button variant="secondary" size="sm" onClick={() => void exportReport()}>
-              Сохранить отчёт
+              Выгрузить сессию
             </Button>
           </Row>
         </>

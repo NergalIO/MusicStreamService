@@ -1,4 +1,5 @@
 import { apiUrl } from './api-base.js';
+import { sessionEvent } from './logger';
 
 export interface AuthSession {
   accessToken: string;
@@ -56,6 +57,7 @@ export async function postAuthJson<T>(path: string, body: unknown): Promise<T> {
 
 export async function completeLogin(session: AuthSession): Promise<void> {
   saveSession(session);
+  sessionEvent('info', 'auth', 'login mss');
   const deviceId = await window.electronAPI.getDeviceId();
   await apiFetch('/devices/register', {
     method: 'POST',
@@ -105,6 +107,7 @@ export function clearSession(): void {
   presenceToken = null;
   localStorage.removeItem('mss_session');
   void window.electronAPI?.presence?.disconnect();
+  sessionEvent('info', 'auth', 'logout mss');
 }
 
 export function currentAccessToken(): string | null {

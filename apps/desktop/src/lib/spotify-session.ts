@@ -1,5 +1,6 @@
 import { useQuery, useQueryClient } from '@tanstack/react-query';
 import { useEffect } from 'react';
+import { sessionEvent } from '@/lib/logger';
 import { SPOTIFY_WEB } from '@/lib/service-routes';
 
 const QUERY_KEY = ['spotify-session', 'loggedIn'] as const;
@@ -16,6 +17,7 @@ export function useSpotifySessionLoggedIn(): boolean {
       const was = queryClient.getQueryData<boolean>(QUERY_KEY);
       queryClient.setQueryData(QUERY_KEY, loggedIn);
       if (was === loggedIn) return;
+      sessionEvent('info', 'auth', loggedIn ? 'spotify connected' : 'spotify disconnected');
       void queryClient.invalidateQueries({ queryKey: ['connectors'] });
       if (loggedIn) void queryClient.invalidateQueries({ queryKey: ['spotify'] });
       else queryClient.removeQueries({ queryKey: ['spotify'] });

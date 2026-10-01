@@ -6,8 +6,10 @@ import androidx.lifecycle.viewModelScope
 import com.mss.android.data.AppUpdater
 import com.mss.android.data.ContentCache
 import com.mss.android.data.MssRepository
+import com.mss.android.data.SessionLog
 import com.mss.android.ui.navigation.parseMssLink
 import com.mss.core.connectors.AuthStatus
+import com.mss.core.connectors.ConnectorException
 import com.mss.core.connectors.SpotifyConnector
 import com.mss.core.connectors.SpotifyWebSession
 import com.mss.core.connectors.VkAuth
@@ -67,6 +69,7 @@ class MssViewModel @Inject constructor(
     private val presence: PresenceClient,
     private val contentCache: ContentCache,
     val updater: AppUpdater,
+    private val sessionLog: SessionLog,
 ) : ViewModel() {
     val session = repo.session.stateIn(viewModelScope, SharingStarted.Eagerly, null)
     val playerState = player.state.stateIn(viewModelScope, SharingStarted.Eagerly, player.state.value)
@@ -149,11 +152,22 @@ class MssViewModel @Inject constructor(
 
     init {
         refreshSources()
-        viewModelScope.launch { spotifyWeb.loggedIn.collect { refreshSources() } }
+        viewModelScope.launch {
+            var seen = false
+            spotifyWeb.loggedIn.collect { logged ->
+                if (seen) sessionLog.info("auth", if (logged) "spotify connected" else "spotify disconnected")
+                seen = true
+                refreshSources()
+            }
+        }
         player.onToggleLike = {
             player.state.value.current?.let { toggleLike(it) }
         }
-        player.onError = { _error.value = it }
+        player.onError = {
+            sessionLog.error("player", it)
+            _error.value = it
+        }
+        player.onSession = { level, category, message -> sessionLog.event(level, category, message) }
         viewModelScope.launch {
             combine(
                 player.state.map { it.current?.id }.distinctUntilChanged(),
@@ -190,12 +204,15 @@ class MssViewModel @Inject constructor(
                     val pending = repo.register(email, password)
                     _authVerify.value = true
                     _authInfo.value = "Код отправлен на ${pending.email}"
+                    sessionLog.info("auth", "register mss pending verify")
                 } else {
                     repo.login(email, password)
                     _authVerify.value = false
+                    sessionLog.info("auth", "login mss")
                     loadLikesIds()
                 }
             }.onFailure { e ->
+                sessionLog.error("auth", e.message ?: "login failed")
                 _error.value = e.message
             }
         }
@@ -204,6 +221,7 @@ class MssViewModel @Inject constructor(
     fun verifyEmail(email: String, code: String) = launch {
         repo.verifyEmail(email, code)
         _authVerify.value = false
+        sessionLog.info("auth", "verify email")
     }
 
     fun resendVerification(email: String, password: String) = launch {
@@ -216,7 +234,10 @@ class MssViewModel @Inject constructor(
         _authInfo.value = null
     }
 
-    fun logout() = viewModelScope.launch { repo.logout() }
+    fun logout() = viewModelScope.launch {
+        repo.logout()
+        sessionLog.info("auth", "logout mss")
+    }
 
     fun loadHome() = launch {
         when (_homeSource.value) {
@@ -833,9 +854,13 @@ class MssViewModel @Inject constructor(
         yandexLoginJob = viewModelScope.launch {
             runCatching {
                 yandex.login { _yandexPrompt.value = it }
+                sessionLog.info("auth", "yandex connected")
                 refreshSources()
                 loadHome()
-            }.onFailure { _error.value = it.message }
+            }.onFailure {
+                sessionLog.error("auth", it.message ?: "yandex connect failed")
+                _error.value = it.message
+            }
             _yandexPrompt.value = null
         }
     }
@@ -845,7 +870,10 @@ class MssViewModel @Inject constructor(
         _yandexPrompt.value = null
     }
 
-    fun showSpotifyLogin() = spotifyWeb.showLogin()
+    fun showSpotifyLogin() {
+        sessionLog.info("auth", "spotify login shown")
+        spotifyWeb.showLogin()
+    }
 
     fun openVkLogin() {
         vk.cancelLogin()
@@ -877,6 +905,7 @@ class MssViewModel @Inject constructor(
 
     fun submitVkSms(code: String) = launchVk {
         vk.confirmSms(code)
+        sessionLog.info("auth", "vk connected")
         _vkLogin.value = VkLoginUi()
         refreshSources()
         loadHome()
@@ -884,6 +913,7 @@ class MssViewModel @Inject constructor(
 
     fun submitVkPassword(username: String, password: String, code: String? = null, captchaKey: String? = null) = launchVk {
         vk.loginWithPassword(username, password, code, captchaKey)
+        sessionLog.info("auth", "vk connected")
         _vkLogin.value = VkLoginUi()
         refreshSources()
         loadHome()
@@ -894,6 +924,7 @@ class MssViewModel @Inject constructor(
         if (vkExchange?.isActive == true || _sources.value.vk != AuthStatus.DISCONNECTED) return
         vkExchange = launchVk {
             vk.completeWebLogin(url)
+            sessionLog.info("auth", "vk connected")
             _vkLogin.value = VkLoginUi()
             refreshSources()
             loadHome()
@@ -904,6 +935,7 @@ class MssViewModel @Inject constructor(
         return viewModelScope.launch {
             _vkLogin.value = _vkLogin.value.copy(busy = true, error = null)
             runCatching { block() }.onFailure { e ->
+                sessionLog.error("auth", e.message ?: "vk login failed")
                 val cur = _vkLogin.value
                 when (e) {
                     is VkAuthException -> {
@@ -1120,6 +1152,7 @@ class MssViewModel @Inject constructor(
             SourceId.VK -> vk.disconnect()
             else -> {}
         }
+        sessionLog.info("auth", "disconnect $source")
         refreshSources()
     }
 
@@ -1178,6 +1211,12 @@ class MssViewModel @Inject constructor(
             runCatching { block() }.onFailure { e ->
                 if (session.value?.accessToken == "preview") return@launch
                 _error.value = e.message
+                val category = when {
+                    e is ConnectorException -> "connector"
+                    looksLikeAuthError(e) -> "auth"
+                    else -> "app"
+                }
+                sessionLog.error(category, e.message ?: e.javaClass.simpleName)
                 // Коннектор мог сам сбросить протухшую сессию — иначе сервис остался бы «подключённым».
                 if (looksLikeAuthError(e)) refreshSources()
             }

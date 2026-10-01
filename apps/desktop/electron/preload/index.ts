@@ -150,6 +150,8 @@ const api = {
     version: () => ipcRenderer.invoke('system:version') as Promise<string>,
     openLogs: () => ipcRenderer.invoke('app:openLogs') as Promise<void>,
     log: (level: LogLevel, parts: string[]) => ipcRenderer.send('log:write', level, parts),
+    session: (level: string, category: string, message: string) =>
+      ipcRenderer.send('log:session', level, category, message),
     /** Диалог «Сохранить как»; возвращает путь или null, если пользователь отменил. */
     saveTextFile: (defaultName: string, content: string, filters?: { name: string; extensions: string[] }[]) =>
       ipcRenderer.invoke('system:saveTextFile', defaultName, content, filters) as Promise<string | null>,

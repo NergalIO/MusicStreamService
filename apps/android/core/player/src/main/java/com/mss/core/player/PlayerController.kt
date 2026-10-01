@@ -186,11 +186,18 @@ class PlayerController @Inject constructor(
 
     fun audioSessionId(): Int = active.audioSessionId
 
+    private fun session(level: String, category: String, message: String) {
+        onSession?.invoke(level, category, message)
+    }
+
     @Volatile
     var onToggleLike: (() -> Unit)? = null
 
     @Volatile
     var onError: ((String) -> Unit)? = null
+
+    @Volatile
+    var onSession: ((level: String, category: String, message: String) -> Unit)? = null
 
     fun setLiked(liked: Boolean) {
         if (_state.value.liked == liked) return
@@ -222,6 +229,7 @@ class PlayerController @Inject constructor(
         val repeat = if (radio && _state.value.repeat == RepeatMode.ALL) RepeatMode.OFF else _state.value.repeat
         _state.value = _state.value.copy(queue = queue.toList(), radio = radio, shuffle = shuffle, repeat = repeat)
         if (shuffle && !sameQueue) reorderQueue(shuffled = true)
+        session("info", "player", "queue ${queue.size} from=${index} radio=$radio")
         playCurrent(crossfade = false)
     }
 
@@ -313,6 +321,7 @@ class PlayerController @Inject constructor(
             active.pause()
         }
         _state.value = _state.value.copy(playing = false)
+        session("info", "player", "pause")
     }
 
     fun resume() {
@@ -325,11 +334,13 @@ class PlayerController @Inject constructor(
             active.play()
         }
         _state.value = _state.value.copy(playing = true)
+        session("info", "player", "resume")
     }
 
     fun next() {
         // Пропуск засчитываем только если очередь действительно сдвинулась.
         if (!canAdvance(auto = false)) return
+        session("info", "player", "next")
         recordPlay(false)
         advance(auto = false)
     }
@@ -613,6 +624,7 @@ class PlayerController @Inject constructor(
         val gen = ++playGen
         awaitingStart = true
         _state.value = _state.value.copy(current = track, queue = queue.toList(), index = index, playing = true)
+        session("info", "player", "play ${track.source} ${track.id} «${track.title}»")
         playedMs = 0
         lastTickPos = 0
         preloadedNext = false
@@ -676,6 +688,7 @@ class PlayerController @Inject constructor(
                             usingSpotify = false
                             restoreExoFocus()
                             _state.value = _state.value.copy(playing = false)
+                            session("error", "player", err.message ?: "Spotify play failed")
                             err.message?.let { onError?.invoke(it) }
                         }
                 }
@@ -699,6 +712,8 @@ class PlayerController @Inject constructor(
     private fun failPlayback(gen: Int) {
         if (gen != playGen) return
         consecutiveErrors += 1
+        val track = queue.getOrNull(index)
+        session("warn", "player", "fail ${track?.source} ${track?.id} «${track?.title}» n=$consecutiveErrors")
         // Повтор трека здесь не используем: битый трек иначе крутился бы бесконечно.
         if (consecutiveErrors < 5 && queue.size > 1 && canAdvance(auto = false)) {
             advance(auto = false)

@@ -3,6 +3,7 @@ import { useQuery, useQueryClient, type QueryClient } from '@tanstack/react-quer
 import { useEffect } from 'react';
 import { toast } from 'sonner';
 import { create } from 'zustand';
+import { sessionEvent } from '@/lib/logger';
 
 export interface ConnectorStatus {
   id: string;
@@ -89,12 +90,17 @@ function connectedToast(id: string): string {
 
 export async function connectSource(id: string, queryClient: QueryClient): Promise<void> {
   useConnectStore.setState({ connecting: id, prompt: null, loginPrompt: null });
+  sessionEvent('info', 'auth', `connect ${id}`);
   try {
     await window.electronAPI.connectors.connect(id);
+    sessionEvent('info', 'auth', `${id} connected`);
     toast.success(connectedToast(id));
   } catch (e) {
     const message = e instanceof Error ? e.message.replace(/^Error invoking remote method '[^']+': (Error: )?/, '') : '';
-    if (!/abort|отмен/i.test(message)) toast.error(message || 'Не удалось подключиться');
+    if (!/abort|отмен/i.test(message)) {
+      sessionEvent('error', 'connector', message || `connect ${id} failed`);
+      toast.error(message || 'Не удалось подключиться');
+    }
   } finally {
     useConnectStore.setState({ connecting: null, prompt: null, loginPrompt: null });
     await queryClient.invalidateQueries({ queryKey: ['connectors'] });
@@ -114,6 +120,7 @@ export async function replyVkLogin(reply: Parameters<typeof window.electronAPI.c
 
 /** Единая точка отключения: сервис, его кеш запросов и состояние «подключено» расходиться не должны. */
 export async function disconnectSource(id: string, queryClient: QueryClient): Promise<void> {
+  sessionEvent('info', 'auth', `disconnect ${id}`);
   if (id === 'spotify') {
     await window.electronAPI.spotifySession.logout();
   } else {

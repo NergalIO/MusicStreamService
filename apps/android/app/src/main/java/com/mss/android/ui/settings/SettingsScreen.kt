@@ -47,6 +47,7 @@ fun SettingsScreen(vm: SettingsViewModel = hiltViewModel()) {
     val cache by vm.cache.collectAsState()
     val update by vm.updater.state.collectAsState()
     val autoUpdate by vm.autoUpdate.collectAsState()
+    val shareError by vm.shareError.collectAsState()
     var api by remember { mutableStateOf(url) }
     LaunchedEffect(url) { api = url }
     LaunchedEffect(Unit) { vm.refreshCache() }
@@ -132,6 +133,14 @@ fun SettingsScreen(vm: SettingsViewModel = hiltViewModel()) {
             }
             SettingsRow("Проверять при запуске", "Предлагать установить новую версию") {
                 Switch(autoUpdate, { vm.setAutoUpdate(it) })
+            }
+        }
+        SettingsSection(
+            "Диагностика",
+            shareError ?: "Без паролей и токенов. Можно приложить к обращению.",
+        ) {
+            SettingsRow("Сессия", "Лента действий и последний сбой") {
+                OutlinedButton({ vm.shareSession() }) { Text("Поделиться сессией") }
             }
         }
     }
