@@ -1,16 +1,26 @@
 import fs from 'node:fs/promises';
 import path from 'node:path';
-import { GetObjectCommand, PutObjectCommand, S3Client } from '@aws-sdk/client-s3';
+import { DeleteObjectCommand, GetObjectCommand, PutObjectCommand, S3Client } from '@aws-sdk/client-s3';
 import { fromRoot } from './env.js';
 
 const backend = process.env.STORAGE_BACKEND ?? 'local';
 const localRoot = fromRoot(process.env.LOCAL_STORAGE_PATH ?? './data/object-store');
+const useSsl = process.env.MINIO_USE_SSL === 'true';
+const host = process.env.MINIO_ENDPOINT ?? 'localhost';
+const port = Number(process.env.MINIO_PORT ?? 9000);
+const region = process.env.MINIO_REGION ?? 'us-east-1';
+
+function endpointUrl(): string {
+  const scheme = useSsl ? 'https' : 'http';
+  if ((useSsl && port === 443) || (!useSsl && port === 80)) return `${scheme}://${host}`;
+  return `${scheme}://${host}:${port}`;
+}
 
 const s3 =
   backend === 's3'
     ? new S3Client({
-        region: 'us-east-1',
-        endpoint: `http://${process.env.MINIO_ENDPOINT ?? 'localhost'}:${process.env.MINIO_PORT ?? 9000}`,
+        region,
+        endpoint: endpointUrl(),
         forcePathStyle: true,
         credentials: {
           accessKeyId: process.env.MINIO_ACCESS_KEY ?? 'minio',
@@ -50,4 +60,12 @@ export async function putObject(
       ContentType: contentType,
     }),
   );
+}
+
+export async function deleteObject(bucket: string, key: string): Promise<void> {
+  if (backend === 'local') {
+    await fs.rm(path.join(localRoot, bucket, key), { force: true });
+    return;
+  }
+  await s3!.send(new DeleteObjectCommand({ Bucket: bucket, Key: key }));
 }

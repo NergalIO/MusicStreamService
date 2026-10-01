@@ -240,6 +240,10 @@ const api = {
       }>,
     bind: (trackId: string, path: string, contentHash: string) =>
       ipcRenderer.invoke('localTracks:bind', trackId, path, contentHash) as Promise<void>,
+    putToUrl: (filePath: string, url: string, headers: Record<string, string>, progressId?: string) =>
+      ipcRenderer.invoke('localTracks:putToUrl', filePath, url, headers, progressId) as Promise<void>,
+    onPutProgress: (cb: (p: { id: string; loaded: number; total: number }) => void) =>
+      subscribe('localTracks:putProgress', cb),
     resolvePlayUrl: (trackId: string) =>
       ipcRenderer.invoke('localTracks:resolvePlayUrl', trackId) as Promise<string | null>,
     getPathForFile: (file: File) => webUtils.getPathForFile(file),

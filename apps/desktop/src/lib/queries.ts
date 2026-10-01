@@ -24,7 +24,8 @@ export function useMyUploads() {
       (await apiFetch<{ items: LocalTrackDto[] }>('/me/uploads')).items.map((t) =>
         mapLocalTrack(t, { ownsLocal: true }),
       ),
-    refetchInterval: (query) => (query.state.data?.some((t) => t.status === 'processing') ? 3000 : false),
+    refetchInterval: (query) =>
+      query.state.data?.some((t) => t.status === 'processing' || t.status === 'uploading') ? 3000 : false,
   });
 }
 
@@ -172,7 +173,9 @@ export function useLocalLikedTracks() {
 export function useLocalTracks(limit = 30) {
   return useQuery({
     queryKey: ['tracks', limit],
-    queryFn: async (): Promise<UnifiedTrack[]> =>
+    queryFn: async () =>
       (await apiFetch<{ items: LocalTrackDto[] }>(`/tracks?limit=${limit}`)).items.map((t) => mapLocalTrack(t)),
+    refetchInterval: (query) =>
+      query.state.data?.some((t) => t.status === 'processing' || t.status === 'uploading') ? 3000 : false,
   });
 }

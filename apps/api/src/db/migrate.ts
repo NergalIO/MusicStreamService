@@ -151,6 +151,7 @@ CREATE INDEX IF NOT EXISTS listening_events_user_time_idx ON listening_events (u
 ALTER TABLE tracks ADD COLUMN IF NOT EXISTS content_hash VARCHAR(64);
 ALTER TABLE tracks ADD COLUMN IF NOT EXISTS size_bytes INTEGER;
 ALTER TABLE tracks ADD COLUMN IF NOT EXISTS cache_expires_at TIMESTAMPTZ;
+ALTER TABLE tracks ADD COLUMN IF NOT EXISTS storage_key_original TEXT;
 CREATE UNIQUE INDEX IF NOT EXISTS tracks_content_hash_uq ON tracks (content_hash) WHERE content_hash IS NOT NULL;
 
 CREATE TABLE IF NOT EXISTS track_holdings (

@@ -53,6 +53,7 @@ export const tracks = pgTable('tracks', {
   bitrateKbps: integer('bitrate_kbps'),
   mimeType: varchar('mime_type', { length: 100 }),
   storageKeyMaster: text('storage_key_master'),
+  storageKeyOriginal: text('storage_key_original'),
   coverStorageKey: text('cover_storage_key'),
   uploadedBy: uuid('uploaded_by').references(() => users.id),
   originalFilename: text('original_filename'),

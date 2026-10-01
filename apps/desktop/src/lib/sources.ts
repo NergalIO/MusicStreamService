@@ -1,5 +1,6 @@
 import type { PlaylistEntryDto, SourceId, TrackAvailability, UnifiedTrack } from '@mss/shared';
 import { apiMediaUrl } from '@/lib/api-base';
+import { cachedCloudUrls, rememberCloudUrls } from '@/lib/cloud-urls';
 
 export type SourceFilterId = SourceId | 'all';
 
@@ -36,10 +37,14 @@ export interface LocalTrackDto {
   availability?: TrackAvailability;
   streamUrl?: string | null;
   userHolds?: boolean;
+  cloudPlayUrl?: string | null;
+  cloudDownloadUrl?: string | null;
+  cloudUrlExpiresAt?: string | null;
 }
 
 const LOCAL_STATUS_REASON: Record<string, string> = {
   processing: 'Трек ещё обрабатывается',
+  uploading: 'Файл загружается в облако',
   failed: 'Не удалось обработать файл',
   registered: 'Нет активных источников',
 };
@@ -66,6 +71,8 @@ export function mapLocalTrack(
     t.status === 'ready';
   const unplayableReason =
     playable ? undefined : LOCAL_STATUS_REASON[t.status] ?? 'Нет активных источников';
+  rememberCloudUrls(t.id, t);
+  const cached = cachedCloudUrls(t.id);
   return {
     source: 'local',
     status: t.status,
@@ -82,6 +89,9 @@ export function mapLocalTrack(
     playable,
     unplayableReason,
     streamUrl: t.streamUrl ?? apiMediaUrl(`/stream/${t.id}`),
+    cloudPlayUrl: t.cloudPlayUrl ?? cached?.cloudPlayUrl,
+    cloudDownloadUrl: t.cloudDownloadUrl ?? cached?.cloudDownloadUrl,
+    cloudUrlExpiresAt: t.cloudUrlExpiresAt ?? cached?.cloudUrlExpiresAt,
   };
 }
 

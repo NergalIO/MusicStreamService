@@ -23,6 +23,8 @@ const ALLOWED_SUFFIXES = [
   'sndcdn.com',
   'ytimg.com',
   'googleusercontent.com',
+  'storage.beget.cloud',
+  'beget.cloud',
 ];
 
 function isPrivateHost(host: string): boolean {

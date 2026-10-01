@@ -4,6 +4,7 @@ import android.net.Uri
 import com.mss.core.connectors.AuthStatus
 import com.mss.core.connectors.ConnectorRegistry
 import com.mss.core.datastore.MssPreferences
+import com.mss.core.localtracks.CloudUrlStore
 import com.mss.core.localtracks.LocalTrackStore
 import com.mss.core.model.AuthSession
 import com.mss.core.model.CatalogArtistDto
@@ -13,9 +14,12 @@ import com.mss.core.model.LocalHolding
 import com.mss.core.model.PlaylistDto
 import com.mss.core.model.RegisterPending
 import com.mss.core.model.SourceId
+import com.mss.core.model.TrackDto
 import com.mss.core.model.UnifiedPlaylist
 import com.mss.core.model.UnifiedTrack
 import com.mss.core.model.UserSubscriptionDto
+import com.mss.core.model.audioContentType
+import com.mss.core.model.freshCloudUrl
 import com.mss.core.model.toUnifiedPlaylist
 import com.mss.core.model.toUnifiedTrack
 import com.mss.core.network.MssApiClient
@@ -30,6 +34,7 @@ class MssRepository @Inject constructor(
     private val connectors: ConnectorRegistry,
     private val presence: PresenceClient,
     private val localTracks: LocalTrackStore,
+    private val cloudUrls: CloudUrlStore,
 ) {
     val session = preferences.session
     val apiBase = preferences.apiBaseUrl
@@ -77,15 +82,10 @@ class MssRepository @Inject constructor(
 
     suspend fun setApiBase(url: String) = preferences.setApiBaseUrl(url)
 
-    suspend fun mssTracks(query: String = "", limit: Int = 50): List<UnifiedTrack> {
-        val base = preferences.getApiBaseUrl()
-        return api.searchTracks(query, limit).map { it.toUnifiedTrack(base) }
-    }
+    suspend fun mssTracks(query: String = "", limit: Int = 50): List<UnifiedTrack> =
+        api.searchTracks(query, limit).map { unify(it) }
 
-    suspend fun getTrack(id: String): UnifiedTrack {
-        val base = preferences.getApiBaseUrl()
-        return api.getTrack(id).toUnifiedTrack(base)
-    }
+    suspend fun getTrack(id: String): UnifiedTrack = unify(api.getTrack(id))
 
     suspend fun mssPlaylists(): List<UnifiedPlaylist> =
         api.listPlaylists().map { it.toUnifiedPlaylist() }
@@ -93,16 +93,12 @@ class MssRepository @Inject constructor(
     suspend fun createPlaylist(name: String) = api.createPlaylist(name).toUnifiedPlaylist()
 
     suspend fun playlistDetail(id: String): Pair<PlaylistDto, List<UnifiedTrack>> {
-        val base = preferences.getApiBaseUrl()
         val meta = api.getPlaylist(id)
-        val tracks = api.playlistTracks(id).mapNotNull { it.toUnifiedTrack(base) }
+        val tracks = api.playlistTracks(id).mapNotNull { it.toUnifiedTrack(preferences.getApiBaseUrl())?.let(cloudUrls::mergeAndRemember) }
         return meta to tracks
     }
 
-    suspend fun mssLikes(): List<UnifiedTrack> {
-        val base = preferences.getApiBaseUrl()
-        return api.likedTracks().map { it.toUnifiedTrack(base) }
-    }
+    suspend fun mssLikes(): List<UnifiedTrack> = api.likedTracks().map { unify(it) }
 
     suspend fun toggleLike(track: UnifiedTrack, liked: Boolean) {
         if (track.source == SourceId.LOCAL) {
@@ -112,10 +108,8 @@ class MssRepository @Inject constructor(
         }
     }
 
-    suspend fun playlistTracks(playlistId: String): List<UnifiedTrack> {
-        val base = preferences.getApiBaseUrl()
-        return api.playlistTracks(playlistId).mapNotNull { it.toUnifiedTrack(base) }
-    }
+    suspend fun playlistTracks(playlistId: String): List<UnifiedTrack> =
+        api.playlistTracks(playlistId).mapNotNull { it.toUnifiedTrack(preferences.getApiBaseUrl())?.let(cloudUrls::mergeAndRemember) }
 
     suspend fun searchAll(query: String, source: SourceId?, limit: Int = 30): List<UnifiedTrack> {
         preferences.addSearchQuery(query)
@@ -139,17 +133,11 @@ class MssRepository @Inject constructor(
 
     suspend fun subscription(): UserSubscriptionDto = api.subscription()
 
-    suspend fun uploads(): List<UnifiedTrack> {
-        val base = preferences.getApiBaseUrl()
-        return api.myUploads().map { it.toUnifiedTrack(base) }
-    }
+    suspend fun uploads(): List<UnifiedTrack> = api.myUploads().map { unify(it) }
 
     suspend fun artists(query: String = ""): List<CatalogArtistDto> = api.searchArtists(query)
 
-    suspend fun artistTracks(name: String): List<UnifiedTrack> {
-        val base = preferences.getApiBaseUrl()
-        return api.artistTracks(name).map { it.toUnifiedTrack(base) }
-    }
+    suspend fun artistTracks(name: String): List<UnifiedTrack> = api.artistTracks(name).map { unify(it) }
 
     suspend fun registerLocalFile(uri: Uri, title: String, artist: String): UnifiedTrack {
         localTracks.persistUri(uri)
@@ -157,8 +145,36 @@ class MssRepository @Inject constructor(
         val name = localTracks.displayName(uri)
         val dto = api.registerTrack(hash, title, artist, null, null, size, name)
         localTracks.put(LocalHolding(dto.id, uri.toString(), hash, name))
-        return dto.toUnifiedTrack(preferences.getApiBaseUrl())
+        val contentType = localTracks.mimeType(uri).ifBlank { audioContentType(name) }
+        val cloud = api.cloudUpload(dto.id, contentType)
+        if (!cloud.skipUpload) {
+            val url = cloud.uploadUrl ?: error("Сервер не выдал ссылку загрузки")
+            localTracks.openInputStream(uri).use { input ->
+                api.putToUrl(url, contentType, size, input)
+            }
+        }
+        val done: TrackDto = if (cloud.alreadyReady) {
+            dto.copy(
+                cloudPlayUrl = cloud.cloudPlayUrl ?: dto.cloudPlayUrl,
+                cloudDownloadUrl = cloud.cloudDownloadUrl ?: dto.cloudDownloadUrl,
+                cloudUrlExpiresAt = cloud.cloudUrlExpiresAt ?: dto.cloudUrlExpiresAt,
+                status = cloud.status ?: dto.status,
+                coverUrl = cloud.coverUrl ?: dto.coverUrl,
+            )
+        } else {
+            api.cloudComplete(dto.id)
+        }
+        return unify(done)
     }
+
+    suspend fun resolveCloudDownloadUrl(track: UnifiedTrack): String? {
+        freshCloudUrl(track.cloudDownloadUrl, track.cloudUrlExpiresAt)?.let { return it }
+        cloudUrls.downloadUrl(track.id)?.let { return it }
+        return runCatching { api.trackDownloadUrl(track.id) }.getOrNull()
+    }
+
+    private suspend fun unify(dto: TrackDto): UnifiedTrack =
+        cloudUrls.mergeAndRemember(dto.toUnifiedTrack(preferences.getApiBaseUrl()))
 
     suspend fun activatePromo(code: String) = api.activatePromo(code)
 

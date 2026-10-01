@@ -1065,15 +1065,21 @@ class MssViewModel @Inject constructor(
     }
 
     private suspend fun enqueueDownload(track: UnifiedTrack) {
-        if (track.source == SourceId.LOCAL) {
-            val sub = _subscription.value ?: runCatching { repo.subscription() }.getOrNull()
-            val max = sub?.features?.maxOfflineTracks
-            if (max != null && offline.listTrackIds().size >= max) {
-                error("Лимит офлайн-треков ($max)")
-            }
-        }
         when (track.source) {
-            SourceId.LOCAL -> downloads.enqueueOfflineMss(track)
+            SourceId.LOCAL -> {
+                val cloud = repo.resolveCloudDownloadUrl(track)
+                if (cloud != null) {
+                    val name = "${track.artist} - ${track.title}".replace(Regex("[^\\wа-яА-ЯёЁ .-]+"), "_")
+                    downloads.enqueue(cloud, "${name.take(80)}.bin", track)
+                    return
+                }
+                val sub = _subscription.value ?: runCatching { repo.subscription() }.getOrNull()
+                val max = sub?.features?.maxOfflineTracks
+                if (max != null && offline.listTrackIds().size >= max) {
+                    error("Лимит офлайн-треков ($max)")
+                }
+                downloads.enqueueOfflineMss(track)
+            }
             SourceId.YANDEX -> downloads.enqueueYandex(track)
             SourceId.VK -> {
                 val url = track.streamUrl?.takeIf { it.isNotBlank() } ?: vk.resolvePlaybackUrl(track)

@@ -68,13 +68,14 @@ export const config = {
   jwtSecret: process.env.JWT_SECRET ?? 'dev-secret-change-me',
   offlineHkdfSecret: process.env.OFFLINE_HKDF_SECRET ?? 'offline-dev-secret',
   redisUrl: process.env.REDIS_URL ?? 'redis://localhost:6379',
-  /** local — файлы на диске (без Docker MinIO); s3 — MinIO / совместимое S3 */
+  /** local — файлы на диске (без Docker MinIO); s3 — MinIO / Beget / совместимое S3 */
   storageBackend: (process.env.STORAGE_BACKEND ?? 'local') as 'local' | 's3',
   localStoragePath: fromRoot(process.env.LOCAL_STORAGE_PATH ?? './data/object-store'),
   minio: {
     endpoint: process.env.MINIO_ENDPOINT ?? 'localhost',
     port: Number(process.env.MINIO_PORT ?? 9000),
     useSsl: process.env.MINIO_USE_SSL === 'true',
+    region: process.env.MINIO_REGION ?? 'us-east-1',
     accessKey: process.env.MINIO_ACCESS_KEY ?? 'minio',
     secretKey: process.env.MINIO_SECRET_KEY ?? 'minio12345',
     bucketTracks: process.env.MINIO_BUCKET_TRACKS ?? 'tracks',

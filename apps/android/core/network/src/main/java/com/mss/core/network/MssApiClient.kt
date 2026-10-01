@@ -43,10 +43,18 @@ import io.ktor.http.isSuccess
 import io.ktor.serialization.kotlinx.json.json
 import javax.inject.Inject
 import javax.inject.Singleton
+import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.sync.Mutex
+import kotlinx.coroutines.withContext
 import kotlinx.coroutines.sync.withLock
 import kotlinx.serialization.Serializable
 import kotlinx.serialization.json.Json
+import okhttp3.MediaType.Companion.toMediaType
+import okhttp3.OkHttpClient
+import okhttp3.Request
+import okhttp3.RequestBody
+import okio.BufferedSink
+import okio.source
 
 @Singleton
 class MssApiClient @Inject constructor(
@@ -414,6 +422,47 @@ class MssApiClient @Inject constructor(
         if (!res.status.isSuccess()) throw ApiException(res.bodyAsText())
     }
 
+    suspend fun cloudUpload(trackId: String, contentType: String): CloudUploadResponse {
+        val res = authorizedPost("${apiBase()}/tracks/$trackId/cloud-upload", CloudUploadBody(contentType))
+        return json.decodeFromString(res.bodyAsText())
+    }
+
+    suspend fun cloudComplete(trackId: String): TrackDto {
+        val res = authorizedPost("${apiBase()}/tracks/$trackId/cloud-complete", EmptyBody())
+        return json.decodeFromString(res.bodyAsText())
+    }
+
+    suspend fun putToUrl(url: String, contentType: String, contentLength: Long, body: java.io.InputStream) {
+        withContext(Dispatchers.IO) {
+            val req = Request.Builder()
+                .url(url)
+                .put(StreamRequestBody(contentType.toMediaType(), contentLength, body))
+                .header("Content-Type", contentType)
+                .build()
+            val client = OkHttpClient.Builder()
+                .retryOnConnectionFailure(false)
+                .connectTimeout(30, java.util.concurrent.TimeUnit.SECONDS)
+                .writeTimeout(0, java.util.concurrent.TimeUnit.SECONDS)
+                .readTimeout(0, java.util.concurrent.TimeUnit.SECONDS)
+                .build()
+            client.newCall(req).execute().use { res ->
+                if (!res.isSuccessful) {
+                    throw ApiException(res.body?.string()?.ifBlank { null } ?: "Загрузка: HTTP ${res.code}")
+                }
+            }
+        }
+    }
+
+    suspend fun trackDownloadUrl(trackId: String): String {
+        val res = withAuth { token ->
+            http.get("${apiBase()}/tracks/$trackId/download") {
+                header(HttpHeaders.Authorization, "Bearer $token")
+                header(HttpHeaders.Accept, "application/json")
+            }
+        }
+        return json.decodeFromString<DownloadUrlBody>(res.bodyAsText()).url
+    }
+
     suspend fun siteDownloads(): SiteDownloads {
         val res = http.get("${apiBase()}/site/downloads")
         if (!res.status.isSuccess()) throw ApiException(res.bodyAsText())
@@ -472,6 +521,7 @@ class MssApiClient @Inject constructor(
     )
     @Serializable private data class ReorderBody(val entryIds: List<String>)
     @Serializable private data class EmptyBody(val ok: Boolean = true)
+    @Serializable private data class CloudUploadBody(val contentType: String)
     @Serializable private data class RegisterTrackBody(
         val contentHash: String,
         val title: String,
@@ -497,6 +547,7 @@ class MssApiClient @Inject constructor(
         val positionMs: Long? = null,
     )
     @Serializable private data class ArtistsResponse(val items: List<CatalogArtistDto> = emptyList())
+    @Serializable private data class DownloadUrlBody(val url: String)
 }
 
 @Serializable
@@ -525,3 +576,30 @@ data class SiteRelease(
 class ApiException(message: String) : Exception(message)
 
 class EmailNotVerifiedException(val email: String, message: String) : Exception(message)
+
+@Serializable
+data class CloudUploadResponse(
+    val skipUpload: Boolean = false,
+    val alreadyReady: Boolean = false,
+    val uploadUrl: String? = null,
+    val headers: Map<String, String>? = null,
+    val cloudPlayUrl: String? = null,
+    val cloudDownloadUrl: String? = null,
+    val cloudUrlExpiresAt: String? = null,
+    val status: String? = null,
+    val coverUrl: String? = null,
+    val title: String? = null,
+    val artist: String? = null,
+)
+
+private class StreamRequestBody(
+    private val media: okhttp3.MediaType,
+    private val length: Long,
+    private val input: java.io.InputStream,
+) : RequestBody() {
+    override fun contentType() = media
+    override fun contentLength() = length
+    override fun writeTo(sink: BufferedSink) {
+        input.source().use { source -> sink.writeAll(source) }
+    }
+}

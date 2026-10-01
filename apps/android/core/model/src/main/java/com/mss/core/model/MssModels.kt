@@ -61,6 +61,9 @@ data class TrackDto(
     val availability: String? = null,
     val userHolds: Boolean? = null,
     val loudnessLufs: Double? = null,
+    val cloudPlayUrl: String? = null,
+    val cloudDownloadUrl: String? = null,
+    val cloudUrlExpiresAt: String? = null,
 )
 
 @Serializable
@@ -118,6 +121,9 @@ data class PlaylistEntryDto(
     val availability: String? = null,
     val userHolds: Boolean? = null,
     val loudnessLufs: Double? = null,
+    val cloudPlayUrl: String? = null,
+    val cloudDownloadUrl: String? = null,
+    val cloudUrlExpiresAt: String? = null,
     val external: ExternalPlaylistRef? = null,
 )
 
@@ -143,6 +149,9 @@ data class UnifiedTrack(
     val availability: String? = null,
     val userHolds: Boolean? = null,
     val contentHash: String? = null,
+    val cloudPlayUrl: String? = null,
+    val cloudDownloadUrl: String? = null,
+    val cloudUrlExpiresAt: String? = null,
 )
 
 @Serializable
@@ -495,12 +504,15 @@ fun TrackDto.toUnifiedTrack(apiBase: String): UnifiedTrack {
         album = album,
         durationMs = durationMs,
         coverUrl = coverUrl,
-        playable = stream != null || userHolds == true,
+        playable = stream != null || userHolds == true || freshCloudUrl(cloudPlayUrl, cloudUrlExpiresAt) != null,
         streamUrl = stream,
         loudnessLufs = loudnessLufs,
         availability = availability,
         userHolds = userHolds,
         contentHash = contentHash,
+        cloudPlayUrl = cloudPlayUrl,
+        cloudDownloadUrl = cloudDownloadUrl,
+        cloudUrlExpiresAt = cloudUrlExpiresAt,
     )
 }
 
@@ -537,6 +549,9 @@ fun PlaylistEntryDto.toUnifiedTrack(apiBase: String): UnifiedTrack? {
         availability = availability,
         userHolds = userHolds,
         loudnessLufs = loudnessLufs,
+        cloudPlayUrl = cloudPlayUrl,
+        cloudDownloadUrl = cloudDownloadUrl,
+        cloudUrlExpiresAt = cloudUrlExpiresAt,
     ).toUnifiedTrack(apiBase)
 }
 
@@ -583,4 +598,21 @@ fun sourceFrom(raw: String?): SourceId = when (raw?.lowercase()) {
     "yandex" -> SourceId.YANDEX
     "vk" -> SourceId.VK
     else -> SourceId.LOCAL
+}
+
+fun freshCloudUrl(url: String?, expiresAt: String?, skewMs: Long = 60_000): String? {
+    if (url.isNullOrBlank() || expiresAt.isNullOrBlank()) return null
+    val t = runCatching { java.time.Instant.parse(expiresAt).toEpochMilli() }.getOrNull() ?: return null
+    return if (t > System.currentTimeMillis() + skewMs) url else null
+}
+
+fun audioContentType(filename: String): String = when (filename.substringAfterLast('.', "").lowercase()) {
+    "mp3" -> "audio/mpeg"
+    "flac" -> "audio/flac"
+    "m4a", "aac" -> "audio/mp4"
+    "ogg", "oga", "opus" -> "audio/ogg"
+    "wav" -> "audio/wav"
+    "webm" -> "audio/webm"
+    "aif", "aiff" -> "audio/aiff"
+    else -> "application/octet-stream"
 }

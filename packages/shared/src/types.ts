@@ -18,7 +18,7 @@ export type SourceId = 'local' | 'spotify' | 'yandex' | 'vk';
 
 export type ExternalSourceId = Exclude<SourceId, 'local'>;
 
-export type TrackStatus = 'processing' | 'ready' | 'failed' | 'registered' | 'cached';
+export type TrackStatus = 'processing' | 'ready' | 'failed' | 'registered' | 'cached' | 'uploading';
 
 export type TrackAvailability = 'cached' | 'online' | 'unavailable';
 
@@ -46,6 +46,11 @@ export interface TrackDto {
   availability?: TrackAvailability;
   /** Текущий пользователь держит трек — можно играть с локального файла. */
   userHolds?: boolean;
+  streamUrl?: string | null;
+  /** Прямая ссылка на master в облаке (presigned), пока не истекла. */
+  cloudPlayUrl?: string | null;
+  cloudDownloadUrl?: string | null;
+  cloudUrlExpiresAt?: string | null;
 }
 
 export interface PlaylistDto {
@@ -157,6 +162,10 @@ export interface UnifiedTrack {
   loudnessLufs?: number;
   /** Доступность MSS-трека на сервере (кэш / онлайн-источник / недоступно). */
   availability?: TrackAvailability;
+  streamUrl?: string;
+  cloudPlayUrl?: string;
+  cloudDownloadUrl?: string;
+  cloudUrlExpiresAt?: string;
 }
 
 export interface UnifiedArtist {

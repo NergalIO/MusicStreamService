@@ -1,6 +1,7 @@
 import type { Quality, UnifiedTrack } from '@mss/shared';
 import { loadSession } from '@/lib/api';
 import { apiMediaUrl } from '@/lib/api-base';
+import { freshCloudPlayUrl } from '@/lib/cloud-urls';
 import { downloadedFileUrl } from '@/store/downloads-store';
 
 export interface ResolvedStream {
@@ -10,7 +11,11 @@ export interface ResolvedStream {
   bitrate?: number;
 }
 
-type PlayableTrack = UnifiedTrack & { streamUrl?: string };
+type PlayableTrack = UnifiedTrack & {
+  streamUrl?: string;
+  cloudPlayUrl?: string;
+  cloudUrlExpiresAt?: string;
+};
 
 const CACHE_TTL_MS = 90_000;
 const cache = new Map<string, { at: number; value: Promise<ResolvedStream> }>();
@@ -37,6 +42,17 @@ async function resolveLocal(track: PlayableTrack): Promise<ResolvedStream> {
   }
   const localUrl = await window.electronAPI?.localTracks?.resolvePlayUrl(track.id).catch(() => null);
   if (localUrl) return { url: localUrl, preview: false };
+  const cloud = freshCloudPlayUrl(track);
+  if (cloud) {
+    const proxied = (() => {
+      try {
+        return new URL(cloud).protocol === 'https:' ? proxyUrl(cloud) : cloud;
+      } catch {
+        return proxyUrl(cloud);
+      }
+    })();
+    return { url: proxied, preview: false };
+  }
   return { url: track.streamUrl ?? apiMediaUrl(`/stream/${track.id}`), preview: false };
 }
 

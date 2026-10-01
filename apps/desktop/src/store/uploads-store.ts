@@ -1,6 +1,7 @@
 import { toast } from 'sonner';
 import { create } from 'zustand';
 import { apiFetch, currentAccessToken } from '@/lib/api';
+import { audioContentType, rememberCloudUrls } from '@/lib/cloud-urls';
 import { setTrackCover } from '@/lib/mss-library';
 import { formatTrackCount } from '@/lib/format';
 import { queryClient } from '@/lib/query-client';
@@ -11,7 +12,21 @@ const AUDIO_EXT = /\.(mp3|flac|m4a|aac|ogg|oga|opus|wav|wma|aiff?|ape|wv|webm)$/
 const MAX_BYTES = 500 * 1024 * 1024;
 const PARALLEL = 2;
 
-export type UploadStatus = 'queued' | 'hashing' | 'registering' | 'ready' | 'failed';
+export type UploadStatus =
+  | 'queued'
+  | 'hashing'
+  | 'registering'
+  | 'uploading'
+  | 'processing'
+  | 'ready'
+  | 'failed';
+
+type CloudUploadRes = {
+  skipUpload: boolean;
+  alreadyReady: boolean;
+  uploadUrl?: string;
+  headers?: Record<string, string>;
+} & Partial<LocalTrackDto>;
 
 export interface UploadItem {
   id: string;
@@ -80,20 +95,51 @@ async function registerPath(item: UploadItem, filePath: string): Promise<void> {
 
   await api.bind(track.id, prepared.path, prepared.contentHash);
 
-  const cover = prepared.coverJpeg;
-  if (cover?.byteLength && !track.coverUrl) {
+  const contentType = audioContentType(prepared.originalFilename);
+  patch(item.id, { status: 'uploading', progress: 0.65 });
+  const cloud = await apiFetch<CloudUploadRes>(`/tracks/${track.id}/cloud-upload`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ contentType }),
+  });
+
+  if (!cloud.skipUpload) {
+    if (!cloud.uploadUrl) throw new Error('Сервер не выдал ссылку загрузки');
+    if (!api.putToUrl) throw new Error('Загрузка в облако доступна только в приложении');
+    const offProgress = api.onPutProgress?.(({ id, loaded, total }) => {
+      if (id !== item.id || !total) return;
+      patch(item.id, { progress: 0.65 + 0.25 * (loaded / total) });
+    });
     try {
-      await setTrackCover(track.id, new Blob([cover], { type: 'image/jpeg' }));
+      await api.putToUrl(prepared.path, cloud.uploadUrl, cloud.headers ?? { 'Content-Type': contentType }, item.id);
+    } finally {
+      offProgress?.();
+    }
+  }
+
+  let done: LocalTrackDto = track;
+  if (cloud.alreadyReady) {
+    done = { ...track, ...cloud, id: track.id };
+  } else {
+    patch(item.id, { status: 'processing', progress: 0.95 });
+    done = await apiFetch<LocalTrackDto>(`/tracks/${track.id}/cloud-complete`, { method: 'POST' });
+  }
+  rememberCloudUrls(done.id, done);
+
+  const cover = prepared.coverJpeg;
+  if (cover?.byteLength && !done.coverUrl) {
+    try {
+      await setTrackCover(done.id, new Blob([cover], { type: 'image/jpeg' }));
     } catch {
       /* обложка необязательна */
     }
   }
 
   patch(item.id, {
-    status: 'ready',
+    status: done.status === 'ready' ? 'ready' : 'processing',
     progress: 1,
-    trackId: track.id,
-    title: `${track.artist} — ${track.title}`,
+    trackId: done.id,
+    title: `${done.artist} — ${done.title}`,
   });
 }
 
@@ -129,8 +175,17 @@ function pump(): void {
 
 function notifyIfDone(): void {
   const { items } = useUploadsStore.getState();
-  if (items.some((i) => i.status === 'queued' || i.status === 'hashing' || i.status === 'registering')) return;
-  const ok = items.filter((i) => i.status === 'ready').length;
+  if (
+    items.some(
+      (i) =>
+        i.status === 'queued' ||
+        i.status === 'hashing' ||
+        i.status === 'registering' ||
+        i.status === 'uploading',
+    )
+  )
+    return;
+  const ok = items.filter((i) => i.status === 'ready' || i.status === 'processing').length;
   const failed = items.filter((i) => i.status === 'failed').length;
   if (failed) toast.error(`Добавлено ${ok} из ${ok + failed}`);
   else if (ok) toast.success(`Добавлено ${formatTrackCount(ok)}`);
@@ -187,7 +242,9 @@ export const useUploadsStore = create<UploadsState>()((set) => ({
   },
 
   clearFinished: () =>
-    set((s) => ({ items: s.items.filter((i) => i.status !== 'ready' && i.status !== 'failed') })),
+    set((s) => ({
+      items: s.items.filter((i) => i.status !== 'ready' && i.status !== 'failed' && i.status !== 'processing'),
+    })),
 
   setCollapsed: (collapsed) => set({ collapsed }),
 }));

@@ -1,4 +1,5 @@
 ﻿import { createWriteStream } from 'node:fs';
+import { Readable } from 'node:stream';
 import fs from 'node:fs/promises';
 import path from 'node:path';
 import { pipeline } from 'node:stream/promises';
@@ -11,7 +12,7 @@ import type { TrackAvailability } from '@mss/shared';
 import { config } from '../config.js';
 import { db } from '../db/client.js';
 import { trackHoldings, tracks } from '../db/schema.js';
-import { deleteObject, getObjectFull, putObject } from '../lib/storage.js';
+import { deleteObject, getObjectFull, getObjectRange, headObject, presignGet, presignPut, putObject, CLOUD_GET_TTL_SEC } from '../lib/storage.js';
 import { transcodeQueue, type TranscodeJob } from '../lib/queue.js';
 import { getActiveSubscription } from '../services/subscription.js';
 import { appendToPlaylist, findOwnPlaylist } from './playlists.js';
@@ -46,11 +47,12 @@ export function tagsFromFilename(filename: string): { title: string; artist: str
 
 export type TrackRow = typeof tracks.$inferSelect;
 
-export function toTrackDto(t: TrackRow, availability?: TrackAvailability, opts?: { userHolds?: boolean }) {
+export async function toTrackDto(t: TrackRow, availability?: TrackAvailability, opts?: { userHolds?: boolean }) {
   const avail =
     availability ??
     (hasStreamableBytes(t) ? 'cached' : t.status === 'registered' || t.status === 'cached' ? 'unavailable' : 'unavailable');
   const canStream = avail === 'cached' || avail === 'online';
+  const cloud = await cloudUrls(t, canStream);
   return {
     id: t.id,
     title: t.title,
@@ -67,7 +69,30 @@ export function toTrackDto(t: TrackRow, availability?: TrackAvailability, opts?:
       ? `${config.publicUrl}/covers/${t.id}?v=${encodeURIComponent(t.coverStorageKey.split('/').pop()!.replace(/\.[^.]+$/, ''))}`
       : null,
     streamUrl: canStream ? `${config.publicUrl}/stream/${t.id}` : null,
+    ...cloud,
   };
+}
+
+async function cloudUrls(t: TrackRow, canStream: boolean) {
+  const expiresAt = new Date(Date.now() + CLOUD_GET_TTL_SEC * 1000).toISOString();
+  let cloudPlayUrl: string | null = null;
+  let cloudDownloadUrl: string | null = null;
+  if (canStream && t.storageKeyMaster) {
+    cloudPlayUrl = await presignGet(config.minio.bucketTracks, t.storageKeyMaster, {
+      contentType: t.mimeType ?? 'audio/ogg',
+    }).catch(() => null);
+  }
+  const downloadKey = t.storageKeyOriginal ?? t.storageKeyMaster;
+  if (downloadKey) {
+    const name = t.originalFilename?.replace(/[\r\n"]/g, '') || `${t.id}.ogg`;
+    cloudDownloadUrl = await presignGet(config.minio.bucketTracks, downloadKey, {
+      contentDisposition: `attachment; filename="${name}"`,
+    }).catch(() => null);
+  }
+  if (!cloudPlayUrl && !cloudDownloadUrl) {
+    return { cloudPlayUrl: null, cloudDownloadUrl: null, cloudUrlExpiresAt: null as string | null };
+  }
+  return { cloudPlayUrl, cloudDownloadUrl, cloudUrlExpiresAt: expiresAt };
 }
 
 export async function toTrackDtoWithAvailability(t: TrackRow) {
@@ -132,7 +157,7 @@ export async function trackRoutes(app: FastifyInstance) {
     const items = await Promise.all(
       rows.map(async (r) => {
         const avail = await computeAvailability(r);
-        return toTrackDto(r, avail, { userHolds: heldIds.has(r.id) });
+        return await toTrackDto(r, avail, { userHolds: heldIds.has(r.id) });
       }),
     );
     return { items };
@@ -168,7 +193,7 @@ export async function trackRoutes(app: FastifyInstance) {
     if (!t) return reply.notFound();
     const avail = await computeAvailability(t);
     const userHolds = req.userId ? (await heldTrackIdsForUser(req.userId, [id])).has(id) : false;
-    return toTrackDto(t, avail, { userHolds });
+    return await toTrackDto(t, avail, { userHolds });
   });
 
   app.post('/tracks/register', async (req, reply) => {
@@ -215,6 +240,82 @@ export async function trackRoutes(app: FastifyInstance) {
     if (playlistId) await appendToPlaylist(playlistId, trackId);
     const dto = await toTrackDtoWithAvailability(row);
     return reply.code(deduped ? 200 : 201).send(dto);
+  });
+
+  app.post('/tracks/:id/cloud-upload', async (req, reply) => {
+    await app.authenticate(req);
+    const { id } = req.params as { id: string };
+    const [t] = await db.select().from(tracks).where(eq(tracks.id, id)).limit(1);
+    if (!t) return reply.notFound();
+    if (!(await userOwnsTrack(req.userId!, id))) return reply.forbidden();
+
+    if (hasStreamableBytes(t) && t.storageKeyMaster) {
+      return { skipUpload: true, alreadyReady: true, ...(await toTrackDtoWithAvailability(t)) };
+    }
+    const originalKey = t.storageKeyOriginal ?? `tracks/${id}/original`;
+    const existingOriginal = await headObject(config.minio.bucketTracks, originalKey).catch(() => null);
+    if (existingOriginal && existingOriginal.size > 0) {
+      return { skipUpload: true, alreadyReady: false, ...(await toTrackDtoWithAvailability(t)) };
+    }
+
+    const body = (req.body ?? {}) as { contentType?: string };
+    const contentType = body.contentType?.trim() || 'application/octet-stream';
+    const uploadUrl = await presignPut(config.minio.bucketTracks, originalKey, contentType);
+    await db.update(tracks).set({ status: 'uploading', storageKeyOriginal: originalKey }).where(eq(tracks.id, id));
+    return {
+      skipUpload: false,
+      alreadyReady: false,
+      uploadUrl,
+      method: 'PUT' as const,
+      headers: { 'Content-Type': contentType },
+      key: originalKey,
+    };
+  });
+
+  app.post('/tracks/:id/cloud-complete', async (req, reply) => {
+    await app.authenticate(req);
+    const { id } = req.params as { id: string };
+    const [t] = await db.select().from(tracks).where(eq(tracks.id, id)).limit(1);
+    if (!t) return reply.notFound();
+    if (!(await userOwnsTrack(req.userId!, id))) return reply.forbidden();
+    const originalKey = t.storageKeyOriginal ?? `tracks/${id}/original`;
+    const head = await headObject(config.minio.bucketTracks, originalKey).catch(() => null);
+    if (!head || head.size <= 0) return reply.badRequest('Файл в облаке не найден — повторите загрузку');
+
+    await db
+      .update(tracks)
+      .set({
+        status: 'processing',
+        storageKeyOriginal: originalKey,
+        sizeBytes: head.size,
+        cacheExpiresAt: null,
+      })
+      .where(eq(tracks.id, id));
+
+    const fallback = tagsFromFilename(t.originalFilename || `${t.artist} - ${t.title}`);
+    await transcodeQueue.add('transcode', {
+      trackId: id,
+      originalKey,
+      fallback: { title: t.title || fallback.title, artist: t.artist || fallback.artist },
+    } satisfies TranscodeJob);
+    const [updated] = await db.select().from(tracks).where(eq(tracks.id, id)).limit(1);
+    return reply.code(202).send(await toTrackDtoWithAvailability(updated ?? t));
+  });
+
+  app.get('/tracks/:id/download', async (req, reply) => {
+    await app.authenticate(req);
+    const { id } = req.params as { id: string };
+    const [t] = await db.select().from(tracks).where(eq(tracks.id, id)).limit(1);
+    if (!t) return reply.notFound();
+    const key = t.storageKeyOriginal ?? t.storageKeyMaster;
+    if (!key) return reply.code(503).send({ message: 'Файл ещё не в облаке' });
+    const name = t.originalFilename?.replace(/[\r\n"]/g, '') || `${id}.ogg`;
+    const url = await presignGet(config.minio.bucketTracks, key, {
+      contentDisposition: `attachment; filename="${name}"`,
+    });
+    const accept = String(req.headers.accept ?? '');
+    if (accept.includes('application/json')) return { url };
+    return reply.redirect(url);
   });
 
   app.post('/tracks', async (req, reply) => {
@@ -319,10 +420,11 @@ export async function trackRoutes(app: FastifyInstance) {
 
     const remaining = await db.select().from(trackHoldings).where(eq(trackHoldings.trackId, id)).limit(1);
     const isEphemeral = t.cacheExpiresAt !== null;
-    if (!remaining.length && (t.status === 'registered' || isEphemeral)) {
+    if (!remaining.length && (t.status === 'registered' || t.status === 'uploading' || isEphemeral)) {
       await db.delete(tracks).where(eq(tracks.id, id));
       await Promise.all([
         t.storageKeyMaster && deleteObject(config.minio.bucketTracks, t.storageKeyMaster),
+        t.storageKeyOriginal && deleteObject(config.minio.bucketTracks, t.storageKeyOriginal),
         t.coverStorageKey && deleteObject(config.minio.bucketCovers, t.coverStorageKey),
       ]).catch((e) => req.log.warn({ err: e, trackId: id }, 'failed to delete track objects'));
     }
@@ -331,34 +433,42 @@ export async function trackRoutes(app: FastifyInstance) {
 
   app.get('/stream/:id', async (req, reply) => {
     const { id } = req.params as { id: string };
-    let t = await ensureTrackStreamable(id);
+    const t = await ensureTrackStreamable(id);
     if (!t?.storageKeyMaster) {
       return reply.code(503).send({ message: 'Трек недоступен — нет активных источников' });
     }
 
+    const head = await headObject(config.minio.bucketTracks, t.storageKeyMaster).catch(() => null);
+    if (!head) return reply.code(503).send({ message: 'Файл потока не найден' });
+    const total = head.size;
+    const mime = t.mimeType ?? head.contentType ?? 'audio/ogg';
     const range = req.headers.range;
-    const full = await getObjectFull(config.minio.bucketTracks, t.storageKeyMaster);
-    const total = full.length;
+    reply.header('Accept-Ranges', 'bytes');
+    reply.header('Content-Type', mime);
+
+    const sendRange = async (start: number, end: number, status: 200 | 206) => {
+      const { body, contentLength, totalSize } = await getObjectRange(
+        config.minio.bucketTracks,
+        t.storageKeyMaster!,
+        start,
+        end,
+      );
+      if (status === 206) {
+        reply.code(206).header('Content-Range', `bytes ${start}-${end}/${totalSize || total}`);
+      }
+      reply.header('Content-Length', contentLength);
+      return reply.send(Readable.from(body));
+    };
 
     if (!range) {
-      reply.header('Content-Type', t.mimeType ?? 'audio/ogg');
-      reply.header('Accept-Ranges', 'bytes');
-      reply.header('Content-Length', total);
-      return reply.send(full);
+      return sendRange(0, Math.max(0, total - 1), 200);
     }
-
     const m = /bytes=(\d+)-(\d*)/.exec(range);
     if (!m) return reply.code(416).send();
     const start = Number(m[1]);
     const end = m[2] ? Number(m[2]) : total - 1;
-    const chunk = full.subarray(start, end + 1);
-    reply
-      .code(206)
-      .header('Content-Range', `bytes ${start}-${end}/${total}`)
-      .header('Accept-Ranges', 'bytes')
-      .header('Content-Length', chunk.length)
-      .header('Content-Type', t.mimeType ?? 'audio/ogg')
-      .send(chunk);
+    if (start >= total || end < start) return reply.code(416).send();
+    return sendRange(start, Math.min(end, total - 1), 206);
   });
 
   app.get('/covers/:id', async (req, reply) => {

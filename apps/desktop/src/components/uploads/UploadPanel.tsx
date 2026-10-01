@@ -12,6 +12,10 @@ function statusText(item: UploadItem): string {
       return `Хеширование ${Math.round(item.progress * 100)}%`;
     case 'registering':
       return 'Регистрация в каталоге…';
+    case 'uploading':
+      return `Загрузка в облако ${Math.round(item.progress * 100)}%`;
+    case 'processing':
+      return 'На сервере: конвертация…';
     case 'ready':
       return item.title ?? 'Готово';
     case 'failed':
@@ -20,14 +24,16 @@ function statusText(item: UploadItem): string {
 }
 
 function StatusIcon({ status }: { status: UploadItem['status'] }) {
-  if (status === 'ready') return <CheckCircle2 size={16} className="text-emerald-400" />;
+  if (status === 'ready' || status === 'processing') return <CheckCircle2 size={16} className="text-emerald-400" />;
   if (status === 'failed') return <AlertCircle size={16} className="text-danger" />;
   return <Loader2 size={16} className={cn('text-primary', status !== 'queued' && 'animate-spin')} />;
 }
 
 export function UploadPanel() {
   const { items, collapsed, setCollapsed, clearFinished } = useUploadsStore();
-  const pending = items.filter((i) => i.status !== 'ready' && i.status !== 'failed').length;
+  const pending = items.filter(
+    (i) => i.status !== 'ready' && i.status !== 'failed' && i.status !== 'processing',
+  ).length;
   const failed = items.filter((i) => i.status === 'failed').length;
   const title = pending
     ? `Загрузка: осталось ${pending}`
@@ -75,7 +81,7 @@ export function UploadPanel() {
                     <div className={cn('truncate text-xs', item.status === 'failed' ? 'text-danger' : 'text-muted')}>
                       {statusText(item)}
                     </div>
-                    {(item.status === 'hashing' || item.status === 'registering') && (
+                    {(item.status === 'hashing' || item.status === 'registering' || item.status === 'uploading') && (
                       <div className="mt-1.5 h-1 overflow-hidden rounded-full bg-foreground/10">
                         <div
                           className="h-full rounded-full bg-primary transition-[width] duration-200"

@@ -1,6 +1,8 @@
 import type { DownloadRecord, UnifiedTrack } from '@mss/shared';
 import { toast } from 'sonner';
 import { create } from 'zustand';
+import { apiFetch } from '@/lib/api';
+import { freshCloudDownloadUrl } from '@/lib/cloud-urls';
 import { formatBytes, formatTrackCount } from '@/lib/format';
 import { undoableToast } from '@/lib/undo';
 import { compressionKbps, useSettingsStore } from '@/store/settings-store';
@@ -57,11 +59,26 @@ export function downloadKey(track: TrackRef): string {
 }
 
 export function canDownload(track: UnifiedTrack): boolean {
-  return (
-    track.playable &&
-    !!window.electronAPI &&
-    (track.source === 'yandex' || track.source === 'vk' || track.source === 'spotify')
-  );
+  if (!track.playable || !window.electronAPI) return false;
+  if (track.source === 'yandex' || track.source === 'vk' || track.source === 'spotify') return true;
+  if (track.source === 'local') {
+    return !!(
+      freshCloudDownloadUrl(track) ||
+      track.availability === 'cached' ||
+      track.availability === 'online'
+    );
+  }
+  return false;
+}
+
+async function resolveDownloadTrack(track: UnifiedTrack): Promise<UnifiedTrack> {
+  if (track.source !== 'local') return track;
+  const cached = freshCloudDownloadUrl(track);
+  if (cached) return { ...track, cloudDownloadUrl: cached };
+  const { url } = await apiFetch<{ url: string }>(`/tracks/${track.id}/download`, {
+    headers: { Accept: 'application/json' },
+  });
+  return { ...track, cloudDownloadUrl: url };
 }
 
 /** Файлы, удаление которых ещё можно отменить: из списка они уже скрыты, с диска — ещё нет. */
@@ -143,8 +160,9 @@ export const useDownloadsStore = create<DownloadsState>()((set, get) => ({
     set((s) => ({ active: { ...s.active, [key]: { received: 0, total: 0 } } }));
     try {
       const { downloadQuality, downloadCompression } = useSettingsStore.getState();
+      const toDownload = await resolveDownloadTrack(track);
       const record = await window.electronAPI.downloads.start(
-        track,
+        toDownload,
         downloadQuality,
         compressionKbps(downloadCompression),
       );

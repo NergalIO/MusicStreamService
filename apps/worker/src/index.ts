@@ -21,21 +21,27 @@ const coversBucket = process.env.MINIO_BUCKET_COVERS ?? 'covers';
 
 interface TranscodeJob {
   trackId: string;
-  inputPath: string;
+  inputPath?: string;
+  originalKey?: string;
   fallback?: { title: string; artist: string };
 }
 
-async function processJob({ trackId, inputPath, fallback }: TranscodeJob) {
-  const outDir = path.join(path.dirname(inputPath), `out-${trackId}`);
+async function processJob({ trackId, inputPath, originalKey, fallback }: TranscodeJob) {
+  const workRoot = await fs.mkdtemp(path.join(os.tmpdir(), 'mss-transcode-'));
+  const sourcePath = originalKey ? path.join(workRoot, 'original') : inputPath;
+  if (!sourcePath) throw new Error('Нет исходного файла для транскода');
+  if (originalKey) await downloadObject(bucket, originalKey, sourcePath);
+
+  const outDir = path.join(workRoot, `out-${trackId}`);
   await fs.mkdir(outDir, { recursive: true });
   const masterPath = path.join(outDir, 'master.ogg');
 
-  const meta = await parseFile(inputPath).catch(() => null);
+  const meta = await parseFile(sourcePath).catch(() => null);
 
   await runProcess(ffmpeg, [
     '-y',
     '-i',
-    inputPath,
+    sourcePath,
     '-map',
     '0:a:0',
     '-vn',
@@ -75,13 +81,15 @@ async function processJob({ trackId, inputPath, fallback }: TranscodeJob) {
     `UPDATE tracks SET
       title = $1, artist = $2, album = $3, duration_ms = $4,
       status = 'ready', codec = 'opus', bitrate_kbps = $5,
-      mime_type = 'audio/ogg', storage_key_master = $6, cover_storage_key = $7, loudness_lufs = $8
+      mime_type = 'audio/ogg', storage_key_master = $6,
+      cover_storage_key = COALESCE($7, cover_storage_key), loudness_lufs = $8,
+      cache_expires_at = NULL
     WHERE id = $9`,
     [title, artist, album, durationMs, bitrate, storageKey, coverKey, loudness, trackId],
   );
 
-  await fs.unlink(inputPath).catch(() => {});
-  await fs.rm(outDir, { recursive: true, force: true }).catch(() => {});
+  if (inputPath && !originalKey) await fs.unlink(inputPath).catch(() => {});
+  await fs.rm(workRoot, { recursive: true, force: true }).catch(() => {});
 }
 
 const worker = new Worker(

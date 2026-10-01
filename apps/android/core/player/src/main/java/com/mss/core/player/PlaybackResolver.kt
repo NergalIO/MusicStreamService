@@ -4,9 +4,11 @@ import android.net.Uri
 import com.mss.core.connectors.ConnectorRegistry
 import com.mss.core.connectors.SpotifyWebSession
 import com.mss.core.datastore.MssPreferences
+import com.mss.core.localtracks.CloudUrlStore
 import com.mss.core.localtracks.LocalTrackStore
 import com.mss.core.model.SourceId
 import com.mss.core.model.UnifiedTrack
+import com.mss.core.model.freshCloudUrl
 import com.mss.core.offline.OfflineStore
 import javax.inject.Inject
 import javax.inject.Singleton
@@ -22,6 +24,7 @@ class PlaybackResolver @Inject constructor(
     private val connectors: ConnectorRegistry,
     private val offline: OfflineStore,
     private val localTracks: LocalTrackStore,
+    private val cloudUrls: CloudUrlStore,
     private val spotifyWeb: SpotifyWebSession,
 ) {
     suspend fun resolve(track: UnifiedTrack): ResolvedPlayback {
@@ -47,6 +50,8 @@ class PlaybackResolver @Inject constructor(
                     return ResolvedPlayback.Url(Uri.fromFile(file).toString())
                 }
                 localTracks.get(track.id)?.let { return ResolvedPlayback.Url(it.uri) }
+                freshCloudUrl(track.cloudPlayUrl, track.cloudUrlExpiresAt)?.let { return ResolvedPlayback.Url(it) }
+                cloudUrls.playUrl(track.id)?.let { return ResolvedPlayback.Url(it) }
                 track.streamUrl?.let { return ResolvedPlayback.Url(it) }
                 val base = preferences.getApiBaseUrl()
                 return ResolvedPlayback.Url("$base/stream/${track.id}")

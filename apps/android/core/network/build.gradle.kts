@@ -25,6 +25,7 @@ dependencies {
     implementation(libs.ktor.client.content)
     implementation(libs.ktor.serialization.json)
     implementation(libs.ktor.client.websockets)
+    implementation(libs.okhttp)
     implementation(libs.kotlinx.serialization.json)
     implementation(libs.kotlinx.coroutines.android)
     implementation(libs.androidx.core.ktx)

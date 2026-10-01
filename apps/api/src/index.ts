@@ -11,6 +11,7 @@ import { authPlugin } from './plugins/auth.js';
 import { artistRoutes } from './routes/artists.js';
 import { authRoutes } from './routes/auth.js';
 import { likeRoutes } from './routes/likes.js';
+import { objectRoutes } from './routes/objects.js';
 import { playlistRoutes } from './routes/playlists.js';
 import { statsRoutes } from './routes/stats.js';
 import { subscriptionRoutes } from './routes/subscription.js';
@@ -52,6 +53,7 @@ const registerApi = async (scoped: FastifyInstance) => {
 
   await scoped.register(authRoutes);
   await scoped.register(trackRoutes);
+  await scoped.register(objectRoutes);
   await scoped.register(relayRoutes);
   await scoped.register(lobbyRoutes);
   await scoped.register(wsPresenceRoutes);

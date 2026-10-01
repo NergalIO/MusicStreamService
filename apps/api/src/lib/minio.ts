@@ -1,17 +1,19 @@
 import {
-  CreateBucketCommand,
   DeleteObjectCommand,
   GetObjectCommand,
   HeadBucketCommand,
+  HeadObjectCommand,
   PutObjectCommand,
   S3Client,
 } from '@aws-sdk/client-s3';
+import { getSignedUrl } from '@aws-sdk/s3-request-presigner';
 import { config } from '../config.js';
+import { s3EndpointUrl } from './s3-endpoint.js';
 
-const endpoint = `${config.minio.useSsl ? 'https' : 'http'}://${config.minio.endpoint}:${config.minio.port}`;
+const endpoint = s3EndpointUrl(config.minio.endpoint, config.minio.port, config.minio.useSsl);
 
 export const s3 = new S3Client({
-  region: 'us-east-1',
+  region: config.minio.region,
   endpoint,
   forcePathStyle: true,
   credentials: {
@@ -24,8 +26,11 @@ export async function ensureBuckets(): Promise<void> {
   for (const bucket of [config.minio.bucketTracks, config.minio.bucketCovers]) {
     try {
       await s3.send(new HeadBucketCommand({ Bucket: bucket }));
-    } catch {
-      await s3.send(new CreateBucketCommand({ Bucket: bucket }));
+    } catch (err) {
+      const message = err instanceof Error ? err.message : String(err);
+      throw new Error(
+        `S3-бакет «${bucket}» недоступен (${message}). Создайте его в панели Beget — CreateBucket через API не поддерживается.`,
+      );
     }
   }
 }
@@ -45,12 +50,17 @@ export async function deleteObject(bucket: string, key: string): Promise<void> {
   await s3.send(new DeleteObjectCommand({ Bucket: bucket, Key: key }));
 }
 
+export async function headObject(bucket: string, key: string): Promise<{ size: number; contentType?: string }> {
+  const res = await s3.send(new HeadObjectCommand({ Bucket: bucket, Key: key }));
+  return { size: res.ContentLength ?? 0, contentType: res.ContentType };
+}
+
 export async function getObjectRange(
   bucket: string,
   key: string,
   start: number,
   end: number,
-): Promise<{ body: AsyncIterable<Uint8Array>; contentLength: number; totalSize: number }> {
+): Promise<{ body: AsyncIterable<Uint8Array>; contentLength: number; totalSize: number; contentType?: string }> {
   const res = await s3.send(
     new GetObjectCommand({
       Bucket: bucket,
@@ -59,11 +69,12 @@ export async function getObjectRange(
     }),
   );
   const total = Number(res.ContentRange?.split('/')[1] ?? res.ContentLength ?? 0);
-  const len = end - start + 1;
+  const len = Number(res.ContentLength ?? end - start + 1);
   return {
     body: res.Body as AsyncIterable<Uint8Array>,
     contentLength: len,
     totalSize: total,
+    contentType: res.ContentType,
   };
 }
 
@@ -74,4 +85,35 @@ export async function getObjectFull(bucket: string, key: string): Promise<Buffer
     chunks.push(Buffer.from(chunk));
   }
   return Buffer.concat(chunks);
+}
+
+export async function presignPut(
+  bucket: string,
+  key: string,
+  expiresIn: number,
+  contentType?: string,
+): Promise<string> {
+  return getSignedUrl(
+    s3,
+    new PutObjectCommand({ Bucket: bucket, Key: key, ContentType: contentType }),
+    { expiresIn },
+  );
+}
+
+export async function presignGet(
+  bucket: string,
+  key: string,
+  expiresIn: number,
+  opts?: { contentDisposition?: string; contentType?: string },
+): Promise<string> {
+  return getSignedUrl(
+    s3,
+    new GetObjectCommand({
+      Bucket: bucket,
+      Key: key,
+      ResponseContentDisposition: opts?.contentDisposition,
+      ResponseContentType: opts?.contentType,
+    }),
+    { expiresIn },
+  );
 }

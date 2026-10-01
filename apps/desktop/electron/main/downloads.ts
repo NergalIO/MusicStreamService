@@ -266,12 +266,51 @@ async function findDownloadableCopy(track: UnifiedTrack): Promise<UnifiedTrack> 
   throw new Error('Не нашли этот трек в Яндекс Музыке и VK — Spotify не отдаёт файлы для скачивания');
 }
 
+function sniffAudioExt(buf: Buffer): { ext: string; codec: string } {
+  if (buf.length >= 4) {
+    const head = buf.toString('ascii', 0, 4);
+    if (head === 'fLaC') return { ext: '.flac', codec: 'flac' };
+    if (head === 'OggS') return { ext: '.ogg', codec: 'ogg' };
+    if (head === 'RIFF') return { ext: '.wav', codec: 'wav' };
+    if (buf[0] === 0x49 && buf[1] === 0x44 && buf[2] === 0x33) return { ext: '.mp3', codec: 'mp3' };
+    if (buf[0] === 0xff && (buf[1] & 0xe0) === 0xe0) return { ext: '.mp3', codec: 'mp3' };
+    if (buf.length >= 8 && buf.toString('ascii', 4, 8) === 'ftyp') return { ext: '.m4a', codec: 'aac' };
+  }
+  return { ext: '.bin', codec: 'bin' };
+}
+
 async function performDownload(track: UnifiedTrack, quality: Quality, compressKbps: number): Promise<DownloadRecord> {
   const key = downloadKey(track);
   throwIfCancelled(key);
   const controller = new AbortController();
   abortControllers.set(key, controller);
   try {
+    if (track.source === 'local') {
+      const url = track.cloudDownloadUrl;
+      if (!url) throw new Error('Нет ссылки на оригинал в облаке');
+      broadcast('downloads:progress', { key, received: 0, total: 0 } satisfies DownloadProgress);
+      const audio = await fetchWithProgress(url, key, controller.signal);
+      throwIfCancelled(key);
+      const sniffed = sniffAudioExt(audio);
+      const saved = await saveFile(
+        { data: audio, ext: sniffed.ext, codec: sniffed.codec },
+        sanitize(`${track.artist} - ${track.title}`),
+        undefined,
+        0,
+      );
+      throwIfCancelled(key);
+      const record: DownloadRecord = {
+        key,
+        ...saved,
+        downloadedAt: new Date().toISOString(),
+        track,
+      };
+      load().items[key] = record;
+      persist();
+      broadcast('downloads:changed');
+      return record;
+    }
+
     const source = track.source === 'spotify' ? await findDownloadableCopy(track) : track;
     throwIfCancelled(key);
     const connector = connectorRegistry.get(source.source);

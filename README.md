@@ -82,6 +82,8 @@ docker compose -f docker-compose.yml -f docker-compose.host-ports.yml up -d    #
 
 Образы **MinIO** на Docker Hub часто удалены или тянутся очень долго (застревание на большом слое после мелких — типично для медленной сети). **MinIO не нужен**, если в `.env` указано `STORAGE_BACKEND=local`.
 
+Прод-облако **Beget Object Storage**: `STORAGE_BACKEND=s3`, endpoint `s3.ru1.storage.beget.cloud`, region `ru1`, бакеты создаются в панели Beget. Ключи Access/Secret только в `.env` API и worker, не в клиентах.
+
 Если нужен именно S3/MinIO в Docker:
 
 ```bash

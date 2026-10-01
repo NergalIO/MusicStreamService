@@ -7,7 +7,8 @@ export const transcodeQueue = new Queue('track.transcode', {
 
 export interface TranscodeJob {
   trackId: string;
-  inputPath: string;
+  inputPath?: string;
+  originalKey?: string;
   /** Теги из имени файла — на случай, если в самом файле их нет. */
   fallback: { title: string; artist: string };
 }

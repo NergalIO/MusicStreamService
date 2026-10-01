@@ -80,6 +80,13 @@ class LocalTrackStore @Inject constructor(
         return uri.lastPathSegment ?: "audio"
     }
 
+    fun mimeType(uri: Uri): String =
+        context.contentResolver.getType(uri)?.takeIf { it.isNotBlank() && it != "application/octet-stream" }
+            ?: com.mss.core.model.audioContentType(displayName(uri))
+
+    fun openInputStream(uri: Uri): java.io.InputStream =
+        context.contentResolver.openInputStream(uri) ?: throw IllegalStateException("Не удалось прочитать файл")
+
     /** Текст рядом с файлом: `track.lrc` (с таймингами) или `track.txt`, как на десктопе. */
     suspend fun lyrics(trackId: String): TrackLyrics? = withContext(Dispatchers.IO) {
         val raw = get(trackId)?.uri ?: return@withContext null

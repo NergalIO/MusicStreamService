@@ -253,7 +253,7 @@ export async function playlistRoutes(app: FastifyInstance) {
       if (track) {
         const avail = await computeAvailability(track);
         items.push({
-          ...toTrackDto(track, avail, { userHolds: heldIds.has(track.id) }),
+          ...(await toTrackDto(track, avail, { userHolds: heldIds.has(track.id) })),
           entryId: entry.id,
           position: entry.position,
         } as PlaylistEntryDto);
