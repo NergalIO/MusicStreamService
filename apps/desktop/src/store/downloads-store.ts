@@ -1,4 +1,5 @@
-import type { DownloadRecord, UnifiedTrack } from '@mss/shared';
+import type { DownloadRecord, LyricsSidecar, TrackLyrics, UnifiedTrack } from '@mss/shared';
+import { lyricsToSidecar } from '@mss/shared';
 import { toast } from 'sonner';
 import { create } from 'zustand';
 import { apiFetch } from '@/lib/api';
@@ -82,6 +83,23 @@ async function resolveDownloadTrack(track: UnifiedTrack): Promise<UnifiedTrack> 
   return { ...track, cloudDownloadUrl: url };
 }
 
+async function lyricsForDownload(track: UnifiedTrack): Promise<LyricsSidecar | null> {
+  try {
+    let lyrics: TrackLyrics | null = null;
+    if (track.source === 'local') {
+      lyrics = (await window.electronAPI.lyrics?.get('local', track.id)) ?? null;
+      if (!lyrics?.lines.some((l) => l.text.trim())) {
+        lyrics = await apiFetch<TrackLyrics>(`/tracks/${track.id}/lyrics`).catch(() => null);
+      }
+    } else if (track.source === 'yandex' || track.source === 'spotify') {
+      lyrics = (await window.electronAPI.lyrics?.get(track.source, track.id)) ?? null;
+    }
+    return lyricsToSidecar(lyrics);
+  } catch {
+    return null;
+  }
+}
+
 /** Файлы, удаление которых ещё можно отменить: из списка они уже скрыты, с диска — ещё нет. */
 const pendingRemoval = new Set<string>();
 
@@ -161,11 +179,12 @@ export const useDownloadsStore = create<DownloadsState>()((set, get) => ({
     set((s) => ({ active: { ...s.active, [key]: { received: 0, total: 0 } } }));
     try {
       const { downloadQuality, downloadCompression } = useSettingsStore.getState();
-      const toDownload = await resolveDownloadTrack(track);
+      const [toDownload, lyrics] = await Promise.all([resolveDownloadTrack(track), lyricsForDownload(track)]);
       const record = await window.electronAPI.downloads.start(
         toDownload,
         downloadQuality,
         compressionKbps(downloadCompression),
+        lyrics,
       );
       set((s) => ({ items: { ...s.items, [key]: record } }));
       patchPanel(key, { status: 'ready', received: record.size, total: record.size });

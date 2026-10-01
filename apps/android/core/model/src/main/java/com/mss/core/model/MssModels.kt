@@ -602,6 +602,36 @@ fun parseLrc(lrc: String): List<LyricsLine> {
     return lines.sortedBy { it.timeMs }
 }
 
+fun lyricsToSidecar(lyrics: TrackLyrics?): Pair<String, String>? {
+    if (lyrics == null || lyrics.lines.none { it.text.isNotBlank() }) return null
+    return if (lyrics.synced && lyrics.lines.any { it.timeMs >= 0 }) {
+        val text = lyrics.lines.joinToString("\n") { line ->
+            val ms = line.timeMs.coerceAtLeast(0)
+            val m = ms / 60_000
+            val s = (ms % 60_000) / 1000.0
+            String.format(java.util.Locale.US, "[%02d:%05.2f]%s", m, s, line.text)
+        }
+        "lrc" to text
+    } else {
+        "txt" to lyrics.lines.joinToString("\n") { it.text }
+    }
+}
+
+fun lyricsFromSidecarFile(audioPath: String): TrackLyrics? {
+    val base = audioPath.substringBeforeLast('.')
+    val lrc = java.io.File("$base.lrc")
+    if (lrc.isFile) {
+        val lines = parseLrc(lrc.readText())
+        if (lines.isNotEmpty()) return TrackLyrics(synced = true, lines = lines)
+    }
+    val txt = java.io.File("$base.txt")
+    if (txt.isFile) {
+        val lines = txt.readText().split(Regex("\\r?\\n")).map { LyricsLine(-1, it) }
+        if (lines.any { it.text.isNotBlank() }) return TrackLyrics(synced = false, lines = lines)
+    }
+    return null
+}
+
 fun sourceFrom(raw: String?): SourceId = when (raw?.lowercase()) {
     "spotify" -> SourceId.SPOTIFY
     "yandex" -> SourceId.YANDEX

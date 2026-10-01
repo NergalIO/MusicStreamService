@@ -1018,9 +1018,10 @@ class MssViewModel @Inject constructor(
         _lyrics.value = LyricsUi(key = key, source = track.source, loading = true)
         viewModelScope.launch {
             val sidecar = if (track.source == SourceId.LOCAL) localTracks.lyrics(track.id) else null
-            val cached = if (sidecar == null) contentCache.lyrics(track.source, track.id) else null
+            val downloaded = sidecar ?: downloads.lyricsSidecar(track)
+            val cached = if (downloaded == null) contentCache.lyrics(track.source, track.id) else null
             val result = when {
-                sidecar != null -> Result.success(sidecar)
+                downloaded != null -> Result.success(downloaded)
                 cached != null -> Result.success(cached)
                 else -> runCatching {
                     when (track.source) {
@@ -1031,7 +1032,8 @@ class MssViewModel @Inject constructor(
                     }
                 }
             }
-            if (sidecar == null && cached == null) result.getOrNull()?.let { contentCache.putLyrics(track.source, track.id, it) }
+            if (downloaded == null && cached == null) result.getOrNull()?.let { contentCache.putLyrics(track.source, track.id, it) }
+            result.getOrNull()?.let { lyrics -> downloads.persistSidecar(track, lyrics) }
             if (_lyrics.value.key != key) return@launch
             _lyrics.value = result.fold(
                 onSuccess = { LyricsUi(key = key, source = track.source, data = it) },

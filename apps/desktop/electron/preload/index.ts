@@ -10,6 +10,7 @@ import type {
   HomeFeedSection,
   LoginPrompt,
   LoginReply,
+  LyricsSidecar,
   PlaybackHandle,
   PlaybackReport,
   PlaylistWithTracks,
@@ -278,8 +279,8 @@ const api = {
   },
   downloads: {
     list: () => ipcRenderer.invoke('downloads:list') as Promise<DownloadRecord[]>,
-    start: (track: UnifiedTrack, quality: Quality, compressKbps: number) =>
-      ipcRenderer.invoke('downloads:start', track, quality, compressKbps) as Promise<DownloadRecord>,
+    start: (track: UnifiedTrack, quality: Quality, compressKbps: number, lyrics?: LyricsSidecar | null) =>
+      ipcRenderer.invoke('downloads:start', track, quality, compressKbps, lyrics) as Promise<DownloadRecord>,
     compressAll: (kbps: number) =>
       ipcRenderer.invoke('downloads:compressAll', kbps) as Promise<{
         compressed: number;

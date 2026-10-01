@@ -2,10 +2,11 @@ import { app, BrowserWindow, dialog, ipcMain, net, shell } from 'electron';
 import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
-import type { DownloadProgress, DownloadRecord, Quality, UnifiedTrack } from '@mss/shared';
+import type { DownloadProgress, DownloadRecord, LyricsSidecar, Quality, UnifiedTrack } from '@mss/shared';
 import { compressToAac, isFfmpegAvailable, shouldCompress } from './audio-compress.js';
 import { flacMp4ToTaggedFlac, tagFlac, tagMp3, type AudioTags, type CoverImage } from './audio-tags.js';
 import { connectorRegistry } from './connectors.js';
+import { moveSidecarLyrics, removeSidecarLyrics, writeSidecarLyrics } from './lyrics-sidecar.js';
 import { materializeVkMp3, parseVkStreamTarget } from './vk-hls.js';
 
 const MAX_PARALLEL = 3;
@@ -279,7 +280,12 @@ function sniffAudioExt(buf: Buffer): { ext: string; codec: string } {
   return { ext: '.bin', codec: 'bin' };
 }
 
-async function performDownload(track: UnifiedTrack, quality: Quality, compressKbps: number): Promise<DownloadRecord> {
+async function performDownload(
+  track: UnifiedTrack,
+  quality: Quality,
+  compressKbps: number,
+  lyrics?: LyricsSidecar,
+): Promise<DownloadRecord> {
   const key = downloadKey(track);
   throwIfCancelled(key);
   const controller = new AbortController();
@@ -307,6 +313,7 @@ async function performDownload(track: UnifiedTrack, quality: Quality, compressKb
       };
       load().items[key] = record;
       persist();
+      await writeSidecarLyrics(saved.path, lyrics).catch((e) => console.warn('[downloads] lyrics sidecar', e));
       broadcast('downloads:changed');
       return record;
     }
@@ -345,6 +352,7 @@ async function performDownload(track: UnifiedTrack, quality: Quality, compressKb
     };
     load().items[key] = record;
     persist();
+    await writeSidecarLyrics(saved.path, lyrics).catch((e) => console.warn('[downloads] lyrics sidecar', e));
     broadcast('downloads:changed');
     return record;
   } catch (e) {
@@ -358,15 +366,23 @@ async function performDownload(track: UnifiedTrack, quality: Quality, compressKb
   }
 }
 
-function startDownload(track: UnifiedTrack, quality: Quality, compressKbps: number): Promise<DownloadRecord> {
+function startDownload(
+  track: UnifiedTrack,
+  quality: Quality,
+  compressKbps: number,
+  lyrics?: LyricsSidecar,
+): Promise<DownloadRecord> {
   const key = downloadKey(track);
   const existing = load().items[key];
-  if (existing && fs.existsSync(existing.path)) return Promise.resolve(existing);
+  if (existing && fs.existsSync(existing.path)) {
+    if (lyrics) void writeSidecarLyrics(existing.path, lyrics);
+    return Promise.resolve(existing);
+  }
   const pending = inFlight.get(key);
   if (pending) return pending;
   const job = withSlot(async () => {
     throwIfCancelled(key);
-    return performDownload(track, quality, compressKbps);
+    return performDownload(track, quality, compressKbps, lyrics);
   })
     .catch((e) => {
       if (e instanceof DownloadCancelledError) cancelled.delete(key);
@@ -400,6 +416,7 @@ async function compressExisting(kbps: number): Promise<CompressResult> {
           }
           load().items[record.key] = { ...current, ...saved };
           persist();
+          await moveSidecarLyrics(record.path, saved.path);
           await fs.promises.rm(record.path, { force: true }).catch(() => {});
           result.compressed++;
           result.savedBytes += Math.max(0, record.size - saved.size);
@@ -419,6 +436,7 @@ function removeDownload(key: string): void {
   const record = s.items[key];
   if (!record) return;
   fs.rmSync(record.path, { force: true });
+  removeSidecarLyrics(record.path);
   delete s.items[key];
   persist();
   broadcast('downloads:changed');
@@ -426,8 +444,10 @@ function removeDownload(key: string): void {
 
 export function registerDownloadsIpc(): void {
   ipcMain.handle('downloads:list', () => listDownloads());
-  ipcMain.handle('downloads:start', (_e, track: UnifiedTrack, quality: Quality, compressKbps: number) =>
-    startDownload(track, quality, compressKbps || 0),
+  ipcMain.handle(
+    'downloads:start',
+    (_e, track: UnifiedTrack, quality: Quality, compressKbps: number, lyrics?: LyricsSidecar) =>
+      startDownload(track, quality, compressKbps || 0, lyrics),
   );
   ipcMain.handle('downloads:compressAll', (_e, kbps: number) => compressExisting(kbps));
   ipcMain.handle('downloads:ffmpegAvailable', () => isFfmpegAvailable());

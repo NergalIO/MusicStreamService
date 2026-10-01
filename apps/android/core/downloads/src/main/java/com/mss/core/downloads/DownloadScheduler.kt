@@ -10,7 +10,10 @@ import com.mss.core.datastore.MssPreferences
 import com.mss.core.model.AlbumWithTracks
 import com.mss.core.model.DownloadRecord
 import com.mss.core.model.SourceId
+import com.mss.core.model.TrackLyrics
 import com.mss.core.model.UnifiedTrack
+import com.mss.core.model.lyricsFromSidecarFile
+import com.mss.core.model.lyricsToSidecar
 import com.mss.core.network.MssApiClient
 import com.mss.core.offline.OfflineStore
 import dagger.hilt.android.qualifiers.ApplicationContext
@@ -88,6 +91,7 @@ class DownloadScheduler @Inject constructor(
                         track = track,
                     ),
                 )
+                saveLyricsSidecar(offline.packageFile(track.id), track)
             }
             finish(key)
         }
@@ -133,6 +137,7 @@ class DownloadScheduler @Inject constructor(
                             track = track,
                         ),
                     )
+                    saveLyricsSidecar(file, track)
                     break
                 }
                 if (info.state.isFinished) break
@@ -156,11 +161,47 @@ class DownloadScheduler @Inject constructor(
     fun remove(key: String) {
         val rec = _records.value.find { it.key == key } ?: return
         File(rec.path).delete()
+        deleteSidecars(rec.path)
         if (rec.track.source == SourceId.LOCAL) {
             scope.launch { offline.remove(rec.track.id) }
         }
         _records.value = _records.value.filter { it.key != key }
         persist()
+    }
+
+    fun lyricsSidecar(track: UnifiedTrack): TrackLyrics? {
+        val rec = _records.value.find { it.key == keyOf(track) } ?: return null
+        return lyricsFromSidecarFile(rec.path)
+    }
+
+    fun persistSidecar(track: UnifiedTrack, lyrics: TrackLyrics) {
+        scope.launch {
+            val rec = _records.value.find { it.key == keyOf(track) } ?: return@launch
+            val sidecar = lyricsToSidecar(lyrics) ?: return@launch
+            val base = rec.path.substringBeforeLast('.')
+            File("$base.${sidecar.first}").writeText(sidecar.second)
+            File("$base.${if (sidecar.first == "lrc") "txt" else "lrc"}").delete()
+        }
+    }
+
+    private suspend fun saveLyricsSidecar(audio: File, track: UnifiedTrack) {
+        val lyrics = runCatching {
+            when (track.source) {
+                SourceId.LOCAL -> api.trackLyrics(track.id)
+                SourceId.YANDEX -> yandex.lyrics(track.id)
+                else -> null
+            }
+        }.getOrNull()
+        val sidecar = lyricsToSidecar(lyrics) ?: return
+        val base = audio.absolutePath.substringBeforeLast('.')
+        File("$base.${sidecar.first}").writeText(sidecar.second)
+        File("$base.${if (sidecar.first == "lrc") "txt" else "lrc"}").delete()
+    }
+
+    private fun deleteSidecars(audioPath: String) {
+        val base = audioPath.substringBeforeLast('.')
+        File("$base.lrc").delete()
+        File("$base.txt").delete()
     }
 
     private fun addRecord(record: DownloadRecord) {
