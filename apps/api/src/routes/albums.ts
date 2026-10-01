@@ -114,6 +114,7 @@ export async function albumRoutes(app: FastifyInstance) {
   app.get('/albums/:id', async (req, reply) => {
     await app.authenticate(req);
     const { id } = req.params as { id: string };
+    await collapseOwnAlbumDuplicates(req.userId!);
     const row = await findOwnAlbum(id, req.userId!);
     if (!row) return reply.notFound();
     return albumTracksDto(id, req.userId!, toAlbumDto(row, await countTracks(id)));
