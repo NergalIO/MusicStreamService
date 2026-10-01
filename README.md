@@ -6,7 +6,7 @@
 
 - Node.js 20+
 - pnpm 9+
-- Docker (PostgreSQL, Redis; **MinIO не обязателен** — см. ниже)
+- Docker (PostgreSQL, Redis; объектное хранилище — диск или S3, MinIO не обязателен)
 - FFmpeg в PATH (для worker)
 
 ## Установка на VPS (production)
@@ -67,28 +67,58 @@ pnpm --filter @mss/desktop dist
 
 ## Архитектура
 
-- `apps/api` — Fastify, JWT, треки, стрим, плейлисты, подписки
-- `apps/worker` — транскодинг Opus (BullMQ)
-- `apps/desktop` — Electron + React
+- `apps/api` — Fastify, JWT, каталог, стрим, плейлисты, подписки, presigned URL в S3
+- `apps/worker` — транскодинг Opus (BullMQ), выгрузка `master.ogg` в хранилище
+- `apps/desktop` / `apps/android` — клиенты: оригинал в облако (PUT), стрим с Beget или через `/stream`
 - `packages/*` — shared, mss-format, audio-engine, stream-connectors
 
-## Хранение файлов (MinIO и «зависший» docker pull)
+## Хранение файлов
 
-По умолчанию **`STORAGE_BACKEND=local`**: треки лежат в `./data/object-store`. Для разработки достаточно:
+Два режима, переключатель — `STORAGE_BACKEND` в корневом `.env` (его читают и API, и worker).
+
+### `local` (dev)
+
+Файлы на диске в `LOCAL_STORAGE_PATH` (по умолчанию `./data/object-store`). MinIO не нужен:
 
 ```bash
-docker compose -f docker-compose.yml -f docker-compose.host-ports.yml up -d    # postgres + redis на localhost
+docker compose -f docker-compose.yml -f docker-compose.host-ports.yml up -d    # postgres + redis
 ```
 
-Образы **MinIO** на Docker Hub часто удалены или тянутся очень долго (застревание на большом слое после мелких — типично для медленной сети). **MinIO не нужен**, если в `.env` указано `STORAGE_BACKEND=local`.
+### `s3` — Beget Object Storage (прод)
 
-Прод-облако **Beget Object Storage**: `STORAGE_BACKEND=s3`, endpoint `s3.ru1.storage.beget.cloud`, region `ru1`, бакеты создаются в панели Beget. Ключи Access/Secret только в `.env` API и worker, не в клиентах.
+Клиент грузит **оригинал** напрямую в бакет (presigned PUT). Worker кладёт туда же `master.ogg`. Стрим: сначала сохранённый presigned GET (пока не истёк, до ~6 суток), иначе `GET /stream/:id` через API. Тексты песен (`.lrc` / `.txt` рядом с файлом или теги) пишутся в тот же бакет `tracks` объектом `tracks/{id}/lyrics.lrc` или `.txt`.
 
-Если нужен именно S3/MinIO в Docker:
+Ключи Access/Secret **только** в `.env` API и worker, не в клиентах.
+
+В `.env`:
+
+```env
+STORAGE_BACKEND=s3
+MINIO_ENDPOINT=s3.ru1.storage.beget.cloud
+MINIO_PORT=443
+MINIO_USE_SSL=true
+MINIO_REGION=ru1
+MINIO_ACCESS_KEY=
+MINIO_SECRET_KEY=
+MINIO_BUCKET_TRACKS=tracks
+MINIO_BUCKET_COVERS=covers
+```
+
+Имена `MINIO_*` исторические: тот же клиент ходит и в MinIO, и в Beget.
+
+**В панели Beget** (API бакет не создаёт):
+
+1. Создайте приватные бакеты `tracks` и `covers` (или как в `MINIO_BUCKET_*`).
+2. CORS на бакете треков — только если ПК стримит **напрямую** с Beget: методы `GET`, `HEAD`; заголовок `Range`; origin Electron в dev (`http://localhost:…`). Android (ExoPlayer) CORS не использует. PUT оригинала идёт из Electron main / Android, без CORS. Тексты песен API пишет сам, отдельный CORS не нужен.
+3. Перезапустите API и worker после правки `.env`. Миграции (`pnpm db:migrate`) добавляют `storage_key_original` и `storage_key_lyrics`.
+
+### MinIO в Docker
+
+Образы MinIO с Docker Hub часто не тянутся. Если всё же нужен локальный S3:
 
 ```bash
 # в .env: STORAGE_BACKEND=s3
 docker compose --profile s3 up -d
 ```
 
-Если `docker pull minio/minio` не работает — оставайтесь на `local` или установите MinIO [с официального сайта](https://min.io/download) на Windows и укажите `MINIO_ENDPOINT=127.0.0.1`.
+Либо поставьте MinIO [с сайта](https://min.io/download) и укажите `MINIO_ENDPOINT=127.0.0.1`.
