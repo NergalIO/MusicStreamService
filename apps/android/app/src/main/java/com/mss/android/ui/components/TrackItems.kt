@@ -39,10 +39,8 @@ import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
-import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
-import androidx.compose.runtime.setValue
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.PaddingValues
 import androidx.compose.ui.Alignment
@@ -101,17 +99,17 @@ fun coverRequest(context: android.content.Context, url: String?): ImageRequest {
 @Composable
 fun Cover(url: String?, modifier: Modifier = Modifier.size(48.dp), corner: Dp = 10.dp) {
     val scheme = MaterialTheme.colorScheme
-    var failed by remember(url) { mutableStateOf(url.isNullOrBlank()) }
+    val failed = remember(url) { mutableStateOf(url.isNullOrBlank()) }
     Box(
         modifier.clip(RoundedCornerShape(corner)).background(scheme.onSurface.copy(alpha = 0.07f)),
         contentAlignment = Alignment.Center,
     ) {
-        if (!failed) {
+        if (!failed.value) {
             AsyncImage(
                 model = coverRequest(LocalContext.current, url),
                 contentDescription = null,
                 contentScale = ContentScale.Crop,
-                onError = { failed = true },
+                onError = { failed.value = true },
                 modifier = Modifier.matchParentSize(),
             )
         } else {
@@ -138,11 +136,16 @@ fun TrackRow(
     onToggleSelect: (() -> Unit)? = null,
     onLongClick: (() -> Unit)? = null,
 ) {
-    var menu by remember { mutableStateOf(false) }
+    val menu = remember { mutableStateOf(false) }
     val scheme = MaterialTheme.colorScheme
-    val rowClick: () -> Unit = {
-        if (selecting) onToggleSelect?.invoke() else onPlay()
+    fun onRowClick() {
+        if (selecting) {
+            onToggleSelect?.invoke()
+        } else {
+            onPlay()
+        }
     }
+    val longPress = onLongClick
     Row(
         Modifier
             .fillMaxWidth()
@@ -154,10 +157,10 @@ fun TrackRow(
                 },
             )
             .then(
-                if (onLongClick != null) {
-                    Modifier.combinedClickable(onClick = rowClick, onLongClick = onLongClick)
+                if (longPress != null) {
+                    Modifier.combinedClickable(onClick = { onRowClick() }, onLongClick = longPress)
                 } else {
-                    Modifier.clickable(onClick = rowClick)
+                    Modifier.clickable(onClick = { onRowClick() })
                 },
             )
             .padding(start = 8.dp, end = 4.dp, top = 8.dp, bottom = 8.dp),
@@ -204,26 +207,26 @@ fun TrackRow(
             }
             DownloadButton(track)
             val host = LocalTrackHost.current
-            IconButton(onClick = { menu = true }, modifier = Modifier.size(40.dp)) {
+            IconButton(onClick = { menu.value = true }, modifier = Modifier.size(40.dp)) {
                 Icon(Icons.Default.MoreVert, contentDescription = "Ещё", tint = scheme.onSurfaceVariant)
                 if (host != null) {
-                    if (menu) TrackActionsSheet(track, onDismiss = { menu = false })
+                    if (menu.value) TrackActionsSheet(track, onDismiss = { menu.value = false })
                     return@IconButton
                 }
-                DropdownMenu(menu, { menu = false }) {
+                DropdownMenu(menu.value, { menu.value = false }) {
                     DropdownMenuItem(
                         text = { Text(if (liked) "Убрать лайк" else "Лайк") },
-                        onClick = { menu = false; onLike() },
+                        onClick = { menu.value = false; onLike() },
                         leadingIcon = { Icon(if (liked) Icons.Default.Favorite else Icons.Default.FavoriteBorder, null) },
                     )
-                    DropdownMenuItem(text = { Text("Скачать") }, onClick = { menu = false; onDownload() }, leadingIcon = { Icon(Icons.Default.Download, null) })
-                    onQueue?.let { DropdownMenuItem(text = { Text("В очередь") }, onClick = { menu = false; it() }) }
-                    onSimilar?.let { DropdownMenuItem(text = { Text("Похожие") }, onClick = { menu = false; it() }) }
-                    onWave?.let { DropdownMenuItem(text = { Text("Волна по треку") }, onClick = { menu = false; it() }) }
+                    DropdownMenuItem(text = { Text("Скачать") }, onClick = { menu.value = false; onDownload() }, leadingIcon = { Icon(Icons.Default.Download, null) })
+                    onQueue?.let { DropdownMenuItem(text = { Text("В очередь") }, onClick = { menu.value = false; it() }) }
+                    onSimilar?.let { DropdownMenuItem(text = { Text("Похожие") }, onClick = { menu.value = false; it() }) }
+                    onWave?.let { DropdownMenuItem(text = { Text("Волна по треку") }, onClick = { menu.value = false; it() }) }
                     onSuggest?.let {
                         DropdownMenuItem(
                             text = { Text("Предложить") },
-                            onClick = { menu = false; it() },
+                            onClick = { menu.value = false; it() },
                             leadingIcon = { Icon(Icons.Default.Send, null) },
                         )
                     }
@@ -251,18 +254,18 @@ fun TrackList(
     header: LazyListScope.() -> Unit = {},
     modifier: Modifier = Modifier,
 ) {
-    var selected by remember { mutableStateOf(setOf<String>()) }
-    var confirmDelete by remember { mutableStateOf(false) }
-    val selecting = selected.isNotEmpty()
+    val selected = remember { mutableStateOf(emptySet<String>()) }
+    val confirmDelete = remember { mutableStateOf(false) }
+    val selecting = selected.value.isNotEmpty()
     fun keyOf(i: Int, t: UnifiedTrack) = "${t.source}:${t.id}:$i"
     LaunchedEffect(tracks) {
         val alive = tracks.mapIndexed { i, t -> keyOf(i, t) }.toSet()
-        selected = selected.filter { it in alive }.toSet()
+        selected.value = selected.value.filter { it in alive }.toSet()
     }
-    fun picked() = tracks.filterIndexed { i, t -> keyOf(i, t) in selected }
+    fun picked() = tracks.filterIndexed { i, t -> keyOf(i, t) in selected.value }
     fun clear() {
-        selected = emptySet()
-        confirmDelete = false
+        selected.value = emptySet()
+        confirmDelete.value = false
     }
     BackHandler(enabled = selecting) { clear() }
     Box(modifier.fillMaxSize()) {
@@ -281,13 +284,13 @@ fun TrackList(
                     onWave = onWave?.takeIf { track.source == SourceId.YANDEX }?.let { { it(track) } },
                     onSuggest = onSuggest?.let { { it(track) } },
                     active = currentKey == "${track.source}:${track.id}",
-                    selected = key in selected,
+                    selected = key in selected.value,
                     selecting = selecting,
                     onToggleSelect = {
-                        selected = if (key in selected) selected - key else selected + key
+                        selected.value = if (key in selected.value) selected.value - key else selected.value + key
                     },
                     onLongClick = if (selectable) ({
-                        selected = selected + key
+                        selected.value = selected.value + key
                     }) else null,
                 )
             }
@@ -318,7 +321,7 @@ fun TrackList(
                         clear()
                     }) { Icon(Icons.Default.Download, "Скачать") }
                     if (onDeleteMany != null) {
-                        IconButton({ confirmDelete = true }) {
+                        IconButton({ confirmDelete.value = true }) {
                             Icon(Icons.Default.Delete, "Удалить", tint = MaterialTheme.colorScheme.error)
                         }
                     }
@@ -328,10 +331,10 @@ fun TrackList(
             }
         }
     }
-    if (confirmDelete) {
+    if (confirmDelete.value) {
         val items = picked()
         AlertDialog(
-            onDismissRequest = { confirmDelete = false },
+            onDismissRequest = { confirmDelete.value = false },
             title = { Text(if (items.size == 1) "Удалить трек?" else "Удалить треки?") },
             text = {
                 Text(
@@ -345,7 +348,7 @@ fun TrackList(
                     clear()
                 }) { Text("Удалить", color = MaterialTheme.colorScheme.error) }
             },
-            dismissButton = { TextButton({ confirmDelete = false }) { Text("Отмена") } },
+            dismissButton = { TextButton({ confirmDelete.value = false }) { Text("Отмена") } },
         )
     }
 }
