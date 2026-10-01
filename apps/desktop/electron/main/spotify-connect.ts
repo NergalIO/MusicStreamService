@@ -133,7 +133,12 @@ const STATE_OBSERVER = `
     };
     window.__mssObserver = obs;
     attach();
-    setInterval(attach, 1000);
+    const timer = setInterval(attach, 1000);
+    window.addEventListener('pagehide', () => {
+      clearInterval(timer);
+      obs.disconnect();
+      window.__mssObserver = null;
+    }, { once: true });
   })();
 `;
 
@@ -254,16 +259,6 @@ function playScript(trackId: string, positionMs: number, fast: FastAuth | null):
   })()`;
 }
 
-function prefetchScript(trackId: string): string {
-  return `(() => {
-    const path = '/track/${trackId}';
-    if (location.pathname === path || !document.querySelector('[data-testid="control-button-playpause"]')) return false;
-    history.pushState({}, '', path);
-    dispatchEvent(new PopStateEvent('popstate', { state: {} }));
-    return true;
-  })()`;
-}
-
 const STATE_SCRIPT = `(() => { ${DOM_HELPERS} return readState(); })()`;
 
 function clickPlayPauseScript(wantPlaying: boolean): string {
@@ -353,12 +348,15 @@ function handleState(s: DomState): number {
   lastState = s;
   const ours = !!expectedTitle && s.title === expectedTitle;
   const left = s.durationMs - s.positionMs;
-  if (!s.ad) {
+  // Сразу после запуска в панели ещё прошлый трек у своего конца: ловим конец только после того,
+  // как наш трек увидели играющим не у конца.
+  if (ours && s.durationMs > 0 && left > endLeadMs) armed = true;
+  if (!s.ad && armed && !starting) {
     if (ours && s.playing && s.durationMs > 0 && left <= endLeadMs) {
       emitEnded();
     } else if (!ours && prev?.ad && expectedTitle && s.title !== expectedTitle) {
       emitEnded();
-    } else if (!ours && prev?.title === expectedTitle && prev.durationMs - prev.positionMs < 5000) {
+    } else if (!ours && prev && prev.title === expectedTitle && leftPrevNearEnd(prev)) {
       emitEnded();
     }
   }
@@ -368,7 +366,14 @@ function handleState(s: DomState): number {
   return POLL_PAUSED_MS;
 }
 
+/** У короткого трека «меньше 5 с до конца» верно с самого начала, поэтому смотрим ещё и на долю трека. */
+function leftPrevNearEnd(prev: DomState): boolean {
+  if (!(prev.durationMs > 0)) return false;
+  return prev.durationMs - prev.positionMs < 5000 && prev.positionMs * 2 > prev.durationMs;
+}
+
 let starting = false;
+let armed = false;
 
 function onPageMessage(message: string): void {
   if (!active || starting || !expectedTitle || !message.startsWith('__mss:state:')) return;
@@ -385,6 +390,11 @@ function onPageMessage(message: string): void {
 async function poll(): Promise<void> {
   pollTimer = null;
   if (!active) return;
+  // Пока идёт запуск, состояние страницы относится к прошлому треку.
+  if (starting) {
+    schedulePoll(POLL_NEAR_END_MS);
+    return;
+  }
   let next = POLL_PAUSED_MS;
   try {
     next = handleState(await spotifyWebExec<DomState>(STATE_SCRIPT));
@@ -563,6 +573,7 @@ async function play(trackId: string, positionMs = 0, fast = false): Promise<Spot
     expectedTrackId = trackId;
     expectedTitle = null;
     endedFor = null;
+    armed = false;
     lastState = null;
     try {
       const state = await spotifyWebExec<DomState>(playScript(trackId, positionMs, fastAuth(fast)));
@@ -601,11 +612,6 @@ async function play(trackId: string, positionMs = 0, fast = false): Promise<Spot
       if (seq === playSeq) starting = false;
     }
   });
-}
-
-async function prefetch(trackId: string): Promise<void> {
-  if (!active || starting || !/^[A-Za-z0-9]{10,40}$/.test(trackId)) return;
-  await withSpotifyPage(() => spotifyWebExec<boolean>(prefetchScript(trackId))).catch(() => undefined);
 }
 
 async function setPlaying(playing: boolean): Promise<void> {
@@ -741,7 +747,6 @@ export function registerSpotifyConnectIpc(): void {
   ipcMain.handle('spotify-connect:play', (_e, trackId: string, positionMs?: number, fast?: boolean) =>
     play(trackId, positionMs, !!fast),
   );
-  ipcMain.handle('spotify-connect:prefetch', (_e, trackId: string) => prefetch(trackId));
   ipcMain.handle('spotify-connect:pause', () => setPlaying(false));
   ipcMain.handle('spotify-connect:resume', () => setPlaying(true));
   ipcMain.handle('spotify-connect:seek', (_e, positionMs: number) => seek(positionMs));

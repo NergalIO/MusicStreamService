@@ -21,8 +21,10 @@ import io.ktor.http.Parameters
 import io.ktor.http.contentType
 import javax.inject.Inject
 import javax.inject.Singleton
+import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.sync.Mutex
+import kotlinx.coroutines.withContext
 import kotlinx.coroutines.sync.withLock
 import kotlinx.serialization.SerialName
 import kotlinx.serialization.Serializable
@@ -47,8 +49,11 @@ class VkConnector @Inject constructor(
     private val json = Json { ignoreUnknownKeys = true }
     private val http = HttpClient(OkHttp)
 
-    override fun authStatus(): AuthStatus {
-        return if (loadTokens() != null) AuthStatus.CONNECTED else AuthStatus.DISCONNECTED
+    override fun authStatus(): AuthStatus = when {
+        loadTokens() != null -> AuthStatus.CONNECTED
+        // Сессию отобрал VK, а не пользователь: интерфейсу нужно предложить войти снова.
+        vault.get(EXPIRED_KEY) == "1" -> AuthStatus.EXPIRED
+        else -> AuthStatus.DISCONNECTED
     }
 
     private var smsSession: VkIdSession? = null
@@ -132,8 +137,11 @@ class VkConnector @Inject constructor(
     }
 
     override suspend fun disconnect() {
+        vault.delete(EXPIRED_KEY)
         vault.delete(VAULT_KEY)
         vault.delete(ACCOUNT_KEY)
+        // Без этого следующий вход через VK ID молча подхватит тот же аккаунт из cookie WebView.
+        withContext(Dispatchers.Main) { WebCookies.clear(WebCookies.VK_URLS, WebCookies.VK_DOMAINS) }
     }
 
     suspend fun account(): ExternalAccount? {
@@ -283,6 +291,7 @@ class VkConnector @Inject constructor(
         val album = a["album"]?.jsonObject
         val restricted = a["content_restricted"]?.jsonPrimitive?.intOrNull == 1
         val url = a["url"]?.jsonPrimitive?.contentOrNull
+        // audio.get часто не отдаёт url, его выдаёт audio.getById перед запуском: по url судить о доступности нельзя.
         return UnifiedTrack(
             source = SourceId.VK,
             id = if (access != null) "${owner}_${id}_$access" else "${owner}_$id",
@@ -295,7 +304,7 @@ class VkConnector @Inject constructor(
             coverUrl = album?.get("thumb")?.jsonObject?.let { thumb ->
                 listOf("photo_600", "photo_300", "photo_135").firstNotNullOfOrNull { thumb[it]?.jsonPrimitive?.contentOrNull }
             },
-            playable = !restricted && !url.isNullOrBlank(),
+            playable = !restricted,
             streamUrl = url,
         )
     }
@@ -374,6 +383,7 @@ class VkConnector @Inject constructor(
                 }
                 code == 5 -> {
                     disconnect()
+                    vault.set(EXPIRED_KEY, "1")
                     throw ConnectorException("Сессия VK истекла — войдите заново")
                 }
                 code == 14 -> throw ConnectorException("VK запросил капчу — отключите VK в настройках и войдите снова")
@@ -422,12 +432,14 @@ class VkConnector @Inject constructor(
     }
 
     private fun saveTokens(t: VkTokens) {
+        vault.delete(EXPIRED_KEY)
         vault.set(VAULT_KEY, json.encodeToString(VkTokens.serializer(), t))
     }
 
     companion object {
         private const val VAULT_KEY = "vk_tokens"
         private const val ACCOUNT_KEY = "vk_account"
+        private const val EXPIRED_KEY = "vk_session_expired"
         private const val DEVICE_KEY = "vk_device_id"
         private const val API_VERSION = "5.131"
         private const val KATE_UA = VkAuth.KATE_UA

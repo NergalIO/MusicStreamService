@@ -18,6 +18,8 @@ import io.ktor.http.HttpHeaders
 import io.ktor.http.Parameters
 import io.ktor.http.contentType
 import io.ktor.http.isSuccess
+import kotlinx.coroutines.sync.Mutex
+import kotlinx.coroutines.sync.withLock
 import javax.inject.Inject
 import javax.inject.Singleton
 import kotlinx.serialization.SerialName
@@ -37,8 +39,11 @@ class SpotifyConnector @Inject constructor(
     private val http = HttpClient(OkHttp)
     private val clientId = BuildConfig.SPOTIFY_CLIENT_ID
 
-    override fun authStatus(): AuthStatus =
-        if (web.loggedIn.value || web.hasPersistedSession()) AuthStatus.CONNECTED else AuthStatus.DISCONNECTED
+    override fun authStatus(): AuthStatus = when {
+        web.sessionRejected -> AuthStatus.EXPIRED
+        web.loggedIn.value || web.hasPersistedSession() -> AuthStatus.CONNECTED
+        else -> AuthStatus.DISCONNECTED
+    }
 
     override suspend fun disconnect() {
         vault.delete(VAULT_KEY)
@@ -90,7 +95,7 @@ class SpotifyConnector @Inject constructor(
                     trackCount = p.tracks?.total ?: p.items?.total,
                 )
             }
-            if (page.next == null) break
+            if (page.items.isEmpty() || page.next == null) break
             offset += 50
         }
         return out
@@ -112,7 +117,8 @@ class SpotifyConnector @Inject constructor(
             page.items.forEach { row ->
                 row.track?.let { out += mapTrack(it) }
             }
-            if (page.next == null || out.size >= limit) break
+            // Пустая страница с непустым next иначе крутила бы цикл вечно.
+            if (page.items.isEmpty() || page.next == null || out.size >= limit) break
             offset += 50
         }
         return out.take(limit)
@@ -133,7 +139,7 @@ class SpotifyConnector @Inject constructor(
                 mapOf("limit" to "100", "offset" to offset.toString()),
             )
             page.items.forEach { row -> row.track?.let { tracks += mapTrack(it) } }
-            if (page.next == null) break
+            if (page.items.isEmpty() || page.next == null) break
             offset += 100
         }
         return com.mss.core.model.PlaylistWithTracks(
@@ -155,16 +161,28 @@ class SpotifyConnector @Inject constructor(
         }
         if (loadTokens() == null) throw ConnectorException("Spotify не подключён")
         val meta = spotifyGet<SpotifyAlbumDetail>("/albums/$id", emptyMap())
-        val tracks = meta.tracks.items.filterNotNull().map { t ->
-            mapTrack(t).copy(album = meta.name, coverUrl = SpotifyImageUrls.normalize(meta.images.firstOrNull()?.url))
+        val cover = SpotifyImageUrls.normalize(meta.images.firstOrNull()?.url)
+        val raw = meta.tracks.items.filterNotNull().toMutableList()
+        // Первая страница альбома — 20 треков: без дочитывания у длинных релизов пропадал хвост.
+        var hasMore = meta.tracks.next != null
+        while (hasMore && raw.size < 500) {
+            val page = spotifyGet<AlbumTracksBlock>(
+                "/albums/$id/tracks",
+                mapOf("limit" to "50", "offset" to raw.size.toString()),
+            )
+            val items = page.items.filterNotNull()
+            if (items.isEmpty()) break
+            raw += items
+            hasMore = page.next != null
         }
+        val tracks = raw.map { t -> mapTrack(t).copy(album = meta.name, coverUrl = cover) }
         return com.mss.core.model.AlbumWithTracks(
             source = SourceId.SPOTIFY,
             id = id,
             title = meta.name,
             artist = meta.artists.joinToString { it.name },
-            coverUrl = SpotifyImageUrls.normalize(meta.images.firstOrNull()?.url),
-            trackCount = tracks.size,
+            coverUrl = cover,
+            trackCount = if (meta.tracks.total > 0) meta.tracks.total else tracks.size,
             tracks = tracks,
         )
     }
@@ -189,7 +207,20 @@ class SpotifyConnector @Inject constructor(
             awaitWebPlayer()
             return pathfinder.searchArtists(query, limit)
         }
-        return emptyList()
+        if (loadTokens() == null) return emptyList()
+        val data = spotifyGet<SearchArtistsResponse>(
+            "/search",
+            mapOf("q" to query, "type" to "artist", "limit" to minOf(limit, 50).toString()),
+        )
+        return data.artists.items.filterNotNull().map {
+            com.mss.core.model.UnifiedArtist(
+                source = SourceId.SPOTIFY,
+                id = it.id,
+                name = it.name,
+                imageUrl = SpotifyImageUrls.normalize(it.images.firstOrNull()?.url),
+                followers = it.followers?.total,
+            )
+        }
     }
 
     suspend fun artist(id: String): com.mss.core.model.UnifiedArtist? {
@@ -209,7 +240,12 @@ class SpotifyConnector @Inject constructor(
             awaitWebPlayer()
             return pathfinder.artistTracks(artistId, artistName, limit)
         }
-        return emptyList()
+        if (loadTokens() == null) return emptyList()
+        val data = spotifyGet<ArtistTopTracks>(
+            "/artists/$artistId/top-tracks",
+            mapOf("market" to "from_token"),
+        )
+        return data.tracks.take(limit).map { mapTrack(it) }
     }
 
     suspend fun searchAlbums(query: String, limit: Int): List<com.mss.core.model.UnifiedAlbum> {
@@ -217,7 +253,22 @@ class SpotifyConnector @Inject constructor(
             awaitWebPlayer()
             return pathfinder.searchAlbums(query, limit)
         }
-        return emptyList()
+        if (loadTokens() == null) return emptyList()
+        val data = spotifyGet<SearchAlbumsResponse>(
+            "/search",
+            mapOf("q" to query, "type" to "album", "limit" to minOf(limit, 50).toString()),
+        )
+        return data.albums.items.filterNotNull().map {
+            com.mss.core.model.UnifiedAlbum(
+                source = SourceId.SPOTIFY,
+                id = it.id,
+                title = it.name,
+                artist = it.artists.joinToString { a -> a.name },
+                coverUrl = SpotifyImageUrls.normalize(it.images.firstOrNull()?.url),
+                year = it.releaseDate?.take(4)?.toIntOrNull(),
+                trackCount = it.totalTracks,
+            )
+        }
     }
 
     private fun useWebCatalog(): Boolean =
@@ -227,9 +278,12 @@ class SpotifyConnector @Inject constructor(
         web.awaitHeaders()
     }
 
-    private suspend fun accessToken(): String {
+    // Spotify меняет refresh token при каждом обновлении: параллельные обновления обесценят друг друга.
+    private val refreshMutex = Mutex()
+
+    private suspend fun accessToken(force: Boolean = false): String = refreshMutex.withLock {
         val t = loadTokens() ?: throw ConnectorException("Spotify не подключён")
-        if (System.currentTimeMillis() < t.expiresAt - 60_000) return t.accessToken
+        if (!force && System.currentTimeMillis() < t.expiresAt - 60_000) return t.accessToken
         val res = http.post("https://accounts.spotify.com/api/token") {
             contentType(ContentType.Application.FormUrlEncoded)
             setBody(
@@ -257,7 +311,6 @@ class SpotifyConnector @Inject constructor(
     }
 
     private suspend inline fun <reified T> spotifyGet(path: String, params: Map<String, String>): T {
-        val token = accessToken()
         val url = buildString {
             append("https://api.spotify.com/v1")
             append(path)
@@ -266,7 +319,11 @@ class SpotifyConnector @Inject constructor(
                 append(params.entries.joinToString("&") { "${it.key}=${java.net.URLEncoder.encode(it.value, Charsets.UTF_8)}" })
             }
         }
-        val res = http.get(url) { header(HttpHeaders.Authorization, "Bearer $token") }
+        var res = http.get(url) { header(HttpHeaders.Authorization, "Bearer ${accessToken()}") }
+        // Spotify может отозвать токен раньше срока: один раз обновляемся принудительно.
+        if (res.status.value == 401) {
+            res = http.get(url) { header(HttpHeaders.Authorization, "Bearer ${accessToken(force = true)}") }
+        }
         val body = res.bodyAsText()
         if (!res.status.isSuccess()) {
             throw ConnectorException(SpotifyErrors.message(res.status.value, body, path))
@@ -283,7 +340,7 @@ class SpotifyConnector @Inject constructor(
         album = t.album?.name,
         durationMs = t.durationMs,
         coverUrl = SpotifyImageUrls.normalize(t.album?.images?.firstOrNull()?.url),
-        playable = true,
+        playable = t.isPlayable ?: true,
     )
 
     private fun loadTokens(): SpotifyTokens? {
@@ -356,6 +413,7 @@ private data class SpotifyTrack(
     val artists: List<SpotifyArtistRef>,
     @SerialName("duration_ms") val durationMs: Long? = null,
     val album: SpotifyAlbumRef? = null,
+    @SerialName("is_playable") val isPlayable: Boolean? = null,
 )
 
 @Serializable
@@ -384,7 +442,43 @@ private data class SpotifyAlbumDetail(
 )
 
 @Serializable
-private data class AlbumTracksBlock(val items: List<SpotifyTrack?>)
+private data class AlbumTracksBlock(val items: List<SpotifyTrack?>, val next: String? = null, val total: Int = 0)
+
+@Serializable
+private data class SearchArtistsResponse(val artists: ArtistsPage = ArtistsPage())
+
+@Serializable
+private data class ArtistsPage(val items: List<SpotifyArtistFull?> = emptyList())
+
+@Serializable
+private data class SpotifyArtistFull(
+    val id: String,
+    val name: String,
+    val images: List<SpotifyImage> = emptyList(),
+    val followers: FollowersRef? = null,
+)
+
+@Serializable
+private data class FollowersRef(val total: Int? = null)
+
+@Serializable
+private data class SearchAlbumsResponse(val albums: AlbumsPage = AlbumsPage())
+
+@Serializable
+private data class ArtistTopTracks(val tracks: List<SpotifyTrack> = emptyList())
+
+@Serializable
+private data class AlbumsPage(val items: List<SpotifyAlbumBrief?> = emptyList())
+
+@Serializable
+private data class SpotifyAlbumBrief(
+    val id: String,
+    val name: String,
+    val artists: List<SpotifyArtistRef> = emptyList(),
+    val images: List<SpotifyImage> = emptyList(),
+    @SerialName("release_date") val releaseDate: String? = null,
+    @SerialName("total_tracks") val totalTracks: Int? = null,
+)
 
 @Serializable
 private data class SpotifyTrackDetail(@SerialName("preview_url") val previewUrl: String? = null)

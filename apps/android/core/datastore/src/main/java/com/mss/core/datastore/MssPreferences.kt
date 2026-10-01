@@ -12,6 +12,8 @@ import dagger.hilt.android.qualifiers.ApplicationContext
 import javax.inject.Inject
 import javax.inject.Singleton
 import kotlinx.coroutines.flow.Flow
+import kotlinx.coroutines.flow.MutableStateFlow
+import kotlinx.coroutines.flow.combine
 import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.flow.map
 import kotlinx.serialization.encodeToString
@@ -30,9 +32,18 @@ class MssPreferences @Inject constructor(
         prefs[KEY_API_BASE] ?: DEFAULT_API_BASE
     }
 
-    val session: Flow<AuthSession?> = context.dataStore.data.map { prefs ->
-        prefs[KEY_SESSION]?.let { json.decodeFromString<AuthSession>(it) }
+    /**
+     * Токены MSS лежат в зашифрованном хранилище, а не в обычных настройках.
+     * Старые установки читаем из DataStore, пока не перенесём запись при первом сохранении.
+     */
+    private val vaultSession = MutableStateFlow(decodeSession(secureVault.get(VAULT_SESSION)))
+
+    val session: Flow<AuthSession?> = combine(vaultSession, context.dataStore.data) { stored, prefs ->
+        stored ?: decodeSession(prefs[KEY_SESSION])
     }
+
+    private fun decodeSession(raw: String?): AuthSession? =
+        raw?.let { runCatching { json.decodeFromString<AuthSession>(it) }.getOrNull() }
 
     val playbackSettings: Flow<PlaybackSettings> = context.dataStore.data.map { prefs ->
         prefs[KEY_PLAYBACK]?.let { json.decodeFromString<PlaybackSettings>(it) } ?: PlaybackSettings()
@@ -68,7 +79,9 @@ class MssPreferences @Inject constructor(
     suspend fun getApiBaseUrl(): String = apiBaseUrl.first()
 
     suspend fun saveSession(session: AuthSession) {
-        context.dataStore.edit { it[KEY_SESSION] = json.encodeToString(session) }
+        secureVault.set(VAULT_SESSION, json.encodeToString(session))
+        vaultSession.value = session
+        context.dataStore.edit { it.remove(KEY_SESSION) }
     }
 
     suspend fun loadSession(): AuthSession? = session.first()
@@ -79,6 +92,8 @@ class MssPreferences @Inject constructor(
     }
 
     suspend fun clearSession() {
+        secureVault.delete(VAULT_SESSION)
+        vaultSession.value = null
         context.dataStore.edit { it.remove(KEY_SESSION) }
     }
 
@@ -114,6 +129,7 @@ class MssPreferences @Inject constructor(
         val DEFAULT_API_BASE: String = BuildConfig.BAKED_API_PUBLIC_URL
         private val KEY_API_BASE = stringPreferencesKey("api_base")
         private val KEY_SESSION = stringPreferencesKey("session")
+        private const val VAULT_SESSION = "mss_session"
         private val KEY_DEVICE_ID = stringPreferencesKey("device_id")
         private val KEY_PLAYBACK = stringPreferencesKey("playback")
         private val KEY_SEARCH = stringPreferencesKey("search_history")

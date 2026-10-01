@@ -26,6 +26,8 @@ export interface PreparedLocalFile {
 
 type Index = Record<string, LocalTrackEntry>;
 
+const AUDIO_EXTENSIONS = ['mp3', 'flac', 'm4a', 'aac', 'ogg', 'opus', 'wav', 'wma', 'aiff', 'ape', 'wv', 'webm'];
+
 const INDEX_FILE = () => path.join(app.getPath('userData'), 'local-tracks.json');
 
 let index: Index | null = null;
@@ -64,6 +66,8 @@ function tagsFromFilename(filename: string): { title: string; artist: string } {
 
 export async function prepareLocalFile(filePath: string): Promise<PreparedLocalFile> {
   const resolved = path.resolve(filePath);
+  assertAudioPath(resolved);
+  preparedPaths.add(resolved);
   const stat = await fs.stat(resolved);
   const originalFilename = path.basename(resolved);
   const fromName = tagsFromFilename(originalFilename);
@@ -99,18 +103,33 @@ export async function prepareLocalFile(filePath: string): Promise<PreparedLocalF
   };
 }
 
+/**
+ * Привязанный файл можно читать через mss-stream://file, поэтому путь из renderer проверяем:
+ * расширение должно быть аудийным, а привязать можно только то, что перед этим разобрали.
+ */
+const preparedPaths = new Set<string>();
+
+function assertAudioPath(resolved: string): void {
+  const ext = path.extname(resolved).slice(1).toLowerCase();
+  if (!AUDIO_EXTENSIONS.includes(ext)) throw new Error('Поддерживаются только аудиофайлы');
+}
+
 export async function pickAudioFiles(): Promise<string[]> {
   const { canceled, filePaths } = await dialog.showOpenDialog({
     properties: ['openFile', 'multiSelections'],
-    filters: [{ name: 'Audio', extensions: ['mp3', 'flac', 'm4a', 'aac', 'ogg', 'opus', 'wav', 'wma', 'aiff', 'ape', 'wv', 'webm'] }],
+    filters: [{ name: 'Audio', extensions: AUDIO_EXTENSIONS }],
   });
   if (canceled) return [];
+  for (const file of filePaths) preparedPaths.add(path.resolve(file));
   return filePaths;
 }
 
 export async function bindLocalTrack(trackId: string, entry: LocalTrackEntry): Promise<void> {
+  const resolved = path.resolve(entry.path);
+  assertAudioPath(resolved);
+  if (!preparedPaths.has(resolved)) throw new Error('Файл не выбирался в этом сеансе');
   const idx = await loadIndex();
-  idx[trackId] = { path: path.resolve(entry.path), contentHash: entry.contentHash.toLowerCase() };
+  idx[trackId] = { path: resolved, contentHash: entry.contentHash.toLowerCase() };
   await saveIndex();
 }
 

@@ -2,9 +2,11 @@ import { app, net, protocol } from 'electron';
 import fs from 'node:fs';
 import path from 'node:path';
 import { Readable } from 'node:stream';
+import { parseByteRange } from './byte-range.js';
 import { cachedImage } from './content-cache.js';
 import { isDownloadedFile } from './downloads.js';
 import { isRegisteredLocalPath } from './local-tracks.js';
+import { isAllowedRemote } from './remote-hosts.js';
 import { serveVkAudio } from './vk-hls.js';
 
 export const STREAM_SCHEME = 'mss-stream';
@@ -50,11 +52,13 @@ function serveFile(filePath: string, rangeHeader: string | null): Response {
   }
   const size = fs.statSync(resolved).size;
   const type = MIME[path.extname(resolved).toLowerCase()] ?? 'application/octet-stream';
-  const match = rangeHeader ? /bytes=(\d*)-(\d*)/.exec(rangeHeader) : null;
+  const range = parseByteRange(rangeHeader, size);
 
-  if (match) {
-    const start = match[1] ? Number(match[1]) : 0;
-    const end = match[2] ? Math.min(Number(match[2]), size - 1) : size - 1;
+  if (range === 'unsatisfiable') {
+    return new Response(null, { status: 416, headers: { ...CORS_HEADERS, 'Content-Range': `bytes */${size}` } });
+  }
+  if (range) {
+    const { start, end } = range;
     const body = Readable.toWeb(fs.createReadStream(resolved, { start, end })) as ReadableStream;
     return new Response(body, {
       status: 206,
@@ -75,7 +79,7 @@ function serveFile(filePath: string, rangeHeader: string | null): Response {
 }
 
 async function proxyRemote(target: string, rangeHeader: string | null): Promise<Response> {
-  if (!/^https?:\/\//i.test(target)) return new Response('Bad target', { status: 400, headers: CORS_HEADERS });
+  if (!isAllowedRemote(target)) return new Response('Bad target', { status: 400, headers: CORS_HEADERS });
   const upstream = await net.fetch(target, { headers: rangeHeader ? { Range: rangeHeader } : {} });
   const headers = new Headers(upstream.headers);
   for (const [k, v] of Object.entries(CORS_HEADERS)) headers.set(k, v);
@@ -83,7 +87,7 @@ async function proxyRemote(target: string, rangeHeader: string | null): Promise<
 }
 
 async function serveImage(target: string): Promise<Response> {
-  if (!/^https:\/\//i.test(target)) return new Response('Bad target', { status: 400, headers: CORS_HEADERS });
+  if (!isAllowedRemote(target)) return new Response('Bad target', { status: 400, headers: CORS_HEADERS });
   const image = await cachedImage(target);
   if (!image) return new Response('Not found', { status: 404, headers: CORS_HEADERS });
   return new Response(new Uint8Array(image.body), {

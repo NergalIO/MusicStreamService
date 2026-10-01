@@ -123,15 +123,21 @@ class MssApiClient @Inject constructor(
         }
     }
 
-    suspend fun refreshAccessToken(): Boolean = refreshMutex.withLock {
+    suspend fun refreshAccessToken(): Boolean = refreshSession() == true
+
+    /** true — обновили, false — сервер отверг refresh token, null — до сервера не достучались. */
+    private suspend fun refreshSession(): Boolean? = refreshMutex.withLock {
         val session = preferences.loadSession() ?: return false
+        if (session.accessToken == "preview") return true
         val base = apiBase()
-        val res = http.post("$base/auth/refresh") {
-            contentType(ContentType.Application.Json)
-            setBody(RefreshBody(session.refreshToken))
-        }
+        val res = runCatching {
+            http.post("$base/auth/refresh") {
+                contentType(ContentType.Application.Json)
+                setBody(RefreshBody(session.refreshToken))
+            }
+        }.getOrElse { return null }
         if (!res.status.isSuccess()) return false
-        val data = res.body<RefreshResponse>()
+        val data = runCatching { res.body<RefreshResponse>() }.getOrElse { return false }
         preferences.updateAccessToken(data.accessToken)
         true
     }
@@ -429,7 +435,15 @@ class MssApiClient @Inject constructor(
     private suspend fun withAuth(block: suspend (token: String) -> HttpResponse): HttpResponse {
         var session = preferences.loadSession() ?: throw ApiException("Not authenticated")
         var response = block(session.accessToken)
-        if (response.status.value == 401 && refreshAccessToken()) {
+        if (response.status.value == 401) {
+            val refreshed = refreshSession()
+            if (refreshed != true) {
+                // Сервер отверг refresh token — сессии больше нет. При обрыве связи аккаунт сохраняем.
+                if (refreshed == false && session.accessToken != "preview") preferences.clearSession()
+                throw ApiException(
+                    if (refreshed == false) "Сессия истекла — войдите снова" else "Нет связи с сервером",
+                )
+            }
             session = preferences.loadSession() ?: throw ApiException("Not authenticated")
             response = block(session.accessToken)
         }

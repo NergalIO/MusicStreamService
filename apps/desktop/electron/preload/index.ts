@@ -174,7 +174,6 @@ const api = {
     onMedia: (cb: (state: { playing: boolean }) => void) => subscribe('spotify-session:media', cb),
   },
   spotifyConnect: {
-    prefetch: (trackId: string) => ipcRenderer.invoke('spotify-connect:prefetch', trackId) as Promise<void>,
     play: (trackId: string, positionMs?: number, fast?: boolean) =>
       ipcRenderer.invoke('spotify-connect:play', trackId, positionMs, fast) as Promise<{
         ad: boolean;
@@ -299,8 +298,8 @@ const api = {
     disconnect: (id: string) => ipcRenderer.invoke('connectors:disconnect', id) as Promise<void>,
     account: (id: string) =>
       ipcRenderer.invoke('connectors:account', id) as Promise<ExternalAccount | null>,
-    accessToken: (id: string) => ipcRenderer.invoke('connectors:accessToken', id) as Promise<string | null>,
     onDeviceCode: (cb: (prompt: DeviceCodePrompt) => void) => subscribe('connectors:deviceCode', cb),
+    onStatusChanged: (cb: () => void) => subscribe('connectors:statusChanged', cb),
     onLoginPrompt: (cb: (prompt: LoginPrompt) => void) => subscribe('connectors:loginPrompt', cb),
     loginReply: (reply: LoginReply) => ipcRenderer.invoke('connectors:loginReply', reply) as Promise<void>,
     search: (id: string, query: string, limit: number) =>

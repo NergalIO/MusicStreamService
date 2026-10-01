@@ -22,6 +22,7 @@ import kotlinx.serialization.json.add
 import kotlinx.serialization.json.buildJsonArray
 import kotlinx.serialization.json.buildJsonObject
 import kotlinx.serialization.json.contentOrNull
+import kotlinx.serialization.json.intOrNull
 import kotlinx.serialization.json.jsonArray
 import kotlinx.serialization.json.jsonObject
 import kotlinx.serialization.json.jsonPrimitive
@@ -157,29 +158,43 @@ class SpotifyPathfinder @Inject constructor(
     }
 
     suspend fun listPlaylists(): List<UnifiedPlaylist> {
-        val data = query(
-            "libraryV3",
-            buildJsonObject {
-                put("filters", buildJsonArray { add(JsonPrimitive("Playlists")) })
-                put("order", JsonNull)
-                put("textFilter", "")
-                put("features", buildJsonArray {
-                    add(JsonPrimitive("LIKED_SONGS"))
-                    add(JsonPrimitive("YOUR_EPISODES"))
-                })
-                put("limit", 50)
-                put("offset", 0)
-                put("flatten", true)
-                put("expandedFolders", buildJsonArray {})
-                put("folderUri", JsonNull)
-                put("includeFoldersWhenFlattening", false)
-            },
-        )
-        val items = data.obj("data")?.obj("me")?.obj("libraryV3")?.arr("items") ?: return emptyList()
-        return items.mapNotNull { row ->
-            val d = row.jsonObject.obj("item")?.obj("data") ?: return@mapNotNull null
+        return libraryItems("Playlists", flatten = true).mapNotNull { row ->
+            val d = row.obj("item")?.obj("data") ?: return@mapNotNull null
             mapPlaylist(d)
         }
+    }
+
+    /** Библиотека выдаётся страницами: без дочитывания у пользователя пропадало всё после первых 50. */
+    private suspend fun libraryItems(filter: String, flatten: Boolean): List<JsonObject> {
+        val out = mutableListOf<JsonObject>()
+        var offset = 0
+        while (offset < LIBRARY_MAX) {
+            val data = query(
+                "libraryV3",
+                buildJsonObject {
+                    put("filters", buildJsonArray { add(JsonPrimitive(filter)) })
+                    put("order", JsonNull)
+                    put("textFilter", "")
+                    put("features", buildJsonArray {
+                        add(JsonPrimitive("LIKED_SONGS"))
+                        add(JsonPrimitive("YOUR_EPISODES"))
+                    })
+                    put("limit", LIBRARY_PAGE)
+                    put("offset", offset)
+                    put("flatten", flatten)
+                    put("expandedFolders", buildJsonArray {})
+                    put("folderUri", JsonNull)
+                    put("includeFoldersWhenFlattening", !flatten)
+                },
+            )
+            val library = data.obj("data")?.obj("me")?.obj("libraryV3") ?: break
+            val items = library.arr("items") ?: break
+            items.forEach { out += it.jsonObject }
+            val total = library["totalCount"]?.jsonPrimitive?.intOrNull ?: out.size
+            if (items.size < LIBRARY_PAGE || out.size >= total) break
+            offset += LIBRARY_PAGE
+        }
+        return out
     }
 
     suspend fun playlist(id: String): PlaylistWithTracks {
@@ -212,24 +227,32 @@ class SpotifyPathfinder @Inject constructor(
     }
 
     suspend fun album(id: String): AlbumWithTracks {
-        val data = query(
+        suspend fun page(offset: Int) = query(
             "getAlbum",
             buildJsonObject {
                 put("uri", "spotify:album:$id")
                 put("locale", "")
-                put("offset", 0)
-                put("limit", 50)
+                put("offset", offset)
+                put("limit", ALBUM_PAGE)
             },
         )
+        val data = page(0)
         val a = data.obj("data")?.obj("albumUnion") ?: throw ConnectorException("Альбом Spotify не найден")
         val title = a.str("name") ?: "Альбом"
         val cover = bestImage(a.obj("coverArt")?.arr("sources"))
         val artist = a.obj("artists")?.arr("items")?.mapNotNull {
             it.jsonObject.obj("profile")?.str("name")
         }?.joinToString().orEmpty()
-        val tracks = a.obj("tracksV2")?.arr("items")?.mapNotNull { row ->
-            mapTrack(unwrapTrack(row.jsonObject.obj("track")), cover)
-        }.orEmpty()
+        val rows = mutableListOf<JsonObject>()
+        a.obj("tracksV2")?.arr("items")?.forEach { rows += it.jsonObject }
+        val total = a.obj("tracksV2")?.get("totalCount")?.jsonPrimitive?.intOrNull ?: rows.size
+        // Длинный альбом приходит страницами: без дочитывания у сборников пропадал хвост треков.
+        while (rows.size in 1 until total && rows.size < ALBUM_MAX) {
+            val next = page(rows.size).obj("data")?.obj("albumUnion")?.obj("tracksV2")?.arr("items") ?: break
+            if (next.isEmpty()) break
+            next.forEach { rows += it.jsonObject }
+        }
+        val tracks = rows.mapNotNull { row -> mapTrack(unwrapTrack(row.obj("track")), cover) }
         val description = a.str("description")?.takeIf { it.isNotBlank() }
             ?: a.arr("copyrights")?.firstOrNull()?.jsonObject?.str("text")
         return AlbumWithTracks(
@@ -238,7 +261,7 @@ class SpotifyPathfinder @Inject constructor(
             title,
             artist,
             coverUrl = cover,
-            trackCount = tracks.size,
+            trackCount = if (total > 0) total else tracks.size,
             tracks = tracks,
             description = description,
         )
@@ -368,10 +391,21 @@ class SpotifyPathfinder @Inject constructor(
             web.invalidateHashes()
             val (againStatus, againText) = post(name, variables, hashFor(name))
             if (againStatus !in 200..299) throw ConnectorException("Spotify pathfinder $againStatus")
-            return json.parseToJsonElement(againText).jsonObject
+            return parseQuery(name, againText)
         }
         if (status !in 200..299) throw ConnectorException("Spotify pathfinder $status")
-        return json.parseToJsonElement(text).jsonObject
+        return parseQuery(name, text)
+    }
+
+    /** Partner API отвечает 200 и кладёт сбой в errors — иначе он выглядел бы как пустой список. */
+    private fun parseQuery(name: String, text: String): JsonObject {
+        val root = json.parseToJsonElement(text).jsonObject
+        val errors = root["errors"]?.takeIf { it is JsonArray }?.jsonArray
+        if (!errors.isNullOrEmpty() && root["data"]?.takeIf { it is JsonObject } == null) {
+            val message = errors.firstOrNull()?.jsonObject?.str("message")
+            throw ConnectorException(message ?: "Spotify отклонил запрос $name")
+        }
+        return root
     }
 
     private suspend fun post(name: String, variables: JsonObject, hash: String): Pair<Int, String> {
@@ -392,7 +426,10 @@ class SpotifyPathfinder @Inject constructor(
         val first = web.browserFetch(method, url, body)
         if (first.first != 401 && first.first != 403) return first
         web.invalidateHeaders()
-        return web.browserFetch(method, url, body)
+        val retry = web.browserFetch(method, url, body)
+        // 401 и со свежими заголовками — cookie больше не действуют. 403 бывает и по региону, его не трогаем.
+        if (retry.first == 401) web.markSessionExpired()
+        return retry
     }
 
     private suspend fun hashFor(name: String): String {
@@ -508,4 +545,11 @@ class SpotifyPathfinder @Inject constructor(
     private fun JsonObject.obj(key: String): JsonObject? = this[key] as? JsonObject
     private fun JsonObject.arr(key: String): JsonArray? = this[key] as? JsonArray
     private fun JsonObject.str(key: String): String? = (this[key] as? JsonPrimitive)?.contentOrNull
+
+    private companion object {
+        const val ALBUM_PAGE = 50
+        const val ALBUM_MAX = 1000
+        const val LIBRARY_PAGE = 50
+        const val LIBRARY_MAX = 2000
+    }
 }

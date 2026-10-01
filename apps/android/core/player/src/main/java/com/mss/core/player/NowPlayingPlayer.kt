@@ -28,6 +28,8 @@ class NowPlayingPlayer(
         fun next()
         fun previous()
         fun seekTo(positionMs: Long)
+        fun setRepeat(mode: RepeatMode)
+        fun setShuffle(enabled: Boolean)
     }
 
     private val main = Handler(looper)
@@ -44,6 +46,8 @@ class NowPlayingPlayer(
             state.playing != ui.playing ||
             state.index != ui.index ||
             state.queue.size != ui.queue.size ||
+            state.repeat != ui.repeat ||
+            state.shuffle != ui.shuffle ||
             abs(state.durationMs - ui.durationMs) > 500 ||
             abs(state.positionMs - expected) > 2_000 ||
             anchorAt == 0L
@@ -78,7 +82,7 @@ class NowPlayingPlayer(
             .build()
         val durationUs = if (ui.durationMs > 0) ui.durationMs * 1000 else C.TIME_UNSET
         val current = mediaData("$id#0", item, durationUs)
-        val hasNext = ui.index < ui.queue.lastIndex || ui.repeat != RepeatMode.OFF || ui.shuffle
+        val hasNext = ui.index < ui.queue.lastIndex || (ui.repeat != RepeatMode.OFF && ui.queue.isNotEmpty())
         val playlist = if (hasNext) listOf(current, mediaData("$id#1", item, durationUs)) else listOf(current)
         val commands = Player.Commands.Builder()
             .add(Player.COMMAND_PLAY_PAUSE)
@@ -88,6 +92,8 @@ class NowPlayingPlayer(
             .add(Player.COMMAND_SEEK_IN_CURRENT_MEDIA_ITEM)
             .add(Player.COMMAND_SEEK_TO_PREVIOUS)
             .add(Player.COMMAND_SEEK_TO_PREVIOUS_MEDIA_ITEM)
+            .add(Player.COMMAND_SET_REPEAT_MODE)
+            .add(Player.COMMAND_SET_SHUFFLE_MODE)
         if (hasNext) {
             commands.add(Player.COMMAND_SEEK_TO_NEXT).add(Player.COMMAND_SEEK_TO_NEXT_MEDIA_ITEM)
         }
@@ -96,6 +102,14 @@ class NowPlayingPlayer(
             .setAvailableCommands(commands.build())
             .setPlaybackState(Player.STATE_READY)
             .setPlayWhenReady(ui.playing, Player.PLAY_WHEN_READY_CHANGE_REASON_USER_REQUEST)
+            .setRepeatMode(
+                when (ui.repeat) {
+                    RepeatMode.OFF -> Player.REPEAT_MODE_OFF
+                    RepeatMode.ALL -> Player.REPEAT_MODE_ALL
+                    RepeatMode.ONE -> Player.REPEAT_MODE_ONE
+                },
+            )
+            .setShuffleModeEnabled(ui.shuffle)
             .setPlaylist(playlist)
             .setCurrentMediaItemIndex(0)
             .setContentPositionMs(PositionSupplier.getExtrapolating(ui.positionMs, speed))
@@ -112,13 +126,28 @@ class NowPlayingPlayer(
         main.post {
             when (seekCommand) {
                 Player.COMMAND_SEEK_TO_NEXT, Player.COMMAND_SEEK_TO_NEXT_MEDIA_ITEM -> controls.next()
-                Player.COMMAND_SEEK_TO_PREVIOUS_MEDIA_ITEM -> controls.previous()
-                Player.COMMAND_SEEK_TO_PREVIOUS -> {
+                // Кнопка «назад» в шторке ведёт себя так же, как в плеере: сначала в начало трека.
+                Player.COMMAND_SEEK_TO_PREVIOUS, Player.COMMAND_SEEK_TO_PREVIOUS_MEDIA_ITEM -> {
                     if (ui.positionMs > 3_000) controls.seekTo(0) else controls.previous()
                 }
                 else -> if (positionMs != C.TIME_UNSET) controls.seekTo(positionMs.coerceAtLeast(0))
             }
         }
+        return Futures.immediateVoidFuture()
+    }
+
+    override fun handleSetRepeatMode(repeatMode: Int): ListenableFuture<*> {
+        val mode = when (repeatMode) {
+            Player.REPEAT_MODE_ONE -> RepeatMode.ONE
+            Player.REPEAT_MODE_ALL -> RepeatMode.ALL
+            else -> RepeatMode.OFF
+        }
+        main.post { controls.setRepeat(mode) }
+        return Futures.immediateVoidFuture()
+    }
+
+    override fun handleSetShuffleModeEnabled(shuffleModeEnabled: Boolean): ListenableFuture<*> {
+        main.post { controls.setShuffle(shuffleModeEnabled) }
         return Futures.immediateVoidFuture()
     }
 

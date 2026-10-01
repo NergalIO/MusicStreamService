@@ -1,5 +1,6 @@
 import type { DeviceCodePrompt, LoginPrompt, UnifiedTrack } from '@mss/shared';
-import { useQuery, type QueryClient } from '@tanstack/react-query';
+import { useQuery, useQueryClient, type QueryClient } from '@tanstack/react-query';
+import { useEffect } from 'react';
 import { toast } from 'sonner';
 import { create } from 'zustand';
 
@@ -16,6 +17,18 @@ export function useConnectors() {
       window.electronAPI ? window.electronAPI.connectors.status() : [],
     staleTime: 30_000,
   });
+}
+
+/** Главный процесс сообщает, что сессия сервиса изменилась (например, протухла посреди запроса). */
+export function useConnectorStatusSync(): void {
+  const queryClient = useQueryClient();
+  useEffect(
+    () =>
+      window.electronAPI?.connectors.onStatusChanged(() => {
+        void queryClient.invalidateQueries({ queryKey: ['connectors'] });
+      }),
+    [queryClient],
+  );
 }
 
 export function useYandexConnected(): boolean {
@@ -99,11 +112,16 @@ export async function replyVkLogin(reply: Parameters<typeof window.electronAPI.c
   await window.electronAPI.connectors.loginReply(reply);
 }
 
+/** Единая точка отключения: сервис, его кеш запросов и состояние «подключено» расходиться не должны. */
 export async function disconnectSource(id: string, queryClient: QueryClient): Promise<void> {
-  await window.electronAPI.connectors.disconnect(id);
-  if (id === 'yandex') queryClient.removeQueries({ queryKey: ['yandex'] });
-  if (id === 'vk') queryClient.removeQueries({ queryKey: ['vk'] });
+  if (id === 'spotify') {
+    await window.electronAPI.spotifySession.logout();
+  } else {
+    await window.electronAPI.connectors.disconnect(id);
+  }
+  queryClient.removeQueries({ queryKey: [id] });
   await queryClient.invalidateQueries({ queryKey: ['connectors'] });
+  if (id === 'spotify') await queryClient.invalidateQueries({ queryKey: ['spotify-session'] });
   if (id === 'yandex') queryClient.setQueryData(['yandex-account'], null);
   if (id === 'vk') queryClient.setQueryData(['vk-account'], null);
 }

@@ -54,7 +54,7 @@ class SpotifyCoverInterceptor(
             SpotifyCoverHealth.report(ok = true)
             return direct
         }
-        val networkFailure = direct == null || (direct as ErrorResult).throwable !is HttpException
+        val networkFailure = direct == null || (direct as? ErrorResult)?.throwable !is HttpException
         if (networkFailure) directFailures += 1
         val bytes = web.fetchImage(url)
         if (bytes == null) {

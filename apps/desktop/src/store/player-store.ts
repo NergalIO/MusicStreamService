@@ -132,6 +132,7 @@ export const usePlayerStore = create<PlayerState>()(
           radio: null,
           playId: s.playId + 1,
           transition: 'cut',
+          startAt: 0,
         }));
       },
 
@@ -185,6 +186,7 @@ export const usePlayerStore = create<PlayerState>()(
             current: track,
             playId: st.playId + 1,
             transition: 'cut',
+            startAt: 0,
           }));
           return;
         }
@@ -196,6 +198,7 @@ export const usePlayerStore = create<PlayerState>()(
           current: st.queue[st.order[position]],
           playId: st.playId + 1,
           transition: 'cut',
+          startAt: 0,
         }));
       },
 
@@ -203,22 +206,22 @@ export const usePlayerStore = create<PlayerState>()(
         const s = get();
         const transition: Transition = auto ? 'crossfade' : 'cut';
         if (auto && s.repeat === 'one' && s.current) {
-          set({ playId: s.playId + 1, transition: 'cut' });
+          set({ playId: s.playId + 1, transition: 'cut', startAt: 0 });
           return true;
         }
         if (s.upNext.length) {
           const [track, ...rest] = s.upNext;
-          set({ upNext: rest, current: track, playId: s.playId + 1, transition });
+          set({ upNext: rest, current: track, playId: s.playId + 1, transition, startAt: 0 });
           return true;
         }
         if (s.position + 1 < s.order.length) {
           const position = s.position + 1;
-          set({ position, current: s.queue[s.order[position]], playId: s.playId + 1, transition });
+          set({ position, current: s.queue[s.order[position]], playId: s.playId + 1, transition, startAt: 0 });
           return true;
         }
         if (s.repeat === 'all' && s.queue.length && !s.radio) {
           const order = s.shuffle ? shuffled(s.queue.length, -1) : identity(s.queue.length);
-          set({ order, position: 0, current: s.queue[order[0]], playId: s.playId + 1, transition });
+          set({ order, position: 0, current: s.queue[order[0]], playId: s.playId + 1, transition, startAt: 0 });
           return true;
         }
         return false;
@@ -228,12 +231,12 @@ export const usePlayerStore = create<PlayerState>()(
         const s = get();
         const anchor = s.queue[s.order[s.position]];
         if (anchor && s.current && anchor.uid !== s.current.uid) {
-          set({ current: anchor, playId: s.playId + 1, transition: 'cut' });
+          set({ current: anchor, playId: s.playId + 1, transition: 'cut', startAt: 0 });
           return true;
         }
         if (s.position <= 0) return false;
         const position = s.position - 1;
-        set({ position, current: s.queue[s.order[position]], playId: s.playId + 1, transition: 'cut' });
+        set({ position, current: s.queue[s.order[position]], playId: s.playId + 1, transition: 'cut', startAt: 0 });
         return true;
       },
 
@@ -277,6 +280,7 @@ export const usePlayerStore = create<PlayerState>()(
           repeat: s.repeat === 'all' ? 'off' : s.repeat,
           playId: s.playId + 1,
           transition: 'cut',
+          startAt: 0,
         }));
       },
 

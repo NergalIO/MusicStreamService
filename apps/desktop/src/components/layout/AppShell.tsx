@@ -23,6 +23,7 @@ import { initRelayClient } from '@/lib/relay-client';
 import { applyDeepLink } from '@/lib/deep-links';
 import { isSpotifyPath } from '@/lib/spotify-session';
 import { useHotkeys } from '@/hooks/useHotkeys';
+import { useConnectorStatusSync } from '@/lib/connectors';
 import { usePlayerController } from '@/hooks/usePlayerController';
 import { useDownloadsStore } from '@/store/downloads-store';
 import { usePlaybackStore } from '@/store/playback-store';
@@ -35,6 +36,7 @@ function scrollRouteKey(pathname: string, search: string): string {
 
 export function AppShell() {
   usePlayerController();
+  useConnectorStatusSync();
   useHotkeys();
   const scrollRef = useRef<HTMLElement>(null);
   const scrollPositions = useRef(new Map<string, number>());

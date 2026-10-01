@@ -100,9 +100,15 @@ fun mapYandexArtist(obj: JsonObject): UnifiedArtist? {
     )
 }
 
+/** Без владельца плейлист не открыть: id вида «null:kind» привёл бы к запросу /users/null/... */
+fun mapYandexPlaylistOrNull(obj: JsonObject): UnifiedPlaylist? {
+    val uid = obj["owner"]?.jsonObject?.str("uid") ?: obj.str("uid")
+    return if (uid.isNullOrBlank()) null else mapYandexPlaylist(obj)
+}
+
 fun mapYandexPlaylist(obj: JsonObject): UnifiedPlaylist {
     val owner = obj["owner"]?.jsonObject
-    val ownerUid = owner?.str("uid") ?: obj.str("uid")
+    val ownerUid = owner?.str("uid") ?: obj.str("uid") ?: ""
     val kind = obj.str("kind") ?: "0"
     val coverUri = obj["cover"]?.jsonObject?.str("uri")
         ?: obj["cover"]?.jsonObject?.get("itemsUri")?.jsonArray?.firstOrNull()?.jsonPrimitive?.contentOrNull

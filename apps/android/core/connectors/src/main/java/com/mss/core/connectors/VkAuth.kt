@@ -639,7 +639,13 @@ object VkAuth {
                 val next = java.net.URI(currentUrl).resolve(loc).toString()
                 parseOAuthRedirect(next)?.let { oauth ->
                     if (!oauth.accessToken.isNullOrBlank() || !oauth.silentToken.isNullOrBlank()) {
-                        return 200 to """{"data":{"access_token":"${oauth.accessToken ?: ""}","user_id":${oauth.userId ?: 0},"silent_token":"${oauth.silentToken ?: ""}","uuid":"${oauth.uuid ?: ""}"}}"""
+                        // Собираем JSON, а не склеиваем строки: кавычка в токене ломала бы разбор.
+                        val data = org.json.JSONObject()
+                            .put("access_token", oauth.accessToken.orEmpty())
+                            .put("user_id", oauth.userId ?: 0)
+                            .put("silent_token", oauth.silentToken.orEmpty())
+                            .put("uuid", oauth.uuid.orEmpty())
+                        return 200 to org.json.JSONObject().put("data", data).toString()
                     }
                 }
                 currentUrl = next

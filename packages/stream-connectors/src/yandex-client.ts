@@ -110,7 +110,13 @@ export class YandexClient {
 
   get cachedAccount(): ExternalAccount | null {
     const raw = this.opts.vault.get(ACCOUNT_KEY);
-    return raw ? (JSON.parse(raw) as ExternalAccount) : null;
+    if (!raw) return null;
+    try {
+      return JSON.parse(raw) as ExternalAccount;
+    } catch {
+      this.opts.vault.delete(ACCOUNT_KEY);
+      return null;
+    }
   }
 
   private async oauthPost<T>(path: string, body: Record<string, string>): Promise<T> {
@@ -216,7 +222,11 @@ export class YandexClient {
         client_id: this.clientId,
       });
       return data.access_token;
-    } catch {
+    } catch (e) {
+      // OAuth отверг refresh token — сессии больше нет. Сетевой сбой аккаунт не трогает.
+      if (e instanceof YandexApiError) {
+        this.saveTokens({ ...t, refresh_token: undefined, expires_at: 0 });
+      }
       return null;
     }
   }

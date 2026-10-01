@@ -1,8 +1,19 @@
 import { app, safeStorage } from 'electron';
 import fs from 'node:fs';
 import path from 'node:path';
+import { log } from './logger.js';
 
 let cache: Record<string, string> | null = null;
+let plaintextWarned = false;
+
+function warnPlaintext(): void {
+  if (plaintextWarned) return;
+  plaintextWarned = true;
+  log.warn(
+    'Шифрование безопасного хранилища ОС недоступно: токены сервисов сохраняются в vault.json открытым текстом. ' +
+      'На Linux это обычно значит, что нет связки ключей (gnome-keyring или kwallet).',
+  );
+}
 
 function vaultFile(): string {
   return path.join(app.getPath('userData'), 'vault.json');
@@ -39,9 +50,13 @@ export const tokenVault = {
   },
   set(key: string, value: string): void {
     const data = load();
-    data[key] = safeStorage.isEncryptionAvailable()
-      ? `enc:${safeStorage.encryptString(value).toString('base64')}`
-      : `raw:${value}`;
+    if (safeStorage.isEncryptionAvailable()) {
+      data[key] = `enc:${safeStorage.encryptString(value).toString('base64')}`;
+    } else {
+      // Запись открытым текстом — это заметно, а не «как обычно»: предупреждаем в логе каждый раз.
+      warnPlaintext();
+      data[key] = `raw:${value}`;
+    }
     persist();
   },
   delete(key: string): void {

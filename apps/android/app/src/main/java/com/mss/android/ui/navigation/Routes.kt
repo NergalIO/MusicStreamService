@@ -23,10 +23,11 @@ fun parseMssLink(url: String): DeepLinkAction? {
     val parts = parsed.path.orEmpty().trim('/').split('/').filter { it.isNotEmpty() }
         .map { java.net.URLDecoder.decode(it, Charsets.UTF_8) }
     val query = parsed.query
-    val codeFromQuery = query?.split('&')?.mapNotNull {
-        val kv = it.split('=')
-        if (kv.getOrNull(0) == "code") kv.getOrNull(1) else null
-    }?.firstOrNull()
+    val codeFromQuery = query?.split('&')?.firstNotNullOfOrNull {
+        val kv = it.split('=', limit = 2)
+        // Значение в запросе приходит закодированным, в отличие от частей пути.
+        if (kv.getOrNull(0) == "code") kv.getOrNull(1)?.let { v -> decodeQuery(v) } else null
+    }
     return when (host) {
         "open" -> when (parts.firstOrNull()) {
             "track" -> DeepLinkAction(Routes.HOME, playSource = "local", playId = parts.getOrNull(1))
@@ -65,6 +66,9 @@ fun parseMssLink(url: String): DeepLinkAction? {
         else -> null
     }
 }
+
+private fun decodeQuery(value: String): String =
+    runCatching { java.net.URLDecoder.decode(value, Charsets.UTF_8) }.getOrDefault(value)
 
 object Routes {
     const val HOME = "home"

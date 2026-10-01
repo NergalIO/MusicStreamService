@@ -207,8 +207,11 @@ function ensureSession(): Session {
   allowPlaybackPermissions(ses);
   watchPlayerRequests(ses);
   ses.cookies.on('changed', emitLoggedIn);
+  // Первое чтение cookie асинхронное: пока оно не пришло, статус Spotify «не подключён» — ложный,
+  // поэтому результат обязательно рассылаем в интерфейс.
   void hasLoginCookie().then((loggedIn) => {
     loggedInCached = loggedIn;
+    sendToRenderer('spotify-session:loggedIn', loggedIn);
   });
   return ses;
 }

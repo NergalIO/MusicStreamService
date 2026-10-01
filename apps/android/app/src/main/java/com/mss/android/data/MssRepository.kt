@@ -58,6 +58,9 @@ class MssRepository @Inject constructor(
     suspend fun logout() {
         runCatching { api.logoutServer() }
         presence.disconnect()
+        // Токены и cookie сервисов живут отдельно от сессии MSS: без этого следующий
+        // пользователь устройства попадёт в чужие Яндекс, Spotify и VK.
+        connectors.all().forEach { runCatching { it.disconnect() } }
         preferences.clearSession()
     }
 

@@ -42,6 +42,7 @@ import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.collectAsState
 import androidx.compose.runtime.getValue
+import androidx.compose.runtime.remember
 import androidx.compose.runtime.snapshotFlow
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
@@ -63,6 +64,8 @@ import androidx.navigation.compose.composable
 import androidx.navigation.compose.currentBackStackEntryAsState
 import androidx.navigation.compose.rememberNavController
 import androidx.navigation.navArgument
+import kotlinx.coroutines.flow.distinctUntilChanged
+import kotlinx.coroutines.flow.map
 import com.mss.android.ui.auth.LoginScreen
 import com.mss.android.ui.update.AppUpdatePrompt
 import com.mss.android.ui.catalog.AlbumScreen
@@ -81,7 +84,6 @@ import com.mss.android.ui.components.LocalTrackHost
 import com.mss.android.ui.components.SpotifyCoverHealth
 import com.mss.android.ui.components.TrackHost
 import androidx.compose.runtime.CompositionLocalProvider
-import androidx.compose.runtime.remember
 import com.mss.android.ui.player.MiniPlayer
 import com.mss.android.ui.player.NowPlayingScreen
 import com.mss.android.ui.search.SearchScreen
@@ -100,6 +102,7 @@ import kotlinx.coroutines.flow.first
 fun MssApp(
     vm: MssViewModel = hiltViewModel(),
     incomingUri: Uri? = null,
+    onUriHandled: () -> Unit = {},
 ) {
     val session by vm.session.collectAsState()
     val nav = rememberNavController()
@@ -108,8 +111,8 @@ fun MssApp(
     val vkLogin by vm.vkLogin.collectAsState()
     val yandexPrompt by vm.yandexPrompt.collectAsState()
     val settings by vm.playbackSettings.collectAsState()
-    val player by vm.playerState.collectAsState()
-    val cover = if (settings.accent == COVER_ACCENT) rememberCoverHsl(player.current?.coverUrl) else null
+    val coverUrl by remember { vm.playerState.map { it.current?.coverUrl }.distinctUntilChanged() }.collectAsState(initial = null)
+    val cover = if (settings.accent == COVER_ACCENT) rememberCoverHsl(coverUrl) else null
     LaunchedEffect(spotifyLoggedIn) {
         if (spotifyLoggedIn) vm.spotifyWeb.hideLogin()
     }
@@ -118,10 +121,14 @@ fun MssApp(
         if (session == null) return@LaunchedEffect
         val uri = incomingUri ?: return@LaunchedEffect
         val url = uri.toString()
-        val action = parseMssLink(url) ?: return@LaunchedEffect
-        vm.applyDeepLink(url)
-        snapshotFlow { nav.currentBackStackEntry }.filterNotNull().first()
-        nav.navigate(action.route)
+        val action = parseMssLink(url)
+        if (action != null) {
+            vm.applyDeepLink(url)
+            snapshotFlow { nav.currentBackStackEntry }.filterNotNull().first()
+            nav.navigate(action.route)
+        }
+        // Ссылку выполняем один раз: иначе выход и повторный вход снова включили бы трек или лобби.
+        onUriHandled()
     }
 
     val spotifyVisible = spotifyLogin && !spotifyLoggedIn

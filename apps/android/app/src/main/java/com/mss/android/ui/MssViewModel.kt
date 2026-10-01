@@ -825,8 +825,12 @@ class MssViewModel @Inject constructor(
         if (track.source == SourceId.YANDEX && liked) yandex.dislike(track)
     }
 
+    private var yandexLoginJob: Job? = null
+
     fun connectYandex() {
-        viewModelScope.launch {
+        // Повторное нажатие не должно запускать второй опрос кода устройства поверх первого.
+        if (yandexLoginJob?.isActive == true) return
+        yandexLoginJob = viewModelScope.launch {
             runCatching {
                 yandex.login { _yandexPrompt.value = it }
                 refreshSources()
@@ -1174,14 +1178,22 @@ class MssViewModel @Inject constructor(
             runCatching { block() }.onFailure { e ->
                 if (session.value?.accessToken == "preview") return@launch
                 _error.value = e.message
+                // Коннектор мог сам сбросить протухшую сессию — иначе сервис остался бы «подключённым».
+                if (looksLikeAuthError(e)) refreshSources()
             }
         }
+    }
+
+    private fun looksLikeAuthError(e: Throwable): Boolean {
+        val text = e.message?.lowercase() ?: return false
+        return AUTH_ERROR_HINTS.any { it in text }
     }
 
     fun clearError() { _error.value = null }
     fun clearNotice() { _notice.value = null }
 }
 
+private val AUTH_ERROR_HINTS = listOf("войдите", "сессия", "не подключ", "unauthorized", "токен")
 private val LIBRARY_SOURCES = listOf(SourceId.LOCAL, SourceId.YANDEX, SourceId.SPOTIFY, SourceId.VK)
 private const val LIBRARY_LIKES_LIMIT = 300
 

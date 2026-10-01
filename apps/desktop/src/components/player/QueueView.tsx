@@ -43,13 +43,24 @@ function Row({
 }
 
 export function QueueView() {
-  const state = usePlayerStore();
+  const current = usePlayerStore((s) => s.current);
+  const radio = usePlayerStore((s) => s.radio);
+  const context = usePlayerStore((s) => s.context);
+  const historyAll = usePlayerStore((s) => s.history);
+  const upNext = usePlayerStore((s) => s.upNext);
+  const order = usePlayerStore((s) => s.order);
+  const position = usePlayerStore((s) => s.position);
+  const queue = usePlayerStore((s) => s.queue);
+  const jumpToUpcoming = usePlayerStore((s) => s.jumpToUpcoming);
+  const removeUpcoming = usePlayerStore((s) => s.removeUpcoming);
+  const moveUpcoming = usePlayerStore((s) => s.moveUpcoming);
+  const playTrack = usePlayerStore((s) => s.playTrack);
   const playing = usePlaybackStore((s) => s.playing);
   const [dragFrom, setDragFrom] = useState<number | null>(null);
   const [dragOver, setDragOver] = useState<number | null>(null);
   const [loadingMore, setLoadingMore] = useState(false);
-  const upcoming = upcomingTracks(state);
-  const history = state.history.filter((t) => t.uid !== state.current?.uid).slice(0, 30);
+  const upcoming = upcomingTracks({ upNext, order, position, queue });
+  const history = historyAll.filter((t) => t.uid !== current?.uid).slice(0, 30);
 
   const focusRow = (uid: string | undefined) => {
     if (!uid) return;
@@ -64,31 +75,31 @@ export function QueueView() {
       e.stopPropagation();
       if (target < 0 || target > last) return;
       if (e.altKey) {
-        state.moveUpcoming(index, target);
+        moveUpcoming(index, target);
         focusRow(uid);
       } else {
         focusRow(upcoming[target].uid);
       }
     } else if (e.key === 'Enter') {
       e.preventDefault();
-      state.jumpToUpcoming(index);
+      jumpToUpcoming(index);
     } else if (e.key === 'Delete' || e.key === 'Backspace') {
       e.preventDefault();
-      state.removeUpcoming(uid);
+      removeUpcoming(uid);
       focusRow(upcoming[index + 1]?.uid ?? upcoming[index - 1]?.uid);
     }
   };
 
   return (
     <div className="no-scrollbar h-full space-y-6 overflow-y-auto pb-10 pr-1">
-      {state.current && (
+      {current && (
         <section>
           <h3 className="mb-2 px-2 text-xs font-semibold uppercase tracking-wider text-muted">Сейчас играет</h3>
           <div className="flex h-14 items-center gap-3 rounded-lg bg-foreground/10 px-2">
-            <Artwork src={state.current.coverUrl} className="h-10 w-10" rounded="rounded-md" iconSize={14} />
+            <Artwork src={current.coverUrl} className="h-10 w-10" rounded="rounded-md" iconSize={14} />
             <div className="min-w-0 flex-1">
-              <div className="truncate text-sm font-medium">{state.current.title}</div>
-              <div className="truncate text-xs text-muted">{state.current.artist}</div>
+              <div className="truncate text-sm font-medium">{current.title}</div>
+              <div className="truncate text-xs text-muted">{current.artist}</div>
             </div>
             <NowPlayingBars playing={playing} className="mr-2" />
           </div>
@@ -98,15 +109,15 @@ export function QueueView() {
       <section>
         <div className="mb-2 flex items-center justify-between px-2">
           <h3 className="text-xs font-semibold uppercase tracking-wider text-muted">
-            {state.radio ? 'Моя волна' : state.context?.title ? `Далее · ${state.context.title}` : 'Далее'}
+            {radio ? 'Моя волна' : context?.title ? `Далее · ${context.title}` : 'Далее'}
           </h3>
-          {upcoming.length > 0 && !state.radio && (
+          {upcoming.length > 0 && !radio && (
             <button type="button" onClick={clearQueueWithUndo} className="text-xs text-muted hover:text-foreground">
               Очистить
             </button>
           )}
         </div>
-        {upcoming.length === 0 && !state.radio && <p className="px-2 text-sm text-muted">Очередь пуста</p>}
+        {upcoming.length === 0 && !radio && <p className="px-2 text-sm text-muted">Очередь пуста</p>}
         <p id="queue-keys-hint" className="sr-only">
           Стрелки вверх и вниз — выбор трека, Alt со стрелкой — переместить, Enter — играть, Delete — убрать из очереди
         </p>
@@ -133,7 +144,7 @@ export function QueueView() {
             }}
             onDrop={(e) => {
               e.preventDefault();
-              if (dragFrom !== null) state.moveUpcoming(dragFrom, i);
+              if (dragFrom !== null) moveUpcoming(dragFrom, i);
               setDragFrom(null);
               setDragOver(null);
             }}
@@ -143,12 +154,12 @@ export function QueueView() {
               dragFrom === i && 'opacity-40',
             )}
           >
-            <Row track={track} onClick={() => state.jumpToUpcoming(i)}>
+            <Row track={track} onClick={() => jumpToUpcoming(i)}>
               <div className="hidden items-center gap-1 group-hover:flex">
                 <button
                   type="button"
                   aria-label="Убрать из очереди"
-                  onClick={() => state.removeUpcoming(track.uid)}
+                  onClick={() => removeUpcoming(track.uid)}
                   className="rounded-full p-1 text-muted hover:bg-foreground/10 hover:text-foreground"
                 >
                   <X size={14} />
@@ -161,7 +172,7 @@ export function QueueView() {
         {upcoming.length > MAX_VISIBLE && (
           <p className="px-2 pt-2 text-xs text-muted">и ещё {upcoming.length - MAX_VISIBLE}</p>
         )}
-        {state.radio && (
+        {radio && (
           <button
             type="button"
             disabled={loadingMore}
@@ -191,7 +202,7 @@ export function QueueView() {
               key={track.uid}
               track={track}
               dim
-              onClick={() => state.playTrack(track, { type: 'history', title: 'Недавно играли', path: '/media/library/history' })}
+              onClick={() => playTrack(track, { type: 'history', title: 'Недавно играли', path: '/media/library/history' })}
             />
           ))}
         </section>

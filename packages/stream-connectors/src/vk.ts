@@ -120,13 +120,16 @@ async function collectAudio(
       offset,
       count: Math.min(PAGE, limit - items.length),
     });
-    const batch = (page.items ?? [])
+    const raw = page.items ?? [];
+    const batch = raw
       .map(unwrapAudio)
       .filter((a): a is VkAudio => !!a)
       .filter((a) => !isVkAudioStub(a));
     items.push(...batch);
-    if (!batch.length || items.length >= (page.count ?? items.length)) break;
-    offset += batch.length;
+    if (!raw.length) break;
+    // Сдвигаемся на размер страницы API, а не отфильтрованной выборки: иначе треки задваиваются.
+    offset += raw.length;
+    if (offset >= (page.count ?? offset)) break;
   }
   return items.slice(0, limit);
 }
@@ -143,6 +146,7 @@ export function createVkConnector(opts: VkConnectorOptions): VkConnector {
     cancelConnect: () => client.cancelLogin(),
     async disconnect() {
       client.logout();
+      await opts.clearLoginSession?.().catch(() => undefined);
     },
     async getAccount(): Promise<ExternalAccount | null> {
       if (client.status !== 'connected') return null;

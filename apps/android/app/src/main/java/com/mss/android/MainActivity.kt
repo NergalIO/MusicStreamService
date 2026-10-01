@@ -26,7 +26,14 @@ class MainActivity : ComponentActivity() {
         incoming = intent?.data
         requestPlaybackNotificationPermission()
         setContent {
-            MssApp(incomingUri = incoming)
+            MssApp(
+                incomingUri = incoming,
+                onUriHandled = {
+                    incoming = null
+                    // Чтобы ссылка не повторилась после пересоздания активности.
+                    intent?.data = null
+                },
+            )
         }
     }
 

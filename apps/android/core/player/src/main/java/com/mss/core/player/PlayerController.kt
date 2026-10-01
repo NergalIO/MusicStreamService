@@ -2,8 +2,11 @@ package com.mss.core.player
 
 import android.content.Context
 import android.content.Intent
+import android.media.AudioFocusRequest
+import android.media.AudioManager
 import android.media.audiofx.Equalizer
 import android.os.Build
+import android.media.AudioAttributes as PlatformAudioAttributes
 import android.os.Looper
 import androidx.media3.common.AudioAttributes
 import androidx.media3.common.C
@@ -79,11 +82,15 @@ class PlayerController @Inject constructor(
             override fun next() = this@PlayerController.next()
             override fun previous() = skipPrevious()
             override fun seekTo(positionMs: Long) = this@PlayerController.seekTo(positionMs)
+            override fun setRepeat(mode: RepeatMode) = this@PlayerController.setRepeat(mode)
+            override fun setShuffle(enabled: Boolean) = this@PlayerController.setShuffle(enabled)
         },
     )
 
     private var queue: MutableList<UnifiedTrack> = mutableListOf()
     private var index = 0
+    /** Очередь до перемешивания: по ней восстанавливаем порядок, когда перемешивание выключают. */
+    private var sourceOrder: List<UnifiedTrack> = emptyList()
     private var playedMs = 0L
     private var tickJob: Job? = null
     private var deviceProbe: Job? = null
@@ -100,12 +107,26 @@ class PlayerController @Inject constructor(
     private var commandHoldUntil = 0L
     private var endedGen = -1
     private var seekTarget: Long? = null
+    /** Веб-плеер может не отработать перемотку: дольше этого срока цель не ждём. */
+    private var seekDeadline = 0L
+    /** Пока новый трек резолвится, прошлый Exo ещё доигрывает — его STATE_ENDED относится к старому треку. */
+    private var exoStarting = false
+    private var fadeJob: Job? = null
     /** Пока веб-плеер переключается на новый трек, в DOM ещё старый — его позицию и конец не учитываем. */
     private var spotifyStarting = false
     /** Веб-плеер уже показывал наш трек: смена заголовка после этого — автоплей Spotify, а не запоздалый DOM. */
     private var sawOwnSpotifyTitle = false
     private var lastSpotifyPos = 0L
     private var foreignTitleTicks = 0
+    private var lastTickPos = 0L
+    private var lastSettings: PlaybackSettings? = null
+    private val audioManager = context.getSystemService(Context.AUDIO_SERVICE) as AudioManager
+    private var focusRequest: AudioFocusRequest? = null
+    private val focusListener = AudioManager.OnAudioFocusChangeListener { change ->
+        if (change == AudioManager.AUDIOFOCUS_LOSS || change == AudioManager.AUDIOFOCUS_LOSS_TRANSIENT) {
+            if (usingSpotify && _state.value.playing) pause()
+        }
+    }
 
     init {
         listOf(exoA, exoB).forEach { player ->
@@ -122,8 +143,14 @@ class PlayerController @Inject constructor(
                 }
 
                 override fun onPlaybackStateChanged(playbackState: Int) {
-                    if (player !== active) return
-                    if (playbackState == Player.STATE_ENDED) onEnded()
+                    if (player !== active || usingSpotify || exoStarting) return
+                    if (playbackState != Player.STATE_ENDED || endedGen == playGen) return
+                    endedGen = playGen
+                    onEnded()
+                }
+
+                override fun onAudioSessionIdChanged(audioSessionId: Int) {
+                    reattachEq(player)
                 }
 
                 override fun onPlayerError(error: PlaybackException) {
@@ -145,6 +172,12 @@ class PlayerController @Inject constructor(
 
     private fun holdCommand() {
         commandHoldUntil = android.os.SystemClock.elapsedRealtime() + COMMAND_HOLD_MS
+    }
+
+    /** До подтверждения перемотки веб-плеером верим своей позиции, но не дольше SEEK_WAIT_MS. */
+    private fun awaitSeek(ms: Long) {
+        seekTarget = ms
+        seekDeadline = android.os.SystemClock.elapsedRealtime() + SEEK_WAIT_MS
     }
 
     fun exoPlayer(): ExoPlayer = active
@@ -174,15 +207,51 @@ class PlayerController @Inject constructor(
     }
 
     fun playTracks(tracks: List<UnifiedTrack>, startIndex: Int = 0, radio: Boolean = false) {
+        // Выбор трека из текущей очереди — это переход внутри неё, а не повод перемешать заново.
+        val sameQueue = tracks.size == queue.size && tracks.indices.all { trackKey(tracks[it]) == trackKey(queue[it]) }
         queue = tracks.toMutableList()
         index = startIndex.coerceIn(0, (queue.size - 1).coerceAtLeast(0))
         preloadedNext = false
+        if (!sameQueue) sourceOrder = emptyList()
         if (!radio) {
             waveSessionId = null
             waveBatchId = null
         }
-        _state.value = _state.value.copy(queue = queue.toList(), radio = radio, shuffle = if (radio) false else _state.value.shuffle)
+        val shuffle = !radio && _state.value.shuffle
+        // У волны нет конца списка, поэтому повтор всего списка туда не переносим.
+        val repeat = if (radio && _state.value.repeat == RepeatMode.ALL) RepeatMode.OFF else _state.value.repeat
+        _state.value = _state.value.copy(queue = queue.toList(), radio = radio, shuffle = shuffle, repeat = repeat)
+        if (shuffle && !sameQueue) reorderQueue(shuffled = true)
         playCurrent(crossfade = false)
+    }
+
+    private fun trackKey(track: UnifiedTrack) = "${track.source}:${track.id}"
+
+    /**
+     * Перемешивание меняет саму очередь, а не выбор следующего трека: список «Далее» и кнопка «назад»
+     * показывают тот же порядок, в котором треки прозвучат. Текущий трек остаётся на месте.
+     */
+    private fun reorderQueue(shuffled: Boolean) {
+        val current = queue.getOrNull(index)
+        if (shuffled) {
+            sourceOrder = queue.toList()
+            val rest = queue.filterIndexed { i, _ -> i != index }.shuffled()
+            queue = (listOfNotNull(current) + rest).toMutableList()
+        } else {
+            if (sourceOrder.isEmpty()) return
+            val remaining = queue.toMutableList()
+            val restored = mutableListOf<UnifiedTrack>()
+            for (track in sourceOrder) {
+                val at = remaining.indexOfFirst { trackKey(it) == trackKey(track) }
+                if (at >= 0) restored += remaining.removeAt(at)
+            }
+            // Добавленные уже после включения перемешивания остаются в конце.
+            restored += remaining
+            queue = restored
+            sourceOrder = emptyList()
+        }
+        index = current?.let { c -> queue.indexOfFirst { trackKey(it) == trackKey(c) } }?.takeIf { it >= 0 } ?: 0
+        _state.value = _state.value.copy(queue = queue.toList(), index = index)
     }
 
     fun enqueue(track: UnifiedTrack) {
@@ -198,9 +267,22 @@ class PlayerController @Inject constructor(
 
     fun removeAt(i: Int) {
         if (i !in queue.indices) return
+        val wasCurrent = i == index
         queue.removeAt(i)
         if (i < index) index--
+        if (queue.isEmpty()) {
+            index = 0
+            playGen += 1
+            awaitingStart = false
+            if (usingSpotify) spotifyWeb.pause() else active.pause()
+            dropSpotifyFocus()
+            _state.value = _state.value.copy(queue = emptyList(), index = 0, current = null, playing = false)
+            return
+        }
+        index = index.coerceIn(0, queue.lastIndex)
         _state.value = _state.value.copy(queue = queue.toList(), index = index)
+        // Удалили играющий трек — дальше должен пойти тот, что встал на его место.
+        if (wasCurrent) playCurrent(crossfade = false)
     }
 
     fun move(from: Int, to: Int) {
@@ -246,21 +328,25 @@ class PlayerController @Inject constructor(
     }
 
     fun next() {
+        // Пропуск засчитываем только если очередь действительно сдвинулась.
+        if (!canAdvance(auto = false)) return
         recordPlay(false)
         advance(auto = false)
     }
 
+    private fun canAdvance(auto: Boolean): Boolean {
+        if (queue.isEmpty()) return false
+        val mode = _state.value.repeat
+        if (auto && mode == RepeatMode.ONE) return true
+        return mode != RepeatMode.OFF || index + 1 < queue.size
+    }
+
     /** Повтор трека действует только на естественный конец трека; кнопка «вперёд» всегда переключает. */
-    private fun advance(auto: Boolean) {
+    private fun advance(auto: Boolean, crossfade: Boolean = false) {
         if (queue.isEmpty()) return
         val mode = _state.value.repeat
         val nextIdx = when {
             auto && mode == RepeatMode.ONE -> index
-            _state.value.shuffle && queue.size > 1 -> {
-                var i = index
-                while (i == index) i = (0 until queue.size).random()
-                i
-            }
             mode != RepeatMode.OFF -> (index + 1) % queue.size
             else -> if (index + 1 < queue.size) index + 1 else return
         }
@@ -269,28 +355,45 @@ class PlayerController @Inject constructor(
             return
         }
         index = nextIdx
-        playCurrent(crossfade = false)
+        playCurrent(crossfade = crossfade)
     }
 
     /**
-     * Веб-плеер Spotify игнорирует запуск уже открытого трека, поэтому повтор делаем перемоткой в начало.
-     * Если Spotify уже ушёл в автоплей, трек открываем заново.
+     * Повтор трека перематывает в начало: заново запрашивать ссылку не нужно, а веб-плеер Spotify
+     * вдобавок игнорирует запуск уже открытого трека. Если источник уже ушёл дальше, открываем трек заново.
      */
     private fun restartCurrent() {
         val track = queue.getOrNull(index) ?: return
+        if (!usingSpotify) {
+            if (active.currentMediaItem == null || active.playbackState == Player.STATE_IDLE) {
+                playCurrent(crossfade = false)
+                return
+            }
+            playGen += 1
+            playedMs = 0
+            lastTickPos = 0
+            preloadedNext = false
+            awaitingStart = true
+            active.seekTo(0)
+            active.play()
+            _state.value = _state.value.copy(positionMs = 0, playing = true)
+            notifyWaveStarted(track)
+            return
+        }
         val d = spotifyWeb.dom.value
-        if (!usingSpotify || track.source != SourceId.SPOTIFY || !d.ready || !spotifyTitleMatches(d.title, track.title)) {
+        if (track.source != SourceId.SPOTIFY || !d.ready || !spotifyTitleMatches(d.title, track.title)) {
             playCurrent(crossfade = false)
             return
         }
         playGen += 1
         playedMs = 0
+        lastTickPos = 0
         preloadedNext = false
         lastSpotifyPos = 0
         foreignTitleTicks = 0
         awaitingStart = false
         holdCommand()
-        seekTarget = 0
+        awaitSeek(0)
         spotifyWeb.seek(0)
         spotifyWeb.resume()
         _state.value = _state.value.copy(positionMs = 0, playing = true)
@@ -312,9 +415,10 @@ class PlayerController @Inject constructor(
     }
 
     fun seekTo(ms: Long) {
+        lastTickPos = ms
         if (usingSpotify) {
             holdCommand()
-            seekTarget = ms
+            awaitSeek(ms)
             spotifyWeb.seek(ms)
         } else {
             active.seekTo(ms)
@@ -323,18 +427,30 @@ class PlayerController @Inject constructor(
     }
 
     fun setShuffle(enabled: Boolean) {
-        if (_state.value.radio) return
+        // В волне следующий трек подбирает Яндекс, перемешивать нечего.
+        if (_state.value.radio || _state.value.shuffle == enabled) return
         _state.value = _state.value.copy(shuffle = enabled)
+        reorderQueue(shuffled = enabled)
     }
 
     fun cycleRepeat() {
-        if (_state.value.radio) return
-        val next = when (_state.value.repeat) {
-            RepeatMode.OFF -> RepeatMode.ALL
-            RepeatMode.ALL -> RepeatMode.ONE
-            RepeatMode.ONE -> RepeatMode.OFF
+        val current = _state.value.repeat
+        val next = if (_state.value.radio) {
+            // У волны нет списка целиком, поэтому доступен только повтор трека.
+            if (current == RepeatMode.ONE) RepeatMode.OFF else RepeatMode.ONE
+        } else {
+            when (current) {
+                RepeatMode.OFF -> RepeatMode.ALL
+                RepeatMode.ALL -> RepeatMode.ONE
+                RepeatMode.ONE -> RepeatMode.OFF
+            }
         }
         _state.value = _state.value.copy(repeat = next)
+    }
+
+    fun setRepeat(mode: RepeatMode) {
+        if (_state.value.radio && mode == RepeatMode.ALL) return
+        _state.value = _state.value.copy(repeat = mode)
     }
 
     fun setSleepTimer(minutes: Int?) {
@@ -376,9 +492,14 @@ class PlayerController @Inject constructor(
             val holding = android.os.SystemClock.elapsedRealtime() < commandHoldUntil
             val wanted = _state.value.playing
             val target = seekTarget
-            if (target != null && (!holding || kotlin.math.abs(d.positionMs - target) < 2_000)) seekTarget = null
-            dur = d.durationMs.takeIf { it > 0 } ?: fallbackDur
-            if (spotifyStarting) {
+            val seekLanded = target != null && kotlin.math.abs(d.positionMs - target) < 2_000
+            if (target != null && (seekLanded || android.os.SystemClock.elapsedRealtime() >= seekDeadline)) seekTarget = null
+            val ours = domIsOurTrack(d)
+            if (ours) sawOwnSpotifyTitle = true
+            // Сразу после команды в панели ещё прошлый трек: его позицию не берём, но и не ждём вечно.
+            val trustDom = ours || sawOwnSpotifyTitle || !holding
+            dur = (if (trustDom) d.durationMs.takeIf { it > 0 } else null) ?: fallbackDur
+            if (spotifyStarting || !trustDom) {
                 pos = _state.value.positionMs
                 playing = true
             } else if (awaitingStart && !d.playing) {
@@ -388,11 +509,11 @@ class PlayerController @Inject constructor(
                 pos = _state.value.positionMs
                 playing = wanted
             } else {
-                if (d.playing) awaitingStart = false
+                if (d.playing && ours) awaitingStart = false
                 pos = if (seekTarget != null) _state.value.positionMs else d.positionMs
                 playing = d.playing
             }
-            if (d.ready && dur > 0 && pos >= dur - 1_500 && playing && endedGen != playGen) {
+            if (!spotifyStarting && ours && d.ready && dur > 0 && pos >= dur - 1_500 && playing && endedGen != playGen) {
                 endedGen = playGen
                 onEnded()
                 return
@@ -407,7 +528,10 @@ class PlayerController @Inject constructor(
             dur = active.duration.coerceAtLeast(0)
             playing = awaitingStart || active.isPlaying || (active.playWhenReady && active.playbackState == Player.STATE_BUFFERING)
         }
-        playedMs = maxOf(playedMs, pos)
+        // Считаем прослушанное, а не максимум позиции: перемотка назад иначе завышала бы отчёт.
+        val step = pos - lastTickPos
+        if (step in 1..5_000 && playing) playedMs += step
+        lastTickPos = pos
         _state.value = _state.value.copy(positionMs = pos, durationMs = dur, playing = playing)
         val ends = _state.value.sleepEndsAt
         if (ends != null && System.currentTimeMillis() >= ends) {
@@ -425,18 +549,18 @@ class PlayerController @Inject constructor(
      * Секундные часы панели могут проскочить окно конца трека — тогда ловим смену трека в самом веб-плеере.
      */
     private fun spotifyLeftTrack(d: SpotifyDomState, dur: Long, holding: Boolean): Boolean {
-        val lastPos = lastSpotifyPos
-        lastSpotifyPos = d.positionMs
         val stable = !spotifyStarting && !awaitingStart && !holding && seekTarget == null &&
             d.ready && d.playing && !d.ad && endedGen != playGen
+        // Пока состояние не устоялось, позиция в DOM относится к прошлому треку: запоминать её нельзя.
         if (!stable) return false
-        val own = _state.value.current?.title?.let { spotifyTitleMatches(d.title, it) } ?: true
-        if (own) {
+        val lastPos = lastSpotifyPos
+        lastSpotifyPos = d.positionMs
+        if (domIsOurTrack(d)) {
             sawOwnSpotifyTitle = true
             foreignTitleTicks = 0
             return false
         }
-        val wrapped = dur > 0 && lastPos >= dur - 15_000 && d.positionMs < 5_000
+        val wrapped = sawOwnSpotifyTitle && dur > 0 && lastPos >= dur - 15_000 && d.positionMs < 5_000
         if (wrapped) return true
         // Автоплей начинает новый трек с нуля; чужое название посреди трека — не переключение.
         if (!sawOwnSpotifyTitle || d.title.isBlank() || d.positionMs >= AUTOPLAY_START_MS) {
@@ -447,12 +571,18 @@ class PlayerController @Inject constructor(
         return foreignTitleTicks >= 2
     }
 
+    /** Пустое название — «неизвестно», а не совпадение: иначе пустой DOM считался бы нашим треком. */
     private fun spotifyTitleMatches(dom: String, title: String): Boolean {
         fun norm(s: String) = s.lowercase().filter { it.isLetterOrDigit() }
         val a = norm(dom)
         val b = norm(title)
-        if (a.isEmpty() || b.isEmpty()) return true
+        if (a.isEmpty() || b.isEmpty()) return false
         return a == b || a.contains(b) || b.contains(a)
+    }
+
+    private fun domIsOurTrack(d: SpotifyDomState): Boolean {
+        val title = _state.value.current?.title ?: return false
+        return spotifyTitleMatches(d.title, title)
     }
 
     private fun onEnded() {
@@ -462,13 +592,19 @@ class PlayerController @Inject constructor(
             return
         }
         recordPlay(true)
-        advance(auto = true)
+        advance(auto = true, crossfade = true)
     }
 
     private fun pauseSleep() {
         awaitingStart = false
         playGen += 1
-        if (usingSpotify) spotifyWeb.pause() else active.pause()
+        spotifyStarting = false
+        if (usingSpotify) {
+            holdCommand()
+            spotifyWeb.pause()
+        } else {
+            active.pause()
+        }
         _state.value = _state.value.copy(sleepEndsAt = null, sleepUntilTrackEnd = false, playing = false)
     }
 
@@ -478,41 +614,60 @@ class PlayerController @Inject constructor(
         awaitingStart = true
         _state.value = _state.value.copy(current = track, queue = queue.toList(), index = index, playing = true)
         playedMs = 0
+        lastTickPos = 0
         preloadedNext = false
         sawOwnSpotifyTitle = false
         lastSpotifyPos = 0
         foreignTitleTicks = 0
+        // Пока трек резолвится, прошлый источник ещё доигрывает: его конец не должен засчитаться как наш.
+        spotifyStarting = usingSpotify
+        exoStarting = !usingSpotify
+        if (usingSpotify) _state.value = _state.value.copy(positionMs = 0)
         ensurePlaybackService()
         startTicker()
         if (!track.playable) {
+            spotifyStarting = false
+            exoStarting = false
             failPlayback(gen)
             return
         }
         scope.launch {
             val resolved = runCatching { resolver.resolve(track) }.getOrElse {
+                if (gen == playGen) {
+                    spotifyStarting = false
+                    exoStarting = false
+                }
                 failPlayback(gen)
                 return@launch
             }
             if (gen != playGen) return@launch
+            if (resolved !is ResolvedPlayback.SpotifyWeb) spotifyStarting = false
             when (resolved) {
                 is ResolvedPlayback.SpotifyWeb -> {
                     usingSpotify = true
+                    exoStarting = false
                     silenceExo()
                     spotifyWeb.wake()
                     spotifyStarting = true
                     _state.value = _state.value.copy(positionMs = 0)
                     val fast = preferences.loadPlaybackSettings().spotifyFastStart
                     val result = runCatching { spotifyWeb.play(resolved.trackId, fast = fast) }
-                    if (gen == playGen) spotifyStarting = false
+                    if (gen == playGen) {
+                        // Панель веб-плеера обновляется с задержкой: ещё немного верим своему состоянию.
+                        holdCommand()
+                        spotifyStarting = false
+                    }
                     result
                         .onSuccess {
                             if (gen != playGen) return@launch
+                            holdSpotifyFocus()
                             val d = spotifyWeb.dom.value
-                            if (d.playing) awaitingStart = false
+                            val ours = domIsOurTrack(d)
+                            if (d.playing && ours) awaitingStart = false
                             _state.value = _state.value.copy(
                                 playing = true,
-                                durationMs = d.durationMs.takeIf { it > 0 } ?: track.durationMs ?: 0,
-                                positionMs = d.positionMs,
+                                durationMs = (if (ours) d.durationMs.takeIf { it > 0 } else null) ?: track.durationMs ?: 0,
+                                positionMs = if (ours) d.positionMs else 0,
                             )
                         }
                         .onFailure { err ->
@@ -530,6 +685,7 @@ class PlayerController @Inject constructor(
                     val settings = preferences.loadPlaybackSettings()
                     val fade = crossfade && settings.crossfadeMs > 0 && track.source != SourceId.SPOTIFY
                     playUrl(track, resolved.url, fade, settings.crossfadeMs)
+                    exoStarting = false
                     awaitingStart = false
                     notifyWaveStarted(track)
                 }
@@ -543,12 +699,13 @@ class PlayerController @Inject constructor(
     private fun failPlayback(gen: Int) {
         if (gen != playGen) return
         consecutiveErrors += 1
-        if (consecutiveErrors < 5 && index + 1 < queue.size) {
-            index += 1
-            playCurrent(crossfade = false)
+        // Повтор трека здесь не используем: битый трек иначе крутился бы бесконечно.
+        if (consecutiveErrors < 5 && queue.size > 1 && canAdvance(auto = false)) {
+            advance(auto = false)
             return
         }
         awaitingStart = false
+        if (usingSpotify) dropSpotifyFocus()
         active.pause()
         _state.value = _state.value.copy(playing = false)
     }
@@ -581,25 +738,33 @@ class PlayerController @Inject constructor(
             _state.value = _state.value.copy(current = track, playing = true)
             return
         }
+        val outgoing = active
         val incoming = if (active === exoA) exoB else exoA
         incoming.setMediaItem(item)
         incoming.prepare()
         incoming.play()
         applyLoudness(incoming, track)
         incoming.volume = 0f
-        active.volume = _state.value.volume
-        scope.launch {
+        outgoing.volume = _state.value.volume
+        // Активным считаем новый плеер сразу: конец уходящего трека больше не наш.
+        active = incoming
+        val gen = playGen
+        fadeJob?.cancel()
+        fadeJob = scope.launch {
             val steps = 20
-            val step = fadeMs / steps
+            val step = (fadeMs / steps).toLong()
             repeat(steps) { i ->
-                delay(step.toLong())
+                delay(step)
+                if (gen != playGen) {
+                    outgoing.pause()
+                    return@launch
+                }
                 val t = (i + 1) / steps.toFloat()
                 incoming.volume = t * _state.value.volume
-                active.volume = (1 - t) * _state.value.volume
+                outgoing.volume = (1 - t) * _state.value.volume
             }
-            active.pause()
-            active = incoming
-            active.volume = _state.value.volume
+            outgoing.pause()
+            incoming.volume = _state.value.volume
         }
         _state.value = _state.value.copy(current = track, playing = true)
     }
@@ -721,16 +886,53 @@ class PlayerController @Inject constructor(
     }
 
     private fun restoreExoFocus() {
+        dropSpotifyFocus()
         val attrs = musicAttrs()
         exoA.setAudioAttributes(attrs, true)
         exoB.setAudioAttributes(attrs, true)
     }
 
+    /** Веб-плеер Spotify сам фокус не берёт — без этого другие приложения не затихают. */
+    private fun holdSpotifyFocus() {
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
+            val req = focusRequest ?: AudioFocusRequest.Builder(AudioManager.AUDIOFOCUS_GAIN)
+                .setAudioAttributes(
+                    PlatformAudioAttributes.Builder()
+                        .setUsage(PlatformAudioAttributes.USAGE_MEDIA)
+                        .setContentType(PlatformAudioAttributes.CONTENT_TYPE_MUSIC)
+                        .build(),
+                )
+                .setOnAudioFocusChangeListener(focusListener)
+                .build()
+                .also { focusRequest = it }
+            audioManager.requestAudioFocus(req)
+        } else {
+            @Suppress("DEPRECATION")
+            audioManager.requestAudioFocus(focusListener, AudioManager.STREAM_MUSIC, AudioManager.AUDIOFOCUS_GAIN)
+        }
+    }
+
+    private fun dropSpotifyFocus() {
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
+            focusRequest?.let { audioManager.abandonAudioFocusRequest(it) }
+        } else {
+            @Suppress("DEPRECATION")
+            audioManager.abandonAudioFocus(focusListener)
+        }
+    }
+
     private fun applySettings(settings: PlaybackSettings) {
+        lastSettings = settings
         exoA.setPlaybackSpeed(settings.playbackRate)
         exoB.setPlaybackSpeed(settings.playbackRate)
         attachEq(exoA, settings, eqA) { eqA = it }
         attachEq(exoB, settings, eqB) { eqB = it }
+    }
+
+    /** Аудиосессия меняется вместе с источником, а эквалайзер привязан именно к ней. */
+    private fun reattachEq(player: ExoPlayer) {
+        val settings = lastSettings ?: return
+        if (player === exoA) attachEq(exoA, settings, eqA) { eqA = it } else attachEq(exoB, settings, eqB) { eqB = it }
     }
 
     private fun attachEq(player: ExoPlayer, settings: PlaybackSettings, current: Equalizer?, set: (Equalizer?) -> Unit) {
@@ -752,6 +954,7 @@ class PlayerController @Inject constructor(
 
     private companion object {
         const val COMMAND_HOLD_MS = 1_500L
+        const val SEEK_WAIT_MS = 10_000L
         const val AUTOPLAY_START_MS = 10_000L
     }
 }

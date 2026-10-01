@@ -20,6 +20,17 @@ export function showVkLoginWindow(): void {
   win.setAlwaysOnTop(false);
 }
 
+/** Без этого «отключить VK» оставляет cookie входа, и повторное подключение молча берёт тот же аккаунт. */
+export async function clearVkLoginSession(): Promise<void> {
+  const win = activeLogin;
+  if (win && !win.isDestroyed()) win.destroy();
+  activeLogin = null;
+  await electronSession
+    .fromPartition(PARTITION)
+    .clearStorageData({ storages: ['cookies', 'localstorage', 'indexdb', 'cachestorage', 'serviceworkers'] })
+    .catch((err) => log.warn('[vk-oauth] clear session failed', err));
+}
+
 function chromeUa(): string {
   const chrome = process.versions.chrome || '128.0.0.0';
   if (process.platform === 'darwin') {

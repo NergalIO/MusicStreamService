@@ -89,8 +89,6 @@ export function TopPlayer() {
   const cycleRepeat = usePlayerStore((s) => s.cycleRepeat);
   const playing = usePlaybackStore((s) => s.playing);
   const loading = usePlaybackStore((s) => s.loading);
-  const currentTime = usePlaybackStore((s) => s.currentTime);
-  const duration = usePlaybackStore((s) => s.duration);
   const ad = usePlaybackStore((s) => s.ad);
   const nowPlayingOpen = usePlaybackStore((s) => s.nowPlayingOpen);
   const tab = usePlaybackStore((s) => s.nowPlayingTab);
@@ -239,16 +237,23 @@ export function TopPlayer() {
           readOnly={lobbyGuest || ad}
           className={cn('w-full', !hasTrack && 'pointer-events-none opacity-40')}
         />
-        {(lobbyGuest || ad) && hasTrack && duration > 0 && (
-          <div className="mt-0.5 flex justify-between text-[11px] tabular-nums text-muted">
-            <span>{formatTime(currentTime)}</span>
-            <span>-{formatTime(Math.max(0, duration - currentTime))}</span>
-          </div>
-        )}
+        {(lobbyGuest || ad) && hasTrack && <GuestTimes />}
       </div>
 
       <SpotifyDeviceButton />
       <SoundSheet open={soundOpen} onClose={() => setSoundOpen(false)} />
     </header>
+  );
+}
+
+function GuestTimes() {
+  const currentTime = usePlaybackStore((s) => s.currentTime);
+  const duration = usePlaybackStore((s) => s.duration);
+  if (!(duration > 0)) return null;
+  return (
+    <div className="mt-0.5 flex justify-between text-[11px] tabular-nums text-muted">
+      <span>{formatTime(currentTime)}</span>
+      <span>-{formatTime(Math.max(0, duration - currentTime))}</span>
+    </div>
   );
 }

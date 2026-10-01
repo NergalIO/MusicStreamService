@@ -1,4 +1,4 @@
-import { ipcMain } from 'electron';
+import { BrowserWindow, ipcMain } from 'electron';
 import type { AlbumWithTracks, Quality, TrackLyrics, UnifiedTrack } from '@mss/shared';
 import type { YandexMusicApi } from '@mss/stream-connectors';
 import { connectorRegistry, getYandex, resolveLoginReply, cancelPendingLogin } from './connectors.js';
@@ -36,26 +36,50 @@ function connector(id: string) {
   return c;
 }
 
+let lastStatuses = '';
+
+/**
+ * Коннектор может сам сбросить протухшую сессию посреди обычного запроса. Без оповещения
+ * интерфейс продолжил бы показывать сервис подключённым до истечения кеша запросов.
+ */
+function broadcastStatusIfChanged(): void {
+  const snapshot = connectorRegistry
+    .list()
+    .map((c) => `${c.id}:${c.getAuthStatus()}`)
+    .join('|');
+  if (snapshot === lastStatuses) return;
+  lastStatuses = snapshot;
+  for (const win of BrowserWindow.getAllWindows()) {
+    if (!win.isDestroyed()) win.webContents.send('connectors:statusChanged');
+  }
+}
+
+type Handler = (event: Electron.IpcMainInvokeEvent, ...args: never[]) => unknown;
+
+function handleConnector(channel: string, fn: Handler): void {
+  ipcMain.handle(channel, async (event, ...args) => {
+    try {
+      return await (fn as (e: Electron.IpcMainInvokeEvent, ...a: unknown[]) => unknown)(event, ...args);
+    } finally {
+      broadcastStatusIfChanged();
+    }
+  });
+}
+
 export function registerConnectorIpc(): void {
-  ipcMain.handle('connectors:status', async () => {
+  handleConnector('connectors:status', async () => {
     const list = connectorRegistry.list();
     return list.map((c) => ({ id: c.id, status: c.getAuthStatus(), name: c.displayName }));
   });
-  ipcMain.handle('connectors:connect', (_e, id: string) => connector(id).connect());
-  ipcMain.handle('connectors:cancelConnect', (_e, id: string) => {
+  handleConnector('connectors:connect', (_e, id: string) => connector(id).connect());
+  handleConnector('connectors:cancelConnect', (_e, id: string) => {
     connector(id).cancelConnect?.();
     cancelPendingLogin();
   });
-  ipcMain.handle('connectors:loginReply', (_e, reply) => resolveLoginReply(reply));
-  ipcMain.handle('connectors:disconnect', (_e, id: string) => connector(id).disconnect());
-  ipcMain.handle('connectors:account', (_e, id: string) => connector(id).getAccount?.() ?? null);
-  ipcMain.handle('connectors:accessToken', async (_e, id: string) => {
-    const c = connectorRegistry.get(id);
-    if (!c?.getAccessToken || c.getAuthStatus() === 'disconnected') return null;
-    return c.getAccessToken();
-  });
-
-  ipcMain.handle('connectors:search', async (_e, id: string, query: string, limit: number) => {
+  handleConnector('connectors:loginReply', (_e, reply) => resolveLoginReply(reply));
+  handleConnector('connectors:disconnect', (_e, id: string) => connector(id).disconnect());
+  handleConnector('connectors:account', (_e, id: string) => connector(id).getAccount?.() ?? null);
+  handleConnector('connectors:search', async (_e, id: string, query: string, limit: number) => {
     const c = connectorRegistry.get(id);
     if (!c || c.getAuthStatus() === 'disconnected') return [];
     const safeLimit = Number.isFinite(limit) && limit > 0 ? limit : 50;
@@ -65,7 +89,7 @@ export function registerConnectorIpc(): void {
       throw e instanceof Error ? e : new Error(String(e));
     }
   });
-  ipcMain.handle('connectors:searchArtists', async (_e, id: string, query: string, limit: number) => {
+  handleConnector('connectors:searchArtists', async (_e, id: string, query: string, limit: number) => {
     const c = connectorRegistry.get(id);
     if (!c?.searchArtists || c.getAuthStatus() === 'disconnected') return [];
     const safeLimit = Number.isFinite(limit) && limit > 0 ? limit : 12;
@@ -75,7 +99,7 @@ export function registerConnectorIpc(): void {
       throw e instanceof Error ? e : new Error(String(e));
     }
   });
-  ipcMain.handle(
+  handleConnector(
     'connectors:artistTracks',
     async (_e, id: string, artistId: string, limit: number, artistName?: string) => {
       const c = connectorRegistry.get(id);
@@ -84,28 +108,28 @@ export function registerConnectorIpc(): void {
       return c.getArtistTracks(artistId, safeLimit, artistName);
     },
   );
-  ipcMain.handle('connectors:artistProfile', async (_e, id: string, artistId: string) => {
+  handleConnector('connectors:artistProfile', async (_e, id: string, artistId: string) => {
     const c = connectorRegistry.get(id);
     if (!c?.getArtistProfile || c.getAuthStatus() === 'disconnected') return null;
     return c.getArtistProfile(artistId);
   });
-  ipcMain.handle('connectors:homeTracks', async (_e, id: string, limit: number) => {
+  handleConnector('connectors:homeTracks', async (_e, id: string, limit: number) => {
     const c = connectorRegistry.get(id);
     if (!c?.getHomeTracks || c.getAuthStatus() === 'disconnected') return [];
     const safeLimit = Number.isFinite(limit) && limit > 0 ? limit : 30;
     return c.getHomeTracks(safeLimit);
   });
-  ipcMain.handle(
+  handleConnector(
     'connectors:resolvePlayback',
     (_e, id: string, track: UnifiedTrack, quality?: Quality) => connector(id).resolvePlayback(track, { quality }),
   );
-  ipcMain.handle('connectors:setSaved', (_e, id: string, track: UnifiedTrack, saved: boolean) => {
+  handleConnector('connectors:setSaved', (_e, id: string, track: UnifiedTrack, saved: boolean) => {
     const c = connector(id);
     if (!c.setSavedTrack) throw new Error('Сохранение не поддерживается');
     return c.setSavedTrack(track, saved);
   });
 
-  ipcMain.handle('connectors:listPlaylists', async (_e, id: string) => {
+  handleConnector('connectors:listPlaylists', async (_e, id: string) => {
     const c = connectorRegistry.get(id);
     if (!c?.listPlaylists || c.getAuthStatus() === 'disconnected') return [];
     try {
@@ -115,37 +139,38 @@ export function registerConnectorIpc(): void {
     }
   });
 
-  ipcMain.handle('connectors:getPlaylist', async (_e, id: string, playlistId: string) => {
+  handleConnector('connectors:getPlaylist', async (_e, id: string, playlistId: string) => {
     const c = connector(id);
     if (!c.getPlaylist) throw new Error('Playlists not supported');
     return c.getPlaylist(playlistId);
   });
 
-  ipcMain.handle('connectors:favoriteArtists', async (_e, id: string) => {
+  handleConnector('connectors:favoriteArtists', async (_e, id: string) => {
     const c = connectorRegistry.get(id);
     if (!c?.getFavoriteArtists || c.getAuthStatus() === 'disconnected') return [];
     return c.getFavoriteArtists();
   });
 
-  ipcMain.handle('connectors:homeFeed', async (_e, id: string) => {
+  handleConnector('connectors:homeFeed', async (_e, id: string) => {
     const c = connectorRegistry.get(id);
     if (!c?.getHomeFeed || c.getAuthStatus() === 'disconnected') return [];
     return c.getHomeFeed();
   });
 
-  ipcMain.handle('connectors:album', async (_e, id: string, albumId: string) => {
+  handleConnector('connectors:album', async (_e, id: string, albumId: string) => {
     const c = connector(id);
     if (!c.getAlbum) throw new Error('Альбомы не поддерживаются');
+    if (c.getAuthStatus() === 'disconnected') throw new Error(`Источник ${c.displayName} не подключён`);
     return cachedAlbum(`${id}:${albumId}`, () => c.getAlbum!(albumId));
   });
 
-  ipcMain.handle('connectors:trackRadio', async (_e, id: string, track: UnifiedTrack) => {
+  handleConnector('connectors:trackRadio', async (_e, id: string, track: UnifiedTrack) => {
     const c = connector(id);
     if (!c.getTrackRadio) throw new Error('Радио не поддерживается');
     return c.getTrackRadio(track);
   });
 
-  ipcMain.handle('connectors:savedTracks', async (_e, id: string, limit: number) => {
+  handleConnector('connectors:savedTracks', async (_e, id: string, limit: number) => {
     const c = connectorRegistry.get(id);
     if (!c?.getSavedTracks || c.getAuthStatus() === 'disconnected') return [];
     try {
@@ -155,7 +180,7 @@ export function registerConnectorIpc(): void {
     }
   });
 
-  ipcMain.handle('yandex:call', async (_e, method: string, ...args: unknown[]) => {
+  handleConnector('yandex:call', async (_e, method: string, ...args: unknown[]) => {
     if (!(YANDEX_METHODS as readonly string[]).includes(method)) {
       throw new Error(`Unknown Yandex method: ${method}`);
     }
@@ -176,7 +201,7 @@ export function registerConnectorIpc(): void {
   });
 }
 
-/** Сразу отдаёт сохранённый альбом и в фоне обновляет запись; без записи — ждёт сеть. */
+/** Сразу отдаёт сохранённый альбом и в фоне обновляет запись; без записи — ждёт сеть. Записи живут с TTL. */
 async function cachedAlbum(key: string, load: () => Promise<AlbumWithTracks>): Promise<AlbumWithTracks> {
   const fetchFresh = async () => {
     const album = await load();

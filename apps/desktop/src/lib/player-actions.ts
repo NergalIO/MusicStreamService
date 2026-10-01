@@ -6,6 +6,7 @@ import { isSpotifyControlled, seekSpotify, spotifyPositionSeconds, toggleSpotify
 import { isLobbyGuest, isLobbyHost } from '@/store/lobby-store';
 import { undoableToast } from '@/lib/undo';
 import { useLikesStore } from '@/store/likes-store';
+import { usePlaybackStore } from '@/store/playback-store';
 import { upcomingTracks, usePlayerStore, type PlayContext } from '@/store/player-store';
 import { useSleepStore } from '@/store/sleep-store';
 
@@ -112,6 +113,15 @@ export function togglePlay(): void {
     engine.pause();
     if (isLobbyHost()) void syncLobbyPause(Math.round(engine.getCurrentTime() * 1000));
   }
+}
+
+/** Системные кнопки «играть» и «пауза» однонаправленные: повторное нажатие не должно их инвертировать. */
+export function setPlaying(playing: boolean): void {
+  if (isLobbyGuest()) return;
+  if (!usePlayerStore.getState().current) return;
+  const already = isSpotifyControlled() ? usePlaybackStore.getState().playing : !getAudioEngine().paused;
+  if (already === playing) return;
+  togglePlay();
 }
 
 export function seekTo(seconds: number): void {

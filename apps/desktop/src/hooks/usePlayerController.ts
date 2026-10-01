@@ -9,6 +9,7 @@ import {
   playNextTrack,
   seekBy,
   seekTo,
+  setPlaying,
   skipNext,
   skipPrev,
   toggleLike,
@@ -55,6 +56,23 @@ let consecutiveErrors = 0;
 let lastSavedResume = 0;
 let lastProgressSent = 0;
 const RESUME_SAVE_EVERY = 5;
+/** Пока следующий трек грузится, прежний элемент ещё активен и успевает прислать «ended». */
+let advanceInFlight = false;
+let failureTimer: ReturnType<typeof setTimeout> | null = null;
+
+/** Конец трека приходит двумя путями (nearend и ended) — очередь двигаем один раз. */
+function advanceAfterTrack(onStop?: () => void): void {
+  if (advanceInFlight) return;
+  advanceInFlight = true;
+  if (session) session.finished = true;
+  void playNextTrack(true)
+    .then((advanced) => {
+      if (!advanced) onStop?.();
+    })
+    .finally(() => {
+      advanceInFlight = false;
+    });
+}
 
 function saveResumePosition(t: number): void {
   lastSavedResume = t;
@@ -227,12 +245,16 @@ async function startCurrent(playId: number): Promise<void> {
             : 'Полный трек доступен только с Premium-подпиской сервиса.',
       });
     }
+    if (usePlayerStore.getState().playId !== playId) return;
     await engine.play(stream.url, {
       crossfade: transition === 'crossfade' ? crossfade : 0,
       startAt,
       gainDb: normalizationGainDb(current.loudnessLufs),
     });
-    if (usePlayerStore.getState().playId !== playId) return;
+    if (usePlayerStore.getState().playId !== playId) {
+      engine.stop();
+      return;
+    }
     consecutiveErrors = 0;
     void syncLobbyPlay(current, Math.round(startAt * 1000));
     usePlayerStore.getState().pushHistory(current);
@@ -258,10 +280,16 @@ function handlePlaybackFailure(message: string, autoAdvance: boolean): void {
   consecutiveErrors += 1;
   usePlaybackStore.setState({ error: message, loading: false, playing: false });
   toast.error(message || 'Не удалось воспроизвести трек');
-  const { upNext, order, position, radio } = usePlayerStore.getState();
+  const { upNext, order, position, radio, playId } = usePlayerStore.getState();
   const hasNext = upNext.length > 0 || position + 1 < order.length || !!radio;
   if ((autoAdvance || hasNext) && consecutiveErrors < MAX_CONSECUTIVE_ERRORS) {
-    setTimeout(() => void playNextTrack(true), 1200);
+    if (failureTimer) clearTimeout(failureTimer);
+    failureTimer = setTimeout(() => {
+      failureTimer = null;
+      // За паузу пользователь мог сам переключить трек — тогда пропуск уже не нужен.
+      if (usePlayerStore.getState().playId !== playId) return;
+      void playNextTrack(true);
+    }, 1200);
   }
 }
 
@@ -392,20 +420,16 @@ export function usePlayerController(): void {
       }),
       engine.on('nearend', () => {
         if (isSpotifyControlled() || usePlayerStore.getState().repeat === 'one') return;
-        if (session) session.finished = true;
-        void playNextTrack(true);
+        advanceAfterTrack();
       }),
       engine.on('ended', () => {
         if (isSpotifyControlled()) return;
-        if (session) session.finished = true;
-        void playNextTrack(true).then((advanced) => {
-          if (!advanced) {
-            finalizeSession();
-            usePlaybackStore.setState({ playing: false });
-            if (useSleepStore.getState().afterTrack) {
-              useSleepStore.getState().cancel();
-              toast('Таймер сна: воспроизведение остановлено');
-            }
+        advanceAfterTrack(() => {
+          finalizeSession();
+          usePlaybackStore.setState({ playing: false });
+          if (useSleepStore.getState().afterTrack) {
+            useSleepStore.getState().cancel();
+            toast('Таймер сна: воспроизведение остановлено');
           }
         });
       }),
@@ -424,8 +448,8 @@ export function usePlayerController(): void {
 
     if ('mediaSession' in navigator) {
       const ms = navigator.mediaSession;
-      ms.setActionHandler('play', () => togglePlay());
-      ms.setActionHandler('pause', () => togglePlay());
+      ms.setActionHandler('play', () => setPlaying(true));
+      ms.setActionHandler('pause', () => setPlaying(false));
       ms.setActionHandler('nexttrack', () => skipNext());
       ms.setActionHandler('previoustrack', () => skipPrev());
       ms.setActionHandler('seekto', (d) => {
@@ -481,9 +505,7 @@ export function usePlayerController(): void {
         usePlayerStore.getState().replay(0);
         return;
       }
-      if (session) session.finished = true;
-      void playNextTrack(true).then((advanced) => {
-        if (advanced) return;
+      advanceAfterTrack(() => {
         finalizeSession();
         stopSpotifyTrack();
         usePlaybackStore.setState({ playing: false, currentTime: 0 });

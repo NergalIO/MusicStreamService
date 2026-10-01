@@ -19,7 +19,7 @@ import {
   useYandexAccount,
   type ConnectorStatus,
 } from '@/lib/connectors';
-import { logoutSpotifySession, useSpotifySessionLoggedIn } from '@/lib/spotify-session';
+import { useSpotifySessionLoggedIn } from '@/lib/spotify-session';
 import { SPOTIFY_HOME, SPOTIFY_WEB } from '@/lib/service-routes';
 import { clearSession, loadSession } from '@/lib/api';
 import { leaveCurrentLobby } from '@/lib/lobby-session';
@@ -638,9 +638,7 @@ function SpotifySessionRow() {
           disabled={busy}
           onClick={() => {
             setBusy(true);
-            void logoutSpotifySession()
-              .then(() => queryClient.invalidateQueries({ queryKey: ['spotify-session'] }))
-              .finally(() => setBusy(false));
+            void disconnectSource('spotify', queryClient).finally(() => setBusy(false));
           }}
         >
           {busy && <Loader2 size={14} className="animate-spin" />}

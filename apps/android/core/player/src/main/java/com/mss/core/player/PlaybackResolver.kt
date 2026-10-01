@@ -27,7 +27,11 @@ class PlaybackResolver @Inject constructor(
     suspend fun resolve(track: UnifiedTrack): ResolvedPlayback {
         when (track.source) {
             SourceId.SPOTIFY -> {
-                if (spotifyWeb.loggedIn.value) return ResolvedPlayback.SpotifyWeb(track.id)
+                // Каталог уже работает через веб-плеер, когда есть сохранённая сессия: иначе сразу
+                // после запуска трек играл бы 30-секундным превью вместо полной версии.
+                if (spotifyWeb.loggedIn.value || spotifyWeb.hasPersistedSession()) {
+                    return ResolvedPlayback.SpotifyWeb(track.id)
+                }
                 val url = connectors.spotify.resolvePlaybackUrl(track)
                 return ResolvedPlayback.Url(url)
             }

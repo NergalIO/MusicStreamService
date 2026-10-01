@@ -133,7 +133,13 @@ class YandexConnector @Inject constructor(
                 }
                 return
             } catch (e: ConnectorException) {
-                if (e.message?.contains("authorization_pending") == true) continue
+                val err = e.message.orEmpty()
+                if (err.contains("authorization_pending")) continue
+                // slow_down — просьба опрашивать реже, а не ошибка входа.
+                if (err.contains("slow_down")) {
+                    delay(intervalMs)
+                    continue
+                }
                 throw e
             }
         }
@@ -205,8 +211,8 @@ class YandexConnector @Inject constructor(
         val uid = userId()
         val own = apiGet<JsonArray>("/users/$uid/playlists/list")
         val liked = runCatching { apiGet<JsonArray>("/users/$uid/likes/playlists") }.getOrNull()
-        val all = own.map { mapYandexPlaylist(it.jsonObject) } +
-            (liked?.mapNotNull { it.jsonObject["playlist"]?.jsonObject?.let(::mapYandexPlaylist) } ?: emptyList())
+        val all = own.mapNotNull { mapYandexPlaylistOrNull(it.jsonObject) } +
+            (liked?.mapNotNull { it.jsonObject["playlist"]?.jsonObject?.let(::mapYandexPlaylistOrNull) } ?: emptyList())
         val seen = mutableSetOf<String>()
         return all.filter { seen.add(it.id) }
     }
@@ -215,12 +221,17 @@ class YandexConnector @Inject constructor(
         val (ownerUid, kind) = id.split(":").let { it[0] to (it.getOrNull(1) ?: id) }
         val data = apiGet<JsonObject>("/users/$ownerUid/playlists/$kind")
         val entries = data["tracks"]?.jsonArray ?: JsonArray(emptyList())
-        val rich = entries.mapNotNull { it.jsonObject["track"]?.jsonObject?.let(::mapYandexTrack) }
         val missing = entries.mapNotNull {
             val o = it.jsonObject
             if (o["track"] == null) o["id"]?.jsonPrimitive?.contentOrNull else null
         }
-        val tracks = if (missing.isEmpty()) rich else rich + tracksByIds(missing)
+        // Подгруженные треки раскладываем по их местам: иначе порядок плейлиста ломался.
+        val fetched = if (missing.isEmpty()) emptyMap() else tracksByIds(missing).associateBy { it.id }
+        val tracks = entries.mapNotNull { el ->
+            val o = el.jsonObject
+            o["track"]?.jsonObject?.let(::mapYandexTrack)
+                ?: o["id"]?.jsonPrimitive?.contentOrNull?.let { fetched[it] }
+        }
         val meta = mapYandexPlaylist(data)
         return PlaylistWithTracks(
             source = meta.source,
@@ -325,7 +336,10 @@ class YandexConnector @Inject constructor(
                 "/tracks/${encode(baseId)}/lyrics?format=$format&timeStamp=$ts&sign=${encode(sign)}",
             )
             val url = info["downloadUrl"]?.jsonPrimitive?.content ?: throw ConnectorException("lyrics url")
-            val text = http.get(url).bodyAsText()
+            val res = http.get(url)
+            // Без проверки статуса страница ошибки разбиралась бы как текст песни.
+            if (!res.status.isSuccess()) throw ConnectorException("Не удалось скачать текст песни")
+            val text = res.bodyAsText()
             val writers = info["writers"]?.jsonArray?.mapNotNull { it.jsonPrimitive.contentOrNull }
             return text to writers
         }
@@ -475,7 +489,9 @@ class YandexConnector @Inject constructor(
             .firstOrNull()
             ?: throw ConnectorException("download-info: нет формата")
         val infoUrl = entry["downloadInfoUrl"]!!.jsonPrimitive.content
-        val xml = http.get(infoUrl).bodyAsText()
+        val infoRes = http.get(infoUrl)
+        if (!infoRes.status.isSuccess()) throw ConnectorException("Яндекс не выдал ссылку на файл")
+        val xml = infoRes.bodyAsText()
         fun tag(name: String) = Regex("<$name>([^<]+)</$name>").find(xml)?.groupValues?.get(1)
         val host = tag("host") ?: throw ConnectorException("Yandex storage")
         val path = tag("path") ?: throw ConnectorException("Yandex storage")
@@ -601,16 +617,25 @@ class YandexConnector @Inject constructor(
             throw ConnectorException(YandexErrors.SESSION)
         }
         if (System.currentTimeMillis() < t.expiresAt - 60_000) return t.accessToken
-        val refresh = t.refreshToken ?: throw ConnectorException("Яндекс: нет refresh token")
-        val token = oauthForm<YandexTokenResponse>(
-            "https://oauth.yandex.ru/token",
-            mapOf(
-                "grant_type" to "refresh_token",
-                "refresh_token" to refresh,
-                "client_id" to clientId,
-                "client_secret" to clientSecret,
-            ),
-        )
+        val refresh = t.refreshToken ?: throw ConnectorException(YandexErrors.SESSION)
+        val token = try {
+            oauthForm<YandexTokenResponse>(
+                "https://oauth.yandex.ru/token",
+                mapOf(
+                    "grant_type" to "refresh_token",
+                    "refresh_token" to refresh,
+                    "client_id" to clientId,
+                    "client_secret" to clientSecret,
+                ),
+            )
+        } catch (e: ConnectorException) {
+            // Отказ самого OAuth — токен мёртв. Сетевую ошибку (не ConnectorException) так не трактуем.
+            if (REFRESH_DEAD.any { it in e.message.orEmpty().lowercase() }) {
+                saveTokens(t.copy(refreshToken = null, expiresAt = 0))
+                throw ConnectorException(YandexErrors.SESSION)
+            }
+            throw e
+        }
         val next = t.copy(
             accessToken = token.accessToken,
             refreshToken = token.refreshToken ?: refresh,
@@ -645,6 +670,7 @@ class YandexConnector @Inject constructor(
     companion object {
         private const val VAULT_KEY = "yandex_tokens"
         private const val ACCOUNT_KEY = "yandex_account"
+        private val REFRESH_DEAD = listOf("invalid_grant", "invalid_client", "invalid_request", "unauthorized")
         const val MUSIC_CLIENT_ID = "23cabbbdc6cd418abb4b39c32c41195d"
         const val MUSIC_CLIENT_SECRET = "53bc75238f0c4d08a118e51fe9203300"
         const val MUSIC_SCOPE = "login:info music:content music:read music:write"

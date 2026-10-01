@@ -15,8 +15,12 @@ function root(): string {
   return path.join(app.getPath('userData'), 'content-cache');
 }
 
+/** Меняется при правках мапперов: старые записи с другой раскладкой полей просто не найдутся. */
+const CACHE_VERSION = 2;
+const JSON_TTL_MS = 7 * 24 * 60 * 60 * 1000;
+
 function fileFor(kind: Kind, key: string): string {
-  const hash = createHash('sha1').update(key).digest('hex');
+  const hash = createHash('sha1').update(`v${CACHE_VERSION}:${key}`).digest('hex');
   return path.join(root(), kind, hash);
 }
 
@@ -29,12 +33,22 @@ function touch(file: string): void {
   fsp.utimes(file, now, now).catch(() => {});
 }
 
+/** Время записи хранится внутри файла: mtime обновляется при чтении и для срока годности не годится. */
+interface CacheEntry<T> {
+  at: number;
+  value: T;
+}
+
 export async function readCachedJson<T>(kind: Exclude<Kind, 'img'>, key: string): Promise<T | null> {
   const file = `${fileFor(kind, key)}.json`;
   try {
-    const value = JSON.parse(await fsp.readFile(file, 'utf8')) as T;
+    const entry = JSON.parse(await fsp.readFile(file, 'utf8')) as CacheEntry<T>;
+    if (!entry || typeof entry.at !== 'number' || Date.now() - entry.at > JSON_TTL_MS) {
+      await fsp.rm(file, { force: true });
+      return null;
+    }
     touch(file);
-    return value;
+    return entry.value;
   } catch {
     return null;
   }
@@ -44,7 +58,7 @@ export async function writeCachedJson(kind: Exclude<Kind, 'img'>, key: string, v
   const file = `${fileFor(kind, key)}.json`;
   try {
     await fsp.mkdir(path.dirname(file), { recursive: true });
-    await fsp.writeFile(file, JSON.stringify(value));
+    await fsp.writeFile(file, JSON.stringify({ at: Date.now(), value } satisfies CacheEntry<unknown>));
     scheduleTrim();
   } catch (e) {
     log.warn('content cache write failed', e instanceof Error ? e.message : String(e));

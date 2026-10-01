@@ -1,4 +1,5 @@
 import { net } from 'electron';
+import { parseByteRange } from './byte-range.js';
 import {
   decodeSegment,
   parseM3u8,
@@ -150,21 +151,20 @@ async function waitUntil(job: AssembleJob, bytes: number): Promise<void> {
 
 function rangeResponse(buffer: Buffer, rangeHeader: string | null): Response {
   const size = buffer.length;
-  const match = rangeHeader ? /bytes=(\d*)-(\d*)/.exec(rangeHeader) : null;
+  const range = parseByteRange(rangeHeader, size);
   const headers: Record<string, string> = {
     ...CORS,
     'Content-Type': 'audio/mpeg',
     'Accept-Ranges': 'bytes',
   };
-  if (!match) {
+  if (!range) {
     headers['Content-Length'] = String(size);
     return new Response(new Uint8Array(buffer), { status: 200, headers });
   }
-  const start = match[1] ? Number(match[1]) : 0;
-  const end = match[2] ? Math.min(Number(match[2]), size - 1) : size - 1;
-  if (start >= size) {
+  if (range === 'unsatisfiable') {
     return new Response(null, { status: 416, headers: { ...CORS, 'Content-Range': `bytes */${size}` } });
   }
+  const { start, end } = range;
   headers['Content-Range'] = `bytes ${start}-${end}/${size}`;
   headers['Content-Length'] = String(end - start + 1);
   return new Response(new Uint8Array(buffer.subarray(start, end + 1)), { status: 206, headers });
@@ -209,11 +209,13 @@ export async function serveVkAudio(target: string, rangeHeader: string | null): 
     }
     const job = getJob(target);
     if (rangeHeader) {
-      const match = /bytes=(\d*)-(\d*)/.exec(rangeHeader);
-      const start = match?.[1] ? Number(match[1]) : 0;
-      const wantEnd = match?.[2] ? Number(match[2]) : start + 512 * 1024;
-      await waitUntil(job, wantEnd + 1);
-      if (!job.done) await waitUntil(job, Number.MAX_SAFE_INTEGER);
+      // Воспроизведение с начала не должно ждать сборки всего файла — отдаём поток по мере загрузки.
+      if (!job.done && /^bytes=0-/.test(rangeHeader.trim())) {
+        await waitUntil(job, 1);
+        if (!job.done) return progressiveResponse(job);
+      }
+      // Для перемотки нужен точный общий размер, поэтому здесь дожидаемся конца сборки.
+      await waitUntil(job, Number.MAX_SAFE_INTEGER);
       return rangeResponse(job.buffer, rangeHeader);
     }
     if (job.done) return rangeResponse(job.buffer, null);

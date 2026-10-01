@@ -112,6 +112,8 @@ export interface VkClientOptions {
   openKateOAuth?: (url: string, signal?: AbortSignal) => Promise<string>;
   /** Показать уже открытое окно, не начиная новую навигацию. */
   focusVkLogin?: () => void;
+  /** Очистить окно и cookie входа: без этого повторное подключение берёт прежний аккаунт. */
+  clearLoginSession?: () => Promise<void>;
 }
 
 function sleep(ms: number): Promise<void> {

@@ -128,6 +128,9 @@ import com.mss.core.model.EqPresets
 import com.mss.core.model.LobbyDto
 import com.mss.core.model.PlaybackSettings
 import kotlinx.coroutines.launch
+import kotlinx.coroutines.flow.distinctUntilChanged
+import kotlinx.coroutines.flow.map
+import kotlin.math.abs
 import com.mss.core.model.SourceId
 import kotlinx.coroutines.flow.first
 import com.mss.core.model.UnifiedTrack
@@ -258,22 +261,20 @@ fun MiniPlayer(
     below: @Composable () -> Unit = {},
 ) {
     val settings by vm.playbackSettings.collectAsState()
-    val state by vm.playerState.collectAsState()
+    val track by remember { vm.playerState.map { it.current }.distinctUntilChanged() }.collectAsState(initial = vm.playerState.value.current)
+    val playing by remember { vm.playerState.map { it.playing }.distinctUntilChanged() }.collectAsState(initial = vm.playerState.value.playing)
     val liked by vm.likedIds.collectAsState()
     val scheme = MaterialTheme.colorScheme
-    val track = state.current
-    if (track == null) {
+    val currentTrack = track
+    if (currentTrack == null) {
         Box(Modifier.fillMaxWidth().background(scheme.surfaceContainer)) { below() }
         return
     }
-    val progress = if (state.durationMs == 0L) 0f else (state.positionMs / state.durationMs.toFloat()).coerceIn(0f, 1f)
-    val isLiked = track.id in liked
-    AccentPanelBackground(accent = settings.accent, coverUrl = track.coverUrl, modifier = Modifier.fillMaxWidth()) {
+    val isLiked = currentTrack.id in liked
+    AccentPanelBackground(accent = settings.accent, coverUrl = currentTrack.coverUrl, modifier = Modifier.fillMaxWidth()) {
         Column(Modifier.fillMaxWidth()) {
-            SpotifyDeviceBar(vm, track)
-            Box(Modifier.fillMaxWidth().height(2.dp).background(scheme.onSurface.copy(alpha = 0.10f))) {
-                Box(Modifier.fillMaxHeight().fillMaxWidth(progress).background(scheme.primary))
-            }
+            SpotifyDeviceBar(vm, currentTrack)
+            MiniPlayerProgress(vm)
             val scope = rememberCoroutineScope()
             val dragX = remember { Animatable(0f) }
             val swipeThreshold = with(LocalDensity.current) { 72.dp.toPx() }
@@ -294,8 +295,12 @@ fun MiniPlayer(
                             },
                             onDragCancel = { scope.launch { dragX.animateTo(0f) } },
                         ) { change, amount ->
-                            change.consume()
-                            scope.launch { dragX.snapTo(dragX.value + amount) }
+                            val dy = change.position.y - change.previousPosition.y
+                            // Вертикальный жест (прокрутка экрана) не должен переключать трек.
+                            if (abs(amount) >= abs(dy)) {
+                                change.consume()
+                                scope.launch { dragX.snapTo(dragX.value + amount) }
+                            }
                         }
                     }
                     .padding(horizontal = 8.dp),
@@ -311,11 +316,11 @@ fun MiniPlayer(
                         },
                     verticalAlignment = Alignment.CenterVertically,
                 ) {
-                    Cover(track.coverUrl, Modifier.size(44.dp))
+                    Cover(currentTrack.coverUrl, Modifier.size(44.dp))
                     Column(Modifier.weight(1f).padding(start = 8.dp)) {
-                        Text(track.title, maxLines = 1, overflow = TextOverflow.Ellipsis, style = MaterialTheme.typography.bodyLarge)
+                        Text(currentTrack.title, maxLines = 1, overflow = TextOverflow.Ellipsis, style = MaterialTheme.typography.bodyLarge)
                         Text(
-                            track.artist,
+                            currentTrack.artist,
                             style = MaterialTheme.typography.bodySmall,
                             color = scheme.onSurfaceVariant,
                             maxLines = 1,
@@ -323,35 +328,35 @@ fun MiniPlayer(
                         )
                     }
                 }
-                IconButton({ vm.toggleLike(track) }) {
+                IconButton({ vm.toggleLike(currentTrack) }) {
                     Icon(
                         if (isLiked) Icons.Default.Favorite else Icons.Default.FavoriteBorder,
                         contentDescription = if (isLiked) "Убрать из библиотеки" else "Добавить в библиотеку",
-                        tint = if (isLiked) scheme.primary else scheme.onSurface.copy(alpha = 0.85f),
+                        tint = if (isLiked) scheme.primary else scheme.onSurfaceVariant,
                     )
                 }
-                Box(
-                    Modifier
-                        .size(48.dp)
-                        .semantics { contentDescription = if (state.playing) "Пауза" else "Играть" }
-                        .clickable { vm.player.toggle() },
-                    contentAlignment = Alignment.Center,
-                ) {
-                    Box(
-                        Modifier.size(36.dp).clip(CircleShape).background(scheme.primary),
-                        contentAlignment = Alignment.Center,
-                    ) {
-                        Icon(
-                            if (state.playing) Icons.Default.Pause else Icons.Default.PlayArrow,
-                            contentDescription = null,
-                            tint = scheme.onPrimary,
-                            modifier = Modifier.size(20.dp),
-                        )
-                    }
+                IconButton({ if (playing) vm.player.pause() else vm.player.resume() }) {
+                    Icon(
+                        if (playing) Icons.Default.Pause else Icons.Default.PlayArrow,
+                        if (playing) "Пауза" else "Играть",
+                    )
                 }
             }
             below()
         }
+    }
+}
+
+@Composable
+private fun MiniPlayerProgress(vm: MssViewModel) {
+    val scheme = MaterialTheme.colorScheme
+    val progress by remember {
+        vm.playerState.map { s ->
+            if (s.durationMs == 0L) 0f else (s.positionMs / s.durationMs.toFloat()).coerceIn(0f, 1f)
+        }.distinctUntilChanged()
+    }.collectAsState(initial = 0f)
+    Box(Modifier.fillMaxWidth().height(2.dp).background(scheme.onSurface.copy(alpha = 0.10f))) {
+        Box(Modifier.fillMaxHeight().fillMaxWidth(progress).background(scheme.primary))
     }
 }
 
@@ -1014,11 +1019,15 @@ private fun NowPlayingControls(vm: MssViewModel, state: PlayerUiState) {
         horizontalArrangement = Arrangement.SpaceBetween,
         verticalAlignment = Alignment.CenterVertically,
     ) {
-        IconButton({ vm.player.setShuffle(!state.shuffle) }, modifier = Modifier.size(44.dp)) {
+        IconButton({ vm.player.setShuffle(!state.shuffle) }, enabled = !state.radio, modifier = Modifier.size(44.dp)) {
             Icon(
                 Icons.Default.Shuffle,
                 if (state.shuffle) "Не перемешивать" else "Перемешать",
-                tint = if (state.shuffle) scheme.primary else scheme.onSurfaceVariant,
+                tint = when {
+                    state.radio -> scheme.onSurfaceVariant.copy(alpha = 0.38f)
+                    state.shuffle -> scheme.primary
+                    else -> scheme.onSurfaceVariant
+                },
             )
         }
         IconButton({ vm.player.prev() }, modifier = Modifier.size(48.dp)) {

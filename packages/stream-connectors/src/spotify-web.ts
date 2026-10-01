@@ -37,6 +37,7 @@ type Json = any;
 
 const PLAYLIST_PAGE = 100;
 const LIBRARY_PAGE = 50;
+const LIBRARY_MAX = 2000;
 const MAX_PLAYLIST_TRACKS = 2000;
 
 function idFromUri(uri: string | undefined): string | undefined {
@@ -144,6 +145,31 @@ function mapHomeItem(content: Json): HomeFeedItem | null {
 
 export function createSpotifyWebConnector(opts: SpotifyWebConnectorOptions): StreamConnector {
   const { query, loggedIn } = opts;
+
+  /** Библиотека отдаётся страницами: без дочитывания у пользователя пропадало всё после первых 50. */
+  async function libraryItems(filter: string, flatten: boolean): Promise<Json[]> {
+    const PAGE = LIBRARY_PAGE;
+    const items: Json[] = [];
+    for (let offset = 0; offset < LIBRARY_MAX; offset += PAGE) {
+      const data: Json = await query('libraryV3', {
+        filters: [filter],
+        order: null,
+        textFilter: '',
+        features: ['LIKED_SONGS', 'YOUR_EPISODES'],
+        limit: PAGE,
+        offset,
+        flatten,
+        expandedFolders: [],
+        folderUri: null,
+        includeFoldersWhenFlattening: !flatten,
+      });
+      const library = data?.data?.me?.libraryV3;
+      const page: Json[] = library?.items ?? [];
+      items.push(...page);
+      if (page.length < PAGE || items.length >= (library?.totalCount ?? items.length)) break;
+    }
+    return items;
+  }
 
   async function playlistWithTracks(id: string): Promise<PlaylistWithTracks> {
     const tracks: UnifiedTrack[] = [];
@@ -296,36 +322,12 @@ export function createSpotifyWebConnector(opts: SpotifyWebConnectorOptions): Str
       };
     },
     async listPlaylists(): Promise<UnifiedPlaylist[]> {
-      const data: Json = await query('libraryV3', {
-        filters: ['Playlists'],
-        order: null,
-        textFilter: '',
-        features: ['LIKED_SONGS', 'YOUR_EPISODES'],
-        limit: 50,
-        offset: 0,
-        flatten: true,
-        expandedFolders: [],
-        folderUri: null,
-        includeFoldersWhenFlattening: false,
-      });
-      const items: Json[] = data?.data?.me?.libraryV3?.items ?? [];
+      const items = await libraryItems('Playlists', true);
       return compact(items.map((row) => mapPlaylist({ ...row?.item?.data, uri: row?.item?.data?.uri ?? row?.item?._uri })));
     },
     getPlaylist: playlistWithTracks,
     async getFavoriteArtists(): Promise<UnifiedArtist[]> {
-      const data: Json = await query('libraryV3', {
-        filters: ['Artists'],
-        order: null,
-        textFilter: '',
-        features: ['LIKED_SONGS', 'YOUR_EPISODES'],
-        limit: 50,
-        offset: 0,
-        flatten: false,
-        expandedFolders: [],
-        folderUri: null,
-        includeFoldersWhenFlattening: true,
-      });
-      const items: Json[] = data?.data?.me?.libraryV3?.items ?? [];
+      const items = await libraryItems('Artists', false);
       return compact(items.map((row) => mapArtist({ ...row?.item?.data, uri: row?.item?.data?.uri ?? row?.item?._uri })));
     },
     async getHomeFeed(): Promise<HomeFeedSection[]> {
@@ -347,12 +349,27 @@ export function createSpotifyWebConnector(opts: SpotifyWebConnectorOptions): Str
       );
     },
     async getAlbum(id: string): Promise<AlbumWithTracks> {
-      const data: Json = await query('getAlbum', { uri: `spotify:album:${id}`, locale: '', offset: 0, limit: 50 });
+      const PAGE = 50;
+      const data: Json = await query('getAlbum', { uri: `spotify:album:${id}`, locale: '', offset: 0, limit: PAGE });
       const a = data?.data?.albumUnion;
       const album = mapAlbum({ ...a, uri: `spotify:album:${id}` });
       if (!a || !album) throw new Error('Альбом Spotify не найден');
+      const rows: Json[] = [...((a.tracksV2?.items ?? []) as Json[])];
+      const total: number = a.tracksV2?.totalCount ?? rows.length;
+      // Длинные альбомы приходят страницами: без дочитывания у сборников пропадал хвост треков.
+      while (rows.length < total && rows.length > 0) {
+        const page: Json = await query('getAlbum', {
+          uri: `spotify:album:${id}`,
+          locale: '',
+          offset: rows.length,
+          limit: PAGE,
+        });
+        const next: Json[] = page?.data?.albumUnion?.tracksV2?.items ?? [];
+        if (!next.length) break;
+        rows.push(...next);
+      }
       const tracks = compact(
-        ((a.tracksV2?.items ?? []) as Json[]).map((row) =>
+        rows.map((row) =>
           mapPathfinderTrack(
             { ...row?.track, albumOfTrack: { name: album.title, uri: `spotify:album:${id}` } },
             album.coverUrl,
@@ -362,7 +379,7 @@ export function createSpotifyWebConnector(opts: SpotifyWebConnectorOptions): Str
       return {
         ...album,
         tracks,
-        trackCount: a.tracksV2?.totalCount ?? tracks.length,
+        trackCount: total || tracks.length,
         durationMs: tracks.reduce((sum, t) => sum + (t.durationMs ?? 0), 0),
         label: a.label || undefined,
         description:

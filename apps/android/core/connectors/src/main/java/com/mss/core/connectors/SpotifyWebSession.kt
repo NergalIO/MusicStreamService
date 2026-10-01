@@ -104,6 +104,15 @@ class SpotifyWebSession @Inject constructor(
 
     fun hasPersistedSession(): Boolean = vault.get(FLAG_KEY) == "1"
 
+    /** Сохранённые cookie Spotify больше не принимает: показываем «войти снова», а не «подключено». */
+    var sessionRejected: Boolean = false
+        private set
+
+    fun markSessionExpired() {
+        sessionRejected = true
+        _loggedIn.value = false
+    }
+
     fun isReady(): Boolean = webView != null && _loggedIn.value
 
     fun operationHash(name: String): String? = hashes[name]
@@ -184,10 +193,18 @@ class SpotifyWebSession @Inject constructor(
     }
 
     fun showLogin() {
+        // Мёртвые cookie иначе молча вернут тот же аккаунт вместо формы входа.
+        val stale = sessionRejected
+        if (stale) {
+            vault.delete(COOKIE_KEY)
+            vault.delete(FLAG_KEY)
+        }
         signedOut = false
+        sessionRejected = false
         _visibleForLogin.value = true
         loginAgent = true
         main.post {
+            if (stale) clearSpotifyCookies()
             val view = webView ?: return@post
             view.settings.userAgentString = DESKTOP_UA
             view.settings.loadWithOverviewMode = false
@@ -321,6 +338,7 @@ class SpotifyWebSession @Inject constructor(
 
     fun logout() {
         signedOut = true
+        sessionRejected = false
         _visibleForLogin.value = false
         _loggedIn.value = false
         _remoteDevice.value = null
@@ -339,6 +357,7 @@ class SpotifyWebSession @Inject constructor(
 
     private fun markLoggedIn() {
         if (signedOut) return
+        sessionRejected = false
         persistCookies()
         if (!_loggedIn.value) _loggedIn.value = true
     }
@@ -373,29 +392,17 @@ class SpotifyWebSession @Inject constructor(
     }
 
     private fun clearSpotifyCookies() {
-        val cm = CookieManager.getInstance()
-        val names = linkedSetOf<String>()
-        for (url in SpotifyCookies.URLS) {
-            cm.getCookie(url)?.split(';')?.forEach { part ->
-                val name = part.substringBefore('=').trim()
-                if (name.isNotBlank()) names += name
-            }
-        }
-        val expired = "Max-Age=0; Expires=Thu, 01 Jan 1970 00:00:00 GMT; Path=/; Secure"
-        for (url in SpotifyCookies.URLS) {
-            for (name in names) {
-                cm.setCookie(url, "$name=; $expired")
-                cm.setCookie(url, "$name=; $expired; Domain=.spotify.com")
-            }
-        }
-        cm.flush()
+        WebCookies.clear(WebCookies.SPOTIFY_URLS, WebCookies.SPOTIFY_DOMAINS, SESSION_COOKIES)
     }
 
     /**
      * @param fast быстрый старт: PUT /v1/me/player/play на этот веб-плеер; при любой ошибке — обычный путь через страницу трека.
      */
     suspend fun play(trackId: String, positionMs: Long = 0, fast: Boolean = false) {
+        if (!TRACK_ID_RE.matches(trackId)) throw ConnectorException("Некорректный id трека Spotify")
         wake()
+        // Без веб-плеера скрипт просто не выполнится, и вызов висел бы до таймаута в 30 секунд.
+        if (webView == null) throw ConnectorException("Веб-плеер Spotify не запущен — откройте Spotify в приложении")
         pageMutex.withLock {
             val id = httpIds.incrementAndGet().toString()
             val done = CompletableDeferred<Unit>()
@@ -414,7 +421,8 @@ class SpotifyWebSession @Inject constructor(
                     $HELPERS
                     $DEVICE_HELPERS
                     $STATE_OBSERVER
-                    const path = '/track/$trackId';
+                    const trackId = ${JSONObject.quote(trackId)};
+                    const path = '/track/' + trackId;
                     const tick = 80;
                     const waitFor = async (ms, ok) => {
                       for (let t = 0; t < ms; t += tick) {
@@ -426,7 +434,7 @@ class SpotifyWebSession @Inject constructor(
                     const fastAuth = JSON.parse(${JSONObject.quote(fastAuth)});
                     $FAST_PLAY
                     if (fastAuth.authorization && q('[data-testid="control-button-playpause"]')
-                      && await fastPlay(fastAuth, '$trackId', ${positionMs.coerceAtLeast(0)}).catch(() => false)) {
+                      && await fastPlay(fastAuth, trackId, ${positionMs.coerceAtLeast(0)}).catch(() => false)) {
                       MssSpotify.onState(JSON.stringify(readState()));
                       MssSpotify.onRemote(remoteFromBar() || '');
                       MssSpotify.onPlayDone('$id', '');
@@ -449,9 +457,9 @@ class SpotifyWebSession @Inject constructor(
                     await waitFor(20000, () => {
                       heading = (q('main h1')?.textContent || '').trim();
                       button = q('main [data-testid="action-bar-row"] [data-testid="play-button"]');
-                      return !!(button && heading && location.pathname.indexOf('$trackId') >= 0);
+                      return !!(button && heading && location.pathname.indexOf(trackId) >= 0);
                     });
-                    if (!button || location.pathname.indexOf('$trackId') < 0) {
+                    if (!button || location.pathname.indexOf(trackId) < 0) {
                       heading = (q('main h1')?.textContent || q('[data-testid="context-item-info-title"]')?.textContent || '').trim();
                       button = q('[data-testid="control-button-playpause"]');
                     }
@@ -682,6 +690,8 @@ class SpotifyWebSession @Inject constructor(
         private const val HOME = "https://open.spotify.com/"
         private const val COOKIE_KEY = "spotify_web_cookies"
         private const val FLAG_KEY = "spotify_web_logged_in"
+        /** Гасим и те cookie входа, которых может не оказаться в заголовке текущего домена. */
+        private val SESSION_COOKIES = listOf("sp_dc", "sp_key", "sp_t", "sp_landing", "sp_m", "sp_adid")
         private const val DESKTOP_UA =
             "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/144.0.0.0 Safari/537.36"
         private const val LOGIN_URL =
