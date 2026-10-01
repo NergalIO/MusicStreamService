@@ -15,6 +15,7 @@ export const HOTKEYS: { keys: string; action: string }[] = [
   { keys: 'M', action: 'Выключить / включить звук' },
   { keys: 'L', action: 'Мне нравится' },
   { keys: 'Ctrl + F', action: 'Поиск' },
+  { keys: 'Ctrl + A', action: 'Выделить все треки в списке' },
   { keys: 'Ctrl + P', action: 'Экран «Сейчас играет»' },
   { keys: 'Esc', action: 'Закрыть «Сейчас играет» или меню' },
 ];

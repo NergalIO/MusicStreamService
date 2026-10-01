@@ -262,14 +262,20 @@ class PlayerController @Inject constructor(
         _state.value = _state.value.copy(queue = queue.toList(), index = index)
     }
 
-    fun enqueue(track: UnifiedTrack) {
-        queue.add(track)
+    fun enqueue(track: UnifiedTrack) = enqueue(listOf(track))
+
+    fun enqueue(tracks: List<UnifiedTrack>) {
+        if (tracks.isEmpty()) return
+        queue.addAll(tracks)
         _state.value = _state.value.copy(queue = queue.toList())
     }
 
-    fun playNext(track: UnifiedTrack) {
+    fun playNext(track: UnifiedTrack) = playNext(listOf(track))
+
+    fun playNext(tracks: List<UnifiedTrack>) {
+        if (tracks.isEmpty()) return
         val insert = (index + 1).coerceAtMost(queue.size)
-        queue.add(insert, track)
+        queue.addAll(insert, tracks)
         _state.value = _state.value.copy(queue = queue.toList())
     }
 

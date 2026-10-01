@@ -183,6 +183,8 @@ class MssRepository @Inject constructor(
 
     suspend fun activatePromo(code: String) = api.activatePromo(code)
 
+    suspend fun deleteTrack(id: String) = api.deleteTrack(id)
+
     suspend fun deletePlaylist(id: String) = api.deletePlaylist(id)
 
     suspend fun addToPlaylist(playlistId: String, track: UnifiedTrack) {

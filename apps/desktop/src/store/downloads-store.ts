@@ -41,6 +41,7 @@ interface DownloadsState {
   clearPanelFinished: () => void;
   setPanelCollapsed: (collapsed: boolean) => void;
   remove: (track: TrackRef) => Promise<void>;
+  removeMany: (tracks: TrackRef[]) => Promise<void>;
   reveal: (track: TrackRef) => void;
   chooseDir: () => Promise<void>;
   compressing: boolean;
@@ -248,6 +249,35 @@ export const useDownloadsStore = create<DownloadsState>()((set, get) => ({
         void window.electronAPI.downloads.remove(key).catch((e) => {
           restore();
           toast.error(`Не удалось удалить файл: ${cleanError(e)}`);
+        });
+      },
+    });
+  },
+
+  removeMany: async (tracks) => {
+    const records = tracks.map((t) => get().items[downloadKey(t)]).filter((r): r is DownloadRecord => !!r);
+    if (!records.length) return;
+    if (records.length === 1) {
+      await get().remove(records[0].track);
+      return;
+    }
+    for (const r of records) pendingRemoval.add(r.key);
+    set((s) => {
+      const items = { ...s.items };
+      for (const r of records) delete items[r.key];
+      return { items };
+    });
+    const restore = () => {
+      for (const r of records) pendingRemoval.delete(r.key);
+      set((s) => ({ items: { ...s.items, ...Object.fromEntries(records.map((r) => [r.key, r])) } }));
+    };
+    undoableToast(`Удалено из скачанных: ${formatTrackCount(records.length)}`, {
+      undo: restore,
+      commit: () => {
+        for (const r of records) pendingRemoval.delete(r.key);
+        void Promise.all(records.map((r) => window.electronAPI.downloads.remove(r.key))).catch((e) => {
+          restore();
+          toast.error(`Не удалось удалить файлы: ${cleanError(e)}`);
         });
       },
     });

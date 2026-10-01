@@ -1100,6 +1100,26 @@ class MssViewModel @Inject constructor(
 
     fun playNext(track: UnifiedTrack) = player.playNext(track)
 
+    fun enqueueMany(tracks: List<UnifiedTrack>) {
+        player.enqueue(tracks)
+        _notice.value = if (tracks.size == 1) "Добавлено в очередь" else "В очередь: ${tracks.size}"
+    }
+
+    fun deleteUploads(tracks: List<UnifiedTrack>) = launch {
+        if (tracks.isEmpty()) return@launch
+        val ids = tracks.map { it.id }
+        var failed = 0
+        ids.forEach { id -> runCatching { repo.deleteTrack(id) }.onFailure { failed++ } }
+        val gone = ids.toSet()
+        _library.value = _library.value.copy(uploads = _library.value.uploads.filterNot { it.id in gone })
+        _notice.value = when {
+            failed == ids.size -> "Не удалось удалить"
+            failed > 0 -> "Удалено ${ids.size - failed} из ${ids.size}"
+            ids.size == 1 -> "«${tracks[0].title}» удалён"
+            else -> "Удалено: ${ids.size}"
+        }
+    }
+
     fun dislike(track: UnifiedTrack) = launch {
         yandex.dislike(track)
         _likedIds.value = _likedIds.value - track.id

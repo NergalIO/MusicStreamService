@@ -383,25 +383,26 @@ const UPLOADS_KEY: QueryKey = ['my-uploads'];
 function UploadsTab() {
   const queryClient = useQueryClient();
   const { data: uploads = [], isLoading, isError, error, refetch } = useMyUploads();
-  const [pendingDelete, setPendingDelete] = useState<UnifiedTrack | null>(null);
+  const [pendingDelete, setPendingDelete] = useState<UnifiedTrack[] | null>(null);
   const { view, sort, cycle, filter, setFilter } = useTrackSort(uploads);
   const ready = uploads.filter((t) => t.playable);
   const processing = uploads.filter((t) => t.status === 'processing').length;
   const context: PlayContext = { type: 'library', title: 'Мои треки', path: libraryPath('media', 'uploads') };
 
   const confirmDelete = () => {
-    if (!pendingDelete) return;
-    const track = pendingDelete;
+    if (!pendingDelete?.length) return;
+    const items = pendingDelete;
     setPendingDelete(null);
+    const ids = new Set(items.map((t) => t.id));
     const before = queryClient.getQueryData<UnifiedTrack[]>(UPLOADS_KEY) ?? uploads;
     queryClient.setQueryData(
       UPLOADS_KEY,
-      before.filter((t) => t.id !== track.id),
+      before.filter((t) => !ids.has(t.id)),
     );
-    undoableToast(`«${track.title}» удалён`, {
+    undoableToast(items.length === 1 ? `«${items[0].title}» удалён` : `Удалено: ${formatTrackCount(items.length)}`, {
       undo: () => queryClient.setQueryData(UPLOADS_KEY, before),
       commit: () =>
-        void deleteUploadedTrack(track.id).catch((e) => {
+        void Promise.all(items.map((t) => deleteUploadedTrack(t.id))).catch((e) => {
           queryClient.setQueryData(UPLOADS_KEY, before);
           toast.error(e instanceof Error ? e.message : 'Не удалось удалить');
         }),
@@ -434,14 +435,17 @@ function UploadsTab() {
           showSource={false}
           sort={sort}
           onSort={cycle}
-          onRemove={(t) => setPendingDelete(t)}
+          onRemove={(t) => setPendingDelete([t])}
+          onRemoveMany={(tracks) => setPendingDelete(tracks)}
           removeLabel="Удалить трек"
           emptyText="Перетащите файлы в окно или нажмите «Загрузить треки»"
         />
       )}
-      <Dialog open={!!pendingDelete} onClose={() => setPendingDelete(null)} title="Удалить трек?">
+      <Dialog open={!!pendingDelete?.length} onClose={() => setPendingDelete(null)} title={pendingDelete?.length === 1 ? 'Удалить трек?' : 'Удалить треки?'}>
         <p className="mb-5 text-sm text-muted">
-          «{pendingDelete?.title}» будет удалён с сервера MSS и из всех плейлистов.
+          {pendingDelete?.length === 1
+            ? `«${pendingDelete[0].title}» будет удалён с сервера MSS и из всех плейлистов.`
+            : `${formatTrackCount(pendingDelete?.length ?? 0)} будут удалены с сервера MSS и из всех плейлистов.`}
         </p>
         <div className="flex justify-end gap-2">
           <Button variant="ghost" onClick={() => setPendingDelete(null)}>
@@ -487,6 +491,9 @@ function DownloadsTab() {
         header
         sort={sort}
         onSort={cycle}
+        onRemove={(t) => void useDownloadsStore.getState().remove(t)}
+        onRemoveMany={(list) => void useDownloadsStore.getState().removeMany(list)}
+        removeLabel="Удалить загрузку"
         emptyText="Скачивайте треки Яндекс Музыки и VK через меню трека или кнопку «Скачать» — они будут играть без интернета"
       />
     </>

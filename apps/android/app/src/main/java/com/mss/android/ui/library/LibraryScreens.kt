@@ -58,7 +58,7 @@ import androidx.compose.material.icons.filled.DownloadForOffline
 import com.mss.android.ui.components.MssChip
 import com.mss.android.ui.components.MssField
 import com.mss.android.ui.components.ScreenTitle
-import com.mss.android.ui.components.TrackRow
+import com.mss.android.ui.components.TrackList
 import com.mss.android.ui.components.sourceLabel
 import com.mss.android.ui.navigation.Routes
 import com.mss.core.model.DownloadRecord
@@ -170,29 +170,28 @@ private fun TrackColumn(
     vm: MssViewModel,
     nav: NavHostController,
     tracks: List<UnifiedTrack>,
+    onDeleteMany: ((List<UnifiedTrack>) -> Unit)? = null,
     header: LazyListScope.() -> Unit = {},
 ) {
     val liked by vm.likedIds.collectAsState()
     val player by vm.playerState.collectAsState()
     val canSuggest by vm.canSuggestToLobby.collectAsState()
     val currentKey = player.current?.let { "${it.source}:${it.id}" }
-    LazyColumn(Modifier.fillMaxSize(), contentPadding = PaddingValues(bottom = 16.dp)) {
-        header()
-        itemsIndexed(tracks, key = { i, t -> "${t.source}:${t.id}:$i" }) { i, t ->
-            TrackRow(
-                t,
-                t.id in liked,
-                onPlay = { vm.play(tracks, i) },
-                onLike = { vm.toggleLike(t) },
-                onDownload = { vm.download(t) },
-                onSimilar = { nav.navigate(Routes.similar(t.source.name.lowercase(), t.id)) },
-                onQueue = { vm.player.enqueue(t) },
-                onWave = if (t.source == SourceId.YANDEX) ({ vm.startWave(WaveSettings(seed = "track:${t.id}", seedTitle = t.title)) }) else null,
-                onSuggest = if (canSuggest) ({ vm.suggestToLobby(t) }) else null,
-                active = currentKey == "${t.source}:${t.id}",
-            )
-        }
-    }
+    TrackList(
+        tracks = tracks,
+        liked = liked,
+        onPlay = { list, i -> vm.play(list, i) },
+        onLike = { vm.toggleLike(it) },
+        onDownload = { vm.download(it) },
+        onSimilar = { nav.navigate(Routes.similar(it.source.name.lowercase(), it.id)) },
+        onQueue = { vm.player.enqueue(it) },
+        onWave = { if (it.source == SourceId.YANDEX) vm.startWave(WaveSettings(seed = "track:${it.id}", seedTitle = it.title)) },
+        onSuggest = if (canSuggest) ({ vm.suggestToLobby(it) }) else null,
+        onQueueMany = { vm.enqueueMany(it) },
+        onDeleteMany = onDeleteMany,
+        currentKey = currentKey,
+        header = header,
+    )
 }
 
 private fun LazyListScope.playAllHeader(count: Int, trailing: (@Composable () -> Unit)? = null, onPlay: () -> Unit) {
@@ -436,7 +435,7 @@ private fun UploadsTab(vm: MssViewModel, nav: NavHostController, library: Librar
         if (uris.isNotEmpty()) vm.clearNeedFile()
     }
     val tracks = library.uploads
-    TrackColumn(vm, nav, tracks) {
+    TrackColumn(vm, nav, tracks, onDeleteMany = { vm.deleteUploads(it) }) {
         item(key = "upload") {
             Column(Modifier.fillMaxWidth().padding(horizontal = 16.dp, vertical = 8.dp), verticalArrangement = Arrangement.spacedBy(8.dp)) {
                 need?.let {

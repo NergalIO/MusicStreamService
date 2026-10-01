@@ -1,6 +1,6 @@
 import type { UnifiedTrack } from '@mss/shared';
 import { useVirtualizer } from '@tanstack/react-virtual';
-import { ArrowDown, ArrowUp, GripVertical, Heart, MoreHorizontal, Music, Pause, Play, Search, X } from 'lucide-react';
+import { ArrowDown, ArrowUp, Check, GripVertical, Heart, MoreHorizontal, Music, Pause, Play, Search, X } from 'lucide-react';
 import { Fragment, memo, useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from 'react';
 import { Link } from 'react-router-dom';
 import { useScrollContainer } from '@/components/layout/scroll-context';
@@ -56,6 +56,46 @@ function rowKeys(tracks: ListTrack[]): string[] {
   });
 }
 
+function listGrid(showCover: boolean, showAlbum: boolean, check: boolean): string {
+  if (check) {
+    if (showAlbum) return showCover ? 'grid-cols-[1.5rem_2.5rem_minmax(0,1fr)_minmax(0,0.7fr)_auto]' : 'grid-cols-[1.5rem_2rem_minmax(0,1fr)_minmax(0,0.7fr)_auto]';
+    return showCover ? 'grid-cols-[1.5rem_2.5rem_minmax(0,1fr)_auto]' : 'grid-cols-[1.5rem_2rem_minmax(0,1fr)_auto]';
+  }
+  if (showAlbum) return showCover ? 'grid-cols-[2.5rem_minmax(0,1fr)_minmax(0,0.7fr)_auto]' : 'grid-cols-[2rem_minmax(0,1fr)_minmax(0,0.7fr)_auto]';
+  return showCover ? 'grid-cols-[2.5rem_minmax(0,1fr)_auto]' : 'grid-cols-[2rem_minmax(0,1fr)_auto]';
+}
+
+function SelectCheck({
+  checked,
+  indeterminate,
+  label,
+  onClick,
+}: {
+  checked: boolean;
+  indeterminate?: boolean;
+  label: string;
+  onClick: (e: React.MouseEvent) => void;
+}) {
+  return (
+    <button
+      type="button"
+      aria-label={label}
+      aria-pressed={checked}
+      title="Ctrl или Shift — несколько треков"
+      onClick={onClick}
+      onDoubleClick={(e) => e.stopPropagation()}
+      className={cn(
+        'flex h-[18px] w-[18px] items-center justify-center rounded-[4px] border transition-colors',
+        checked || indeterminate
+          ? 'border-primary bg-primary text-primary-foreground'
+          : 'border-foreground/35 bg-background/80 hover:border-primary',
+      )}
+    >
+      {checked ? <Check size={11} strokeWidth={3} /> : indeterminate ? <span className="block h-0.5 w-2 rounded bg-primary-foreground" /> : null}
+    </button>
+  );
+}
+
 interface RowProps {
   track: ListTrack;
   index: number;
@@ -69,8 +109,10 @@ interface RowProps {
   draggable: boolean;
   dropMark: 'above' | 'below' | null;
   dragging: boolean;
+  selectable: boolean;
   onPlay: (index: number) => void;
   onRowClick: (index: number, e: React.MouseEvent) => void;
+  onToggleSelect: (index: number, e: React.MouseEvent) => void;
   onRowMenu: (index: number, e: React.MouseEvent | React.KeyboardEvent) => void;
   onDragStart: (index: number, e: React.DragEvent) => void;
   onDragOver: (index: number, e: React.DragEvent) => void;
@@ -91,8 +133,10 @@ const TrackRow = memo(function TrackRow({
   draggable,
   dropMark,
   dragging,
+  selectable,
   onPlay,
   onRowClick,
+  onToggleSelect,
   onRowMenu,
   onDragStart,
   onDragOver,
@@ -129,15 +173,14 @@ const TrackRow = memo(function TrackRow({
         isCurrent && 'bg-foreground/[0.04]',
         selected && 'bg-primary/15 hover:bg-primary/20',
         dragging && 'opacity-40',
-        showAlbum
-          ? showCover
-            ? 'grid-cols-[2.5rem_minmax(0,1fr)_minmax(0,0.7fr)_auto]'
-            : 'grid-cols-[2rem_minmax(0,1fr)_minmax(0,0.7fr)_auto]'
-          : showCover
-            ? 'grid-cols-[2.5rem_minmax(0,1fr)_auto]'
-            : 'grid-cols-[2rem_minmax(0,1fr)_auto]',
+        listGrid(showCover, showAlbum, selectable),
       )}
     >
+      {selectable && (
+        <div className="flex items-center justify-center">
+          <SelectCheck checked={selected} label={selected ? `Снять выделение «${track.title}»` : `Выделить «${track.title}»`} onClick={(e) => onToggleSelect(index, e)} />
+        </div>
+      )}
       {draggable && (
         <GripVertical
           size={14}
@@ -355,8 +398,18 @@ export function TrackFilterInput({ value, onChange, className }: { value: string
   );
 }
 
-function SelectionBar({ tracks, onClear, onRemove }: { tracks: ListTrack[]; onClear: () => void; onRemove?: () => void }) {
-  const groups = bulkTrackActions(tracks, onRemove ? { onRemove, removeLabel: 'Убрать' } : {});
+function SelectionBar({
+  tracks,
+  onClear,
+  onRemove,
+  removeLabel,
+}: {
+  tracks: ListTrack[];
+  onClear: () => void;
+  onRemove?: () => void;
+  removeLabel?: string;
+}) {
+  const groups = bulkTrackActions(tracks, onRemove ? { onRemove, removeLabel: removeLabel ?? 'Удалить' } : {});
   return (
     <div className="pointer-events-none sticky bottom-4 z-10 mt-3 flex justify-center">
       <div
@@ -447,19 +500,21 @@ export function TrackList<T extends ListTrack>({
 
   const selectedTracks = useMemo(() => tracks.filter((_, i) => selected.has(keys[i])), [tracks, keys, selected]);
 
+  const [hotkeysArmed, setHotkeysArmed] = useState(false);
+
   useEffect(() => {
-    if (!selected.size) return;
+    if (!selectable) return;
     const onKey = (e: KeyboardEvent) => {
       const typing = (e.target as HTMLElement | null)?.closest('input, textarea, select, [contenteditable="true"]');
-      if (e.key === 'Escape') setSelected(new Set());
-      else if ((e.ctrlKey || e.metaKey) && e.code === 'KeyA' && !typing) {
+      if (e.key === 'Escape' && selected.size) setSelected(new Set());
+      else if ((e.ctrlKey || e.metaKey) && e.code === 'KeyA' && !typing && hotkeysArmed) {
         e.preventDefault();
         setSelected(new Set(keys));
       }
     };
     window.addEventListener('keydown', onKey);
     return () => window.removeEventListener('keydown', onKey);
-  }, [selected.size, keys]);
+  }, [selectable, keys, selected.size, hotkeysArmed]);
 
   useLayoutEffect(() => {
     if (!virtual || !listRef.current || !scrollRef?.current) return;
@@ -517,6 +572,28 @@ export function TrackList<T extends ListTrack>({
     [selectable],
   );
 
+  const onToggleSelect = useCallback((index: number, e: React.MouseEvent) => {
+    e.stopPropagation();
+    const { keys } = latest.current;
+    const key = keys[index];
+    if (e.shiftKey && anchor.current !== null) {
+      const [a, b] = [Math.min(anchor.current, index), Math.max(anchor.current, index)];
+      setSelected((prev) => {
+        const next = new Set(prev);
+        for (let i = a; i <= b; i++) next.add(keys[i]);
+        return next;
+      });
+      return;
+    }
+    anchor.current = index;
+    setSelected((prev) => {
+      const next = new Set(prev);
+      if (next.has(key)) next.delete(key);
+      else next.add(key);
+      return next;
+    });
+  }, []);
+
   const onRowMenu = useCallback((index: number, e: React.MouseEvent | React.KeyboardEvent) => {
     const { tracks, keys, selected, selectedTracks, onRemove, removeLabel, onRemoveMany } = latest.current;
     if (selected.size > 1 && selected.has(keys[index])) {
@@ -563,8 +640,10 @@ export function TrackList<T extends ListTrack>({
       draggable={!!onReorder}
       dragging={drag?.from === i}
       dropMark={drag && drag.over === i && drag.from !== i ? (drag.from < i ? 'below' : 'above') : null}
+      selectable={selectable}
       onPlay={play}
       onRowClick={onRowClick}
+      onToggleSelect={onToggleSelect}
       onRowMenu={onRowMenu}
       onDragStart={onDragStart}
       onDragOver={onDragOver}
@@ -574,21 +653,35 @@ export function TrackList<T extends ListTrack>({
   );
 
   return (
-    <div role="table" aria-rowcount={tracks.length} aria-multiselectable={selectable}>
+    <div
+      role="table"
+      aria-rowcount={tracks.length}
+      aria-multiselectable={selectable}
+      onMouseEnter={() => setHotkeysArmed(true)}
+      onMouseLeave={() => setHotkeysArmed(false)}
+      onFocusCapture={() => setHotkeysArmed(true)}
+    >
       {header && (
         <div
           role="row"
           className={cn(
             'mb-1 grid gap-3 border-b border-border px-3 pb-2 text-[11px] font-medium uppercase tracking-wider text-muted',
-            album
-              ? cover
-                ? 'grid-cols-[2.5rem_minmax(0,1fr)_minmax(0,0.7fr)_auto]'
-                : 'grid-cols-[2rem_minmax(0,1fr)_minmax(0,0.7fr)_auto]'
-              : cover
-                ? 'grid-cols-[2.5rem_minmax(0,1fr)_auto]'
-                : 'grid-cols-[2rem_minmax(0,1fr)_auto]',
+            listGrid(cover, album, selectable),
           )}
         >
+          {selectable && (
+            <span className="flex items-center justify-center">
+              <SelectCheck
+                checked={selected.size > 0 && selected.size === keys.length}
+                indeterminate={selected.size > 0 && selected.size < keys.length}
+                label={selected.size === keys.length ? 'Снять выделение' : 'Выделить все'}
+                onClick={(e) => {
+                  e.stopPropagation();
+                  setSelected(selected.size === keys.length ? new Set() : new Set(keys));
+                }}
+              />
+            </span>
+          )}
           <span className="text-center">#</span>
           <span className={cn('flex gap-3', cover && 'pl-2')}>
             <SortHeader label="Название" sortKey="title" sort={sort} onSort={onSort} />
@@ -617,11 +710,12 @@ export function TrackList<T extends ListTrack>({
           ))}
         </div>
       )}
-      {selected.size > 1 && (
+      {selected.size > 0 && (
         <SelectionBar
           tracks={selectedTracks}
           onClear={() => setSelected(new Set())}
           onRemove={onRemoveMany ? () => onRemoveMany(selectedTracks) : undefined}
+          removeLabel={removeLabel}
         />
       )}
     </div>

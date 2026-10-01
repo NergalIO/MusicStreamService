@@ -1,7 +1,9 @@
 package com.mss.android.ui.components
 
+import androidx.compose.foundation.ExperimentalFoundationApi
 import androidx.compose.foundation.background
 import androidx.compose.foundation.clickable
+import androidx.compose.foundation.combinedClickable
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Row
@@ -12,8 +14,11 @@ import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.lazy.LazyColumn
+import androidx.compose.foundation.lazy.LazyListScope
 import androidx.compose.foundation.lazy.itemsIndexed
 import androidx.compose.material.icons.Icons
+import androidx.compose.material.icons.filled.Close
+import androidx.compose.material.icons.filled.Delete
 import androidx.compose.material.icons.filled.Download
 import androidx.compose.material.icons.filled.Favorite
 import androidx.compose.material.icons.filled.FavoriteBorder
@@ -21,19 +26,26 @@ import androidx.compose.material.icons.filled.GraphicEq
 import androidx.compose.material.icons.filled.MoreVert
 import androidx.compose.material.icons.filled.MusicNote
 import androidx.compose.material.icons.filled.Send
+import androidx.compose.material.icons.automirrored.filled.QueueMusic
+import androidx.compose.material3.AlertDialog
+import androidx.compose.material3.Checkbox
 import androidx.compose.material3.DropdownMenu
 import androidx.compose.material3.DropdownMenuItem
 import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
 import androidx.compose.material3.MaterialTheme
+import androidx.compose.material3.Surface
 import androidx.compose.material3.Text
+import androidx.compose.material3.TextButton
 import androidx.compose.runtime.Composable
-import androidx.compose.runtime.getValue
+import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.setValue
 import androidx.compose.foundation.layout.Box
+import androidx.compose.foundation.layout.PaddingValues
 import androidx.compose.ui.Alignment
+import androidx.activity.compose.BackHandler
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
@@ -107,6 +119,7 @@ fun Cover(url: String?, modifier: Modifier = Modifier.size(48.dp), corner: Dp = 
     }
 }
 
+@OptIn(ExperimentalFoundationApi::class)
 @Composable
 fun TrackRow(
     track: UnifiedTrack,
@@ -119,18 +132,40 @@ fun TrackRow(
     onWave: (() -> Unit)? = null,
     onSuggest: (() -> Unit)? = null,
     active: Boolean = false,
+    selected: Boolean = false,
+    selecting: Boolean = false,
+    onToggleSelect: (() -> Unit)? = null,
+    onLongClick: (() -> Unit)? = null,
 ) {
     var menu by remember { mutableStateOf(false) }
     val scheme = MaterialTheme.colorScheme
+    val rowClick = {
+        if (selecting) onToggleSelect?.invoke() else onPlay()
+    }
     Row(
         Modifier
             .fillMaxWidth()
-            .background(if (active) scheme.onSurface.copy(alpha = 0.06f) else scheme.background.copy(alpha = 0f))
-            .clickable(onClick = onPlay)
-            .padding(start = 16.dp, end = 4.dp, top = 8.dp, bottom = 8.dp),
+            .background(
+                when {
+                    selected -> scheme.primary.copy(alpha = 0.16f)
+                    active -> scheme.onSurface.copy(alpha = 0.06f)
+                    else -> scheme.background.copy(alpha = 0f)
+                },
+            )
+            .then(
+                if (onLongClick != null) {
+                    Modifier.combinedClickable(onClick = rowClick, onLongClick = onLongClick)
+                } else {
+                    Modifier.clickable(onClick = rowClick)
+                },
+            )
+            .padding(start = 8.dp, end = 4.dp, top = 8.dp, bottom = 8.dp),
         verticalAlignment = Alignment.CenterVertically,
         horizontalArrangement = Arrangement.spacedBy(0.dp),
     ) {
+        if (selecting || selected) {
+            Checkbox(checked = selected, onCheckedChange = { onToggleSelect?.invoke() }, modifier = Modifier.size(40.dp))
+        }
         Cover(track.coverUrl, Modifier.size(48.dp))
         Spacer(Modifier.width(8.dp))
         Column(Modifier.weight(1f)) {
@@ -158,37 +193,39 @@ fun TrackRow(
                 SourceTag(track.source)
             }
         }
-        IconButton(onClick = onLike, modifier = Modifier.size(40.dp)) {
-            Icon(
-                if (liked) Icons.Default.Favorite else Icons.Default.FavoriteBorder,
-                contentDescription = if (liked) "Убрать из библиотеки" else "Добавить в библиотеку",
-                tint = if (liked) scheme.primary else scheme.onSurfaceVariant,
-            )
-        }
-        DownloadButton(track)
-        val host = LocalTrackHost.current
-        IconButton(onClick = { menu = true }, modifier = Modifier.size(40.dp)) {
-            Icon(Icons.Default.MoreVert, contentDescription = "Ещё", tint = scheme.onSurfaceVariant)
-            if (host != null) {
-                if (menu) TrackActionsSheet(track, onDismiss = { menu = false })
-                return@IconButton
-            }
-            DropdownMenu(menu, { menu = false }) {
-                DropdownMenuItem(
-                    text = { Text(if (liked) "Убрать лайк" else "Лайк") },
-                    onClick = { menu = false; onLike() },
-                    leadingIcon = { Icon(if (liked) Icons.Default.Favorite else Icons.Default.FavoriteBorder, null) },
+        if (!selecting) {
+            IconButton(onClick = onLike, modifier = Modifier.size(40.dp)) {
+                Icon(
+                    if (liked) Icons.Default.Favorite else Icons.Default.FavoriteBorder,
+                    contentDescription = if (liked) "Убрать из библиотеки" else "Добавить в библиотеку",
+                    tint = if (liked) scheme.primary else scheme.onSurfaceVariant,
                 )
-                DropdownMenuItem(text = { Text("Скачать") }, onClick = { menu = false; onDownload() }, leadingIcon = { Icon(Icons.Default.Download, null) })
-                onQueue?.let { DropdownMenuItem(text = { Text("В очередь") }, onClick = { menu = false; it() }) }
-                onSimilar?.let { DropdownMenuItem(text = { Text("Похожие") }, onClick = { menu = false; it() }) }
-                onWave?.let { DropdownMenuItem(text = { Text("Волна по треку") }, onClick = { menu = false; it() }) }
-                onSuggest?.let {
+            }
+            DownloadButton(track)
+            val host = LocalTrackHost.current
+            IconButton(onClick = { menu = true }, modifier = Modifier.size(40.dp)) {
+                Icon(Icons.Default.MoreVert, contentDescription = "Ещё", tint = scheme.onSurfaceVariant)
+                if (host != null) {
+                    if (menu) TrackActionsSheet(track, onDismiss = { menu = false })
+                    return@IconButton
+                }
+                DropdownMenu(menu, { menu = false }) {
                     DropdownMenuItem(
-                        text = { Text("Предложить") },
-                        onClick = { menu = false; it() },
-                        leadingIcon = { Icon(Icons.Default.Send, null) },
+                        text = { Text(if (liked) "Убрать лайк" else "Лайк") },
+                        onClick = { menu = false; onLike() },
+                        leadingIcon = { Icon(if (liked) Icons.Default.Favorite else Icons.Default.FavoriteBorder, null) },
                     )
+                    DropdownMenuItem(text = { Text("Скачать") }, onClick = { menu = false; onDownload() }, leadingIcon = { Icon(Icons.Default.Download, null) })
+                    onQueue?.let { DropdownMenuItem(text = { Text("В очередь") }, onClick = { menu = false; it() }) }
+                    onSimilar?.let { DropdownMenuItem(text = { Text("Похожие") }, onClick = { menu = false; it() }) }
+                    onWave?.let { DropdownMenuItem(text = { Text("Волна по треку") }, onClick = { menu = false; it() }) }
+                    onSuggest?.let {
+                        DropdownMenuItem(
+                            text = { Text("Предложить") },
+                            onClick = { menu = false; it() },
+                            leadingIcon = { Icon(Icons.Default.Send, null) },
+                        )
+                    }
                 }
             }
         }
@@ -206,23 +243,108 @@ fun TrackList(
     onQueue: ((UnifiedTrack) -> Unit)? = null,
     onWave: ((UnifiedTrack) -> Unit)? = null,
     onSuggest: ((UnifiedTrack) -> Unit)? = null,
+    onQueueMany: ((List<UnifiedTrack>) -> Unit)? = null,
+    onDeleteMany: ((List<UnifiedTrack>) -> Unit)? = null,
     currentKey: String? = null,
+    selectable: Boolean = true,
+    header: LazyListScope.() -> Unit = {},
     modifier: Modifier = Modifier,
 ) {
-    LazyColumn(modifier.fillMaxSize()) {
-        itemsIndexed(tracks, key = { i, t -> "${t.source}:${t.id}:$i" }) { index, track ->
-            TrackRow(
-                track = track,
-                liked = track.id in liked,
-                onPlay = { onPlay(tracks, index) },
-                onLike = { onLike(track) },
-                onDownload = { onDownload(track) },
-                onSimilar = onSimilar?.let { { it(track) } },
-                onQueue = onQueue?.let { { it(track) } },
-                onWave = onWave?.let { { it(track) } },
-                onSuggest = onSuggest?.let { { it(track) } },
-                active = currentKey == "${track.source}:${track.id}",
-            )
+    var selected by remember { mutableStateOf(setOf<String>()) }
+    var confirmDelete by remember { mutableStateOf(false) }
+    val selecting = selected.isNotEmpty()
+    fun keyOf(i: Int, t: UnifiedTrack) = "${t.source}:${t.id}:$i"
+    LaunchedEffect(tracks) {
+        val alive = tracks.mapIndexed { i, t -> keyOf(i, t) }.toSet()
+        selected = selected.filter { it in alive }.toSet()
+    }
+    fun picked() = tracks.filterIndexed { i, t -> keyOf(i, t) in selected }
+    fun clear() {
+        selected = emptySet()
+        confirmDelete = false
+    }
+    BackHandler(enabled = selecting) { clear() }
+    Box(modifier.fillMaxSize()) {
+        LazyColumn(Modifier.fillMaxSize(), contentPadding = PaddingValues(bottom = if (selecting) 88.dp else 16.dp)) {
+            header()
+            itemsIndexed(tracks, key = { i, t -> keyOf(i, t) }) { index, track ->
+                val key = keyOf(index, track)
+                TrackRow(
+                    track = track,
+                    liked = track.id in liked,
+                    onPlay = { onPlay(tracks, index) },
+                    onLike = { onLike(track) },
+                    onDownload = { onDownload(track) },
+                    onSimilar = onSimilar?.let { { it(track) } },
+                    onQueue = onQueue?.let { { it(track) } },
+                    onWave = onWave?.takeIf { track.source == SourceId.YANDEX }?.let { { it(track) } },
+                    onSuggest = onSuggest?.let { { it(track) } },
+                    active = currentKey == "${track.source}:${track.id}",
+                    selected = key in selected,
+                    selecting = selecting,
+                    onToggleSelect = {
+                        selected = if (key in selected) selected - key else selected + key
+                    },
+                    onLongClick = if (selectable) ({
+                        selected = selected + key
+                    }) else null,
+                )
+            }
         }
+        if (selecting) {
+            val items = picked()
+            Surface(
+                modifier = Modifier.align(Alignment.BottomCenter).fillMaxWidth().padding(12.dp),
+                shape = RoundedCornerShape(28.dp),
+                tonalElevation = 6.dp,
+                shadowElevation = 8.dp,
+            ) {
+                Row(
+                    Modifier.fillMaxWidth().padding(horizontal = 8.dp, vertical = 4.dp),
+                    verticalAlignment = Alignment.CenterVertically,
+                ) {
+                    Text("${items.size}", style = MaterialTheme.typography.titleMedium, modifier = Modifier.padding(horizontal = 12.dp))
+                    IconButton({
+                        if (onQueueMany != null) onQueueMany(items) else items.forEach { onQueue?.invoke(it) }
+                        clear()
+                    }) { Icon(Icons.AutoMirrored.Filled.QueueMusic, "В очередь") }
+                    IconButton({
+                        items.filter { it.id !in liked }.forEach(onLike)
+                        clear()
+                    }) { Icon(Icons.Default.Favorite, "Мне нравится") }
+                    IconButton({
+                        items.forEach(onDownload)
+                        clear()
+                    }) { Icon(Icons.Default.Download, "Скачать") }
+                    if (onDeleteMany != null) {
+                        IconButton({ confirmDelete = true }) {
+                            Icon(Icons.Default.Delete, "Удалить", tint = MaterialTheme.colorScheme.error)
+                        }
+                    }
+                    Spacer(Modifier.weight(1f))
+                    IconButton({ clear() }) { Icon(Icons.Default.Close, "Снять выделение") }
+                }
+            }
+        }
+    }
+    if (confirmDelete) {
+        val items = picked()
+        AlertDialog(
+            onDismissRequest = { confirmDelete = false },
+            title = { Text(if (items.size == 1) "Удалить трек?" else "Удалить треки?") },
+            text = {
+                Text(
+                    if (items.size == 1) "«${items[0].title}» будет удалён с сервера MSS и из всех плейлистов."
+                    else "${items.size} треков будут удалены с сервера MSS и из всех плейлистов.",
+                )
+            },
+            confirmButton = {
+                TextButton({
+                    onDeleteMany?.invoke(items)
+                    clear()
+                }) { Text("Удалить", color = MaterialTheme.colorScheme.error) }
+            },
+            dismissButton = { TextButton({ confirmDelete = false }) { Text("Отмена") } },
+        )
     }
 }
