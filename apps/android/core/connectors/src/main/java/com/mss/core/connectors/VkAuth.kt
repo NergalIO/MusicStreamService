@@ -19,6 +19,7 @@ import kotlinx.serialization.json.JsonObject
 import kotlinx.serialization.json.booleanOrNull
 import kotlinx.serialization.json.contentOrNull
 import kotlinx.serialization.json.intOrNull
+import kotlinx.serialization.json.jsonArray
 import kotlinx.serialization.json.jsonObject
 import kotlinx.serialization.json.jsonPrimitive
 import kotlinx.serialization.json.longOrNull
@@ -39,6 +40,19 @@ data class VkIdSession(
 
 data class VkTokenPair(val accessToken: String, val userId: Long)
 
+data class VkKateQrSession(
+    val anonym: String,
+    val hash: String,
+    val authCode: String,
+    val authUrl: String = "",
+)
+
+/** 0 — ждём, 2 — токен, 3 — отказ, 4 — истекла. */
+data class VkKateQrCheck(
+    val status: Int,
+    val token: VkTokenPair? = null,
+)
+
 object VkAuth {
     const val KATE_CLIENT_ID = "2685278"
     const val KATE_CLIENT_SECRET = "lxhD8OD7dMsqtXIm5IUAGS6Ok4UIAK"
@@ -52,6 +66,8 @@ object VkAuth {
     const val BROWSER_UA =
         "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/128.0.0.0 Safari/537.36"
     const val ID_LOGIN = "https://id.vk.com/"
+    const val NO_MUSIC_ACCESS =
+        "VK не отдаёт музыку с этим входом. Закройте окно и войдите по паролю — так VK Музыка работает."
     const val MOBILE_UA =
         "Mozilla/5.0 (Linux; Android 14; Pixel 8) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/144.0.0.0 Mobile Safari/537.36"
 
@@ -409,7 +425,9 @@ object VkAuth {
         return materialize(parsed)
     }
 
-    suspend fun materialize(raw: VkOAuthPayload): VkTokenPair {
+    suspend fun materialize(raw: VkOAuthPayload): VkTokenPair = ensureMusicToken(materializeRaw(raw))
+
+    private suspend fun materializeRaw(raw: VkOAuthPayload): VkTokenPair {
         if (!raw.accessToken.isNullOrBlank()) {
             runCatching { return upgradeKate(raw.accessToken) }
             val userId = raw.userId ?: fetchUserId(raw.accessToken)
@@ -421,6 +439,108 @@ object VkAuth {
             return runCatching { upgradeKate(exchanged.accessToken) }.getOrDefault(exchanged)
         }
         throw VkAuthException("VK не вернул токен сессии")
+    }
+
+    /** Официальный VK ID / Android-токен без audio.* не сохраняем: иначе «подключено», а музыки нет. */
+    suspend fun ensureMusicToken(pair: VkTokenPair): VkTokenPair {
+        if (tokenHasAudio(pair.accessToken)) return pair
+        val upgraded = runCatching { upgradeKate(pair.accessToken) }.getOrNull()
+        if (upgraded != null && tokenHasAudio(upgraded.accessToken)) return upgraded
+        throw VkAuthException(NO_MUSIC_ACCESS)
+    }
+
+    fun kateQrConfirmUrl(session: VkKateQrSession): String {
+        if (session.authCode.isNotBlank()) return "https://qr.vk.ru/ca?q=${encode(session.authCode)}"
+        if (session.authUrl.isNotBlank()) {
+            val q = runCatching { queryMap(java.net.URI(session.authUrl).rawQuery)["q"] }.getOrNull()
+            if (!q.isNullOrBlank()) return "https://qr.vk.ru/ca?q=${encode(q)}"
+            if (!session.authUrl.contains("oauth.vk", true) && !session.authUrl.contains("id.vk", true)) {
+                return session.authUrl
+            }
+        }
+        return ID_LOGIN
+    }
+
+    fun vkIdMusicLoginUrl(session: VkKateQrSession): String {
+        val confirm = kateQrConfirmUrl(session)
+        return "$ID_LOGIN?to=${encode(confirm)}"
+    }
+
+    suspend fun startKateQr(deviceId: String? = null): VkKateQrSession = startQr(deviceId)
+
+    suspend fun checkKateQr(session: VkKateQrSession): VkKateQrCheck {
+        val first = checkKateQrOnce(session, webAuth = "1")
+        if (first.status != 0) return first
+        return checkKateQrOnce(session, webAuth = "0")
+    }
+
+    private suspend fun checkKateQrOnce(session: VkKateQrSession, webAuth: String): VkKateQrCheck {
+        val check = postForm(
+            "https://api.vk.com/method/auth.checkAuthCode",
+            mapOf(
+                "anonymous_token" to session.anonym,
+                "auth_hash" to session.hash,
+                "v" to AUTH_API,
+                "web_auth" to webAuth,
+            ),
+            kate = true,
+        )
+        val r = check["response"]?.jsonObject ?: return VkKateQrCheck(0)
+        return when (r["status"]?.jsonPrimitive?.intOrNull) {
+            3 -> VkKateQrCheck(3)
+            4 -> VkKateQrCheck(4)
+            2 -> {
+                val minted = mintFromQrResponse(r) ?: throw VkAuthException("VK не вернул токен после подтверждения")
+                VkKateQrCheck(2, minted)
+            }
+            else -> VkKateQrCheck(0)
+        }
+    }
+
+    private suspend fun mintFromQrResponse(r: JsonObject): VkTokenPair? {
+        val access = r.str("access_token")
+        val silent = r.str("silent_token")
+        val superApp = r.str("super_app_token")
+        val userId = r["user_id"]?.jsonPrimitive?.longOrNull
+        val silentUuid = r.str("silent_token_uuid") ?: r.str("uuid")
+        val partial = r["is_partial"]?.jsonPrimitive?.booleanOrNull == true
+        if (!superApp.isNullOrBlank()) {
+            runCatching { return ensureMusicToken(upgradeKate(superApp)) }
+        }
+        if (partial && !access.isNullOrBlank()) {
+            return ensureMusicToken(upgradeKate(access))
+        }
+        if (!access.isNullOrBlank()) {
+            return ensureMusicToken(VkTokenPair(access, userId ?: fetchUserId(access)))
+        }
+        if (!silent.isNullOrBlank()) {
+            return ensureMusicToken(materializeRaw(VkOAuthPayload(null, userId, silent, silentUuid)))
+        }
+        return null
+    }
+
+    suspend fun tokenHasAudio(accessToken: String): Boolean {
+        val obj = runCatching {
+            postForm(
+                "https://api.vk.com/method/audio.search",
+                mapOf(
+                    "access_token" to accessToken,
+                    "v" to API,
+                    "q" to "love",
+                    "count" to "10",
+                    "auto_complete" to "1",
+                    "sort" to "2",
+                ),
+                kate = true,
+            )
+        }.getOrNull() ?: return false
+        val items = obj["response"]?.jsonObject?.get("items")?.jsonArray ?: return false
+        return items.any { el ->
+            val o = runCatching { el.jsonObject }.getOrNull() ?: return@any false
+            val title = o.str("title").orEmpty().lowercase()
+            val artist = o.str("artist").orEmpty().lowercase()
+            !title.contains("доступно на vk.com") && !artist.contains("официальных приложениях")
+        }
     }
 
     /** Подтверждает QR Kate токеном VK ID / официального Android: только токен Kate даёт доступ к audio.*. */
@@ -437,7 +557,7 @@ object VkAuth {
             mapOf("access_token" to androidToken, "auth_code" to qr.authCode, "action" to "1", "v" to AUTH_API),
             ua = BROWSER_UA,
         )
-        repeat(8) {
+        repeat(12) {
             val check = postForm(
                 "https://api.vk.com/method/auth.checkAuthCode",
                 mapOf(
@@ -458,32 +578,29 @@ object VkAuth {
                 3 -> throw VkAuthException("VK отклонил подтверждение входа")
                 4 -> throw VkAuthException("Сессия входа истекла. Попробуйте ещё раз")
             }
-            kotlinx.coroutines.delay(1_000)
+            kotlinx.coroutines.delay(400)
         }
         throw VkAuthException("Не удалось получить токен Kate после входа по SMS")
     }
 
-    private data class Qr(val anonym: String, val hash: String, val authCode: String)
-
-    private suspend fun startQr(): Qr {
+    private suspend fun startQr(deviceId: String? = null): VkKateQrSession {
         val anonym = apiMethod(
             "auth.getAnonymToken",
             mapOf("client_id" to ANDROID_CLIENT_ID, "client_secret" to ANDROID_CLIENT_SECRET, "v" to AUTH_API),
         ).str("token") ?: throw VkAuthException("Не удалось получить анонимный токен VK")
-        val r = apiMethod(
-            "auth.getAuthCode",
-            mapOf(
-                "client_id" to KATE_CLIENT_ID,
-                "scope" to KATE_SCOPE_ALL,
-                "anonymous_token" to anonym,
-                "device_name" to "MusicStreamService Android",
-                "v" to AUTH_API,
-            ),
+        val params = mutableMapOf(
+            "client_id" to KATE_CLIENT_ID,
+            "scope" to KATE_SCOPE_ALL,
+            "anonymous_token" to anonym,
+            "device_name" to "MusicStreamService Android",
+            "v" to AUTH_API,
         )
+        if (!deviceId.isNullOrBlank()) params["device_id"] = deviceId
+        val r = apiMethod("auth.getAuthCode", params)
         val url = r.str("auth_url") ?: throw VkAuthException("VK не выдал QR-код")
         val hash = r.str("auth_hash") ?: throw VkAuthException("VK не выдал QR-код")
         val code = r.str("auth_code") ?: queryMap(java.net.URI(url).rawQuery)["q"].orEmpty()
-        return Qr(anonym, hash, code)
+        return VkKateQrSession(anonym, hash, code, url)
     }
 
     private suspend fun exchangeSilent(silent: String, uuid: String): VkTokenPair {

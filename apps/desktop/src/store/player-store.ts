@@ -6,6 +6,8 @@ export interface QueueItem extends UnifiedTrack {
   streamUrl?: string;
   /** Unique per queue entry, so the same track can appear twice. */
   uid: string;
+  /** Когда трек попал в историю. Нужно, чтобы слить локальный список с сервером. */
+  listenedAt?: string;
 }
 
 export type RepeatMode = 'off' | 'all' | 'one';
@@ -301,7 +303,7 @@ export const usePlayerStore = create<PlayerState>()(
 
       pushHistory: (track) =>
         set((s) => ({
-          history: [track, ...s.history.filter((t) => trackKey(t) !== trackKey(track))].slice(0, HISTORY_LIMIT),
+          history: [{ ...track, listenedAt: new Date().toISOString() }, ...s.history.filter((t) => trackKey(t) !== trackKey(track))].slice(0, HISTORY_LIMIT),
         })),
 
       clearHistory: () => set({ history: [] }),

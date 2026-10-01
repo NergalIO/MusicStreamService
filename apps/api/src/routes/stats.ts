@@ -3,6 +3,7 @@ import type { FastifyInstance } from 'fastify';
 import {
   listeningEventsSchema,
   type HomeShelves,
+  type ListeningHistory,
   type ListeningPeriod,
   type ListeningStats,
   type SourceId,
@@ -32,6 +33,15 @@ async function rows<T extends Row>(query: SQL): Promise<T[]> {
 }
 
 const num = (v: unknown) => (v === null || v === undefined ? 0 : Number(v));
+
+function isoTime(v: unknown): string {
+  if (v instanceof Date) return v.toISOString();
+  if (typeof v === 'string') {
+    const t = Date.parse(v);
+    if (!Number.isNaN(t)) return new Date(t).toISOString();
+  }
+  return new Date().toISOString();
+}
 
 function topTracksQuery(where: SQL, limit: number, having: SQL = sql`true`, order: SQL = sql`plays desc, minutes desc`): SQL {
   return sql`
@@ -129,6 +139,35 @@ export async function statsRoutes(app: FastifyInstance) {
       }));
     if (values.length) await db.insert(listeningEvents).values(values).onConflictDoNothing({ target: listeningEvents.clientEventId });
     return { ok: true, accepted: values.length };
+  });
+
+  app.get('/me/history', async (req): Promise<ListeningHistory> => {
+    await app.authenticate(req);
+    const list = await rows(sql`
+      select source, track_id, title, artist, artists, album, album_id, cover_url, duration_ms, played_at
+      from (
+        select source, track_id, title, artist, artists, album, album_id, cover_url, duration_ms, played_at,
+          row_number() over (partition by source, track_id order by played_at desc) as rn
+        from ${listeningEvents}
+        where user_id = ${req.userId!}
+      ) recent
+      where rn = 1
+      order by played_at desc
+      limit 200`);
+    return {
+      items: list.map((r) => ({
+        source: r.source as SourceId,
+        trackId: String(r.track_id),
+        title: String(r.title),
+        artist: String(r.artist),
+        artists: (r.artists as ListeningHistory['items'][number]['artists']) ?? null,
+        album: (r.album as string | null) ?? null,
+        albumId: (r.album_id as string | null) ?? null,
+        coverUrl: (r.cover_url as string | null) ?? null,
+        durationMs: r.duration_ms == null ? null : num(r.duration_ms),
+        playedAt: isoTime(r.played_at),
+      })),
+    };
   });
 
   app.get('/me/stats', async (req): Promise<ListeningStats> => {

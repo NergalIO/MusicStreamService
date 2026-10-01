@@ -36,28 +36,34 @@ import com.mss.core.model.UnifiedTrack
 import com.mss.core.model.UserSubscriptionDto
 import com.mss.core.model.WaveSettings
 import com.mss.core.model.sourceFrom
+import com.mss.core.network.PlayReporter
 import com.mss.core.network.PresenceClient
 import com.mss.core.offline.OfflineStore
 import com.mss.core.player.PlayerController
 import dagger.hilt.android.lifecycle.HiltViewModel
 import javax.inject.Inject
+import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.Job
 import kotlinx.coroutines.async
 import kotlinx.coroutines.awaitAll
 import kotlinx.coroutines.coroutineScope
+import kotlinx.coroutines.delay
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.SharingStarted
 import kotlinx.coroutines.flow.StateFlow
+import kotlinx.coroutines.flow.collectLatest
 import kotlinx.coroutines.flow.combine
 import kotlinx.coroutines.flow.distinctUntilChanged
 import kotlinx.coroutines.flow.map
 import kotlinx.coroutines.flow.stateIn
+import kotlinx.coroutines.isActive
 import kotlinx.coroutines.launch
 
 @HiltViewModel
 class MssViewModel @Inject constructor(
     private val repo: MssRepository,
     val player: PlayerController,
+    private val playReporter: PlayReporter,
     private val spotify: SpotifyConnector,
     private val yandex: YandexConnector,
     private val vk: VkConnector,
@@ -104,6 +110,9 @@ class MssViewModel @Inject constructor(
     val authInfo: StateFlow<String?> = _authInfo
     private val _stats = MutableStateFlow<ListeningStats?>(null)
     val stats: StateFlow<ListeningStats?> = _stats
+    private val _statsError = MutableStateFlow<String?>(null)
+    val statsError: StateFlow<String?> = _statsError
+    private var statsJob: Job? = null
     private val _subscription = MutableStateFlow<UserSubscriptionDto?>(null)
     val subscription: StateFlow<UserSubscriptionDto?> = _subscription
     private val _shelves = MutableStateFlow<HomeShelves?>(null)
@@ -149,6 +158,7 @@ class MssViewModel @Inject constructor(
     val librarySource: StateFlow<SourceId?> = _librarySource
     val playHistory = repo.prefs.playHistory.stateIn(viewModelScope, SharingStarted.Eagerly, emptyList())
     private var vkExchange: Job? = null
+    private var vkPoll: Job? = null
 
     init {
         refreshSources()
@@ -181,6 +191,39 @@ class MssViewModel @Inject constructor(
                 .distinctUntilChanged { a, b -> a?.source == b?.source && a?.id == b?.id }
                 .collect { track -> if (track != null) runCatching { repo.prefs.addPlayHistory(track) } }
         }
+        viewModelScope.launch {
+            session.map { it?.user?.id }.distinctUntilChanged().collect { userId ->
+                val token = session.value?.accessToken
+                if (userId != null && !token.isNullOrBlank() && token != "preview") {
+                    runCatching { playReporter.flush() }
+                    runCatching { syncPlayHistory() }
+                }
+            }
+        }
+        viewModelScope.launch {
+            playReporter.synced.collect { runCatching { syncPlayHistory() } }
+        }
+        viewModelScope.launch {
+            playReporter.online.collectLatest {
+                delay(1_000)
+                runCatching { syncPlayHistory() }
+            }
+        }
+        viewModelScope.launch {
+            while (isActive) {
+                delay(60_000)
+                val token = session.value?.accessToken
+                if (!token.isNullOrBlank() && token != "preview") runCatching { syncPlayHistory() }
+            }
+        }
+    }
+
+    fun refreshPlayHistory() {
+        viewModelScope.launch { runCatching { syncPlayHistory() } }
+    }
+
+    private suspend fun syncPlayHistory() {
+        repo.prefs.mergeRemoteHistory(repo.listeningHistory())
     }
 
     fun refreshSources() {
@@ -877,17 +920,54 @@ class MssViewModel @Inject constructor(
 
     fun openVkLogin() {
         vk.cancelLogin()
-        _vkLogin.value = VkLoginUi(open = true, step = VkLoginStep.VKID)
+        vkPoll?.cancel()
+        vkExchange?.cancel()
+        _vkLogin.value = VkLoginUi(open = true, step = VkLoginStep.VKID, busy = true)
+        vkPoll = viewModelScope.launch {
+            try {
+                val session = vk.beginKateWebLogin()
+                if (!_vkLogin.value.open || _vkLogin.value.step != VkLoginStep.VKID) return@launch
+                _vkLogin.value = _vkLogin.value.copy(
+                    busy = false,
+                    startUrl = session.startUrl,
+                    confirmUrl = session.confirmUrl,
+                    error = null,
+                )
+                while (isActive && _vkLogin.value.open && _vkLogin.value.step == VkLoginStep.VKID) {
+                    if (vk.pollKateWebLogin()) {
+                        sessionLog.info("auth", "vk connected")
+                        _vkLogin.value = VkLoginUi()
+                        refreshSources()
+                        loadHome()
+                        return@launch
+                    }
+                    delay(2_000)
+                }
+            } catch (e: CancellationException) {
+                throw e
+            } catch (e: Exception) {
+                sessionLog.error("auth", e.message ?: "vk login failed")
+                if (_vkLogin.value.open && _vkLogin.value.step == VkLoginStep.VKID) {
+                    _vkLogin.value = _vkLogin.value.copy(busy = false, error = e.message)
+                }
+            }
+        }
     }
 
     fun openVkIdLogin() = openVkLogin()
 
     fun closeVkLogin() {
+        vkPoll?.cancel()
+        vkPoll = null
+        vkExchange?.cancel()
+        vkExchange = null
         vk.cancelLogin()
         _vkLogin.value = VkLoginUi()
     }
 
     fun setVkMethod(sms: Boolean) {
+        vkPoll?.cancel()
+        vkPoll = null
         vk.cancelLogin()
         _vkLogin.value = VkLoginUi(open = true, sms = sms)
     }
@@ -924,6 +1004,7 @@ class MssViewModel @Inject constructor(
         if (vkExchange?.isActive == true || _sources.value.vk != AuthStatus.DISCONNECTED) return
         vkExchange = launchVk {
             vk.completeWebLogin(url)
+            vkPoll?.cancel()
             sessionLog.info("auth", "vk connected")
             _vkLogin.value = VkLoginUi()
             refreshSources()
@@ -981,8 +1062,18 @@ class MssViewModel @Inject constructor(
 
     fun setApiBase(url: String) = launch { repo.setApiBase(url) }
 
-    fun loadStats(period: String = "month", year: Int? = null) = launch {
-        _stats.value = repo.stats(period, year)
+    fun loadStats(period: String = "month", year: Int? = null) {
+        statsJob?.cancel()
+        statsJob = viewModelScope.launch {
+            _statsError.value = null
+            try {
+                _stats.value = repo.stats(period, year)
+            } catch (e: CancellationException) {
+                throw e
+            } catch (e: Exception) {
+                _statsError.value = e.message ?: "Не удалось загрузить статистику"
+            }
+        }
     }
 
     fun loadSubscription() = launch { _subscription.value = repo.subscription() }
@@ -1383,4 +1474,6 @@ data class VkLoginUi(
     val captchaImg: String? = null,
     val captchaSid: String? = null,
     val busy: Boolean = false,
+    val startUrl: String? = null,
+    val confirmUrl: String? = null,
 )

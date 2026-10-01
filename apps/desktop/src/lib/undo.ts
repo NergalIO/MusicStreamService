@@ -1,4 +1,5 @@
 import { toast } from 'sonner';
+import { noteHistoryCleared, restoreHistoryCleared } from '@/lib/listening';
 import { usePlayerStore } from '@/store/player-store';
 
 const UNDO_MS = 5000;
@@ -38,6 +39,12 @@ export function clearQueueWithUndo(): void {
 export function clearHistoryWithUndo(): void {
   const { history } = usePlayerStore.getState();
   if (!history.length) return;
+  const prevCleared = noteHistoryCleared();
   usePlayerStore.getState().clearHistory();
-  undoableToast('История очищена', { undo: () => usePlayerStore.setState({ history }) });
+  undoableToast('История очищена', {
+    undo: () => {
+      restoreHistoryCleared(prevCleared);
+      usePlayerStore.setState({ history });
+    },
+  });
 }

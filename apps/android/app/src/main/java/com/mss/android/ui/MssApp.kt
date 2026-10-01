@@ -159,6 +159,8 @@ fun MssApp(
             if (vkLogin.open && vkLogin.step == VkLoginStep.VKID) {
                 VkIdOverlay(
                     error = vkLogin.error,
+                    startUrl = vkLogin.startUrl,
+                    confirmUrl = vkLogin.confirmUrl,
                     onClose = { vm.closeVkLogin() },
                     onForm = { vm.setVkMethod(true) },
                     onDone = { vm.completeVkId(it) },
@@ -390,8 +392,8 @@ private fun MainShell(vm: MssViewModel, nav: NavHostController) {
                 composable(Routes.SEARCH) { SearchScreen(vm, nav) }
                 composable(Routes.LIBRARY) { LibraryScreen(vm, nav) }
                 composable(Routes.MORE) { MoreHub(vm, nav) }
-                composable(Routes.STATS) { StatsScreen(vm) }
-                composable(Routes.WRAPPED) { StatsScreen(vm, initialPeriod = "year") }
+                composable(Routes.STATS) { StatsScreen(vm, nav) }
+                composable(Routes.WRAPPED) { StatsScreen(vm, nav, initialPeriod = "year") }
                 composable(Routes.SUBSCRIPTION) { SubScreen(vm) }
                 composable(Routes.SETTINGS) { SettingsScreen() }
                 composable(Routes.WAVE) { WaveScreen(vm) }

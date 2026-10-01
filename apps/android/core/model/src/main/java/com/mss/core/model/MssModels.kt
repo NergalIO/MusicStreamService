@@ -335,6 +335,23 @@ data class StatsTopArtist(
 )
 
 @Serializable
+data class ListeningHistoryItem(
+    val source: SourceId,
+    val trackId: String,
+    val title: String,
+    val artist: String,
+    val artists: List<ArtistRef>? = null,
+    val album: String? = null,
+    val albumId: String? = null,
+    val coverUrl: String? = null,
+    val durationMs: Long? = null,
+    val playedAt: String,
+)
+
+@Serializable
+data class ListeningHistory(val items: List<ListeningHistoryItem> = emptyList())
+
+@Serializable
 data class ListeningStats(
     val period: String,
     val year: Int? = null,
@@ -572,6 +589,19 @@ fun PlaylistDto.toUnifiedPlaylist(): UnifiedPlaylist = UnifiedPlaylist(
     description = description,
     coverUrl = coverUrl,
     trackCount = trackCount,
+)
+
+fun ListeningHistoryItem.toUnifiedTrack(): UnifiedTrack = UnifiedTrack(
+    source = source,
+    id = trackId,
+    title = title,
+    artist = artist,
+    artists = artists,
+    album = album,
+    albumId = albumId,
+    coverUrl = coverUrl,
+    durationMs = durationMs,
+    playable = true,
 )
 
 fun StatsTopTrack.toUnifiedTrack(): UnifiedTrack = UnifiedTrack(

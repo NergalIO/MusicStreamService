@@ -463,11 +463,12 @@ private fun UploadsTab(vm: MssViewModel, nav: NavHostController, library: Librar
 
 @Composable
 private fun HistoryTab(vm: MssViewModel, nav: NavHostController, source: SourceId?) {
+    LaunchedEffect(Unit) { vm.refreshPlayHistory() }
     val history by vm.playHistory.collectAsState()
     val tracks = history.bySource(source)
     var confirm by remember { mutableStateOf(false) }
     if (tracks.isEmpty()) {
-        EmptyState("История пуста", "Здесь появятся треки, которые вы слушали.")
+        EmptyState("История пуста", "Здесь появятся треки, которые вы слушали на телефоне или компьютере.")
         return
     }
     TrackColumn(vm, nav, tracks) {
@@ -480,7 +481,7 @@ private fun HistoryTab(vm: MssViewModel, nav: NavHostController, source: SourceI
         AlertDialog(
             onDismissRequest = { confirm = false },
             title = { Text("Очистить историю?") },
-            text = { Text("Список недавно прослушанных треков будет удалён с этого устройства.") },
+            text = { Text("Список на этом устройстве будет скрыт. Статистика прослушиваний сохранится.") },
             confirmButton = { TextButton({ vm.clearPlayHistory(); confirm = false }) { Text("Очистить", color = MaterialTheme.colorScheme.error) } },
             dismissButton = { TextButton({ confirm = false }) { Text("Отмена") } },
         )

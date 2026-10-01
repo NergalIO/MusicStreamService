@@ -82,4 +82,18 @@ class VkAuthTest {
         org.junit.Assert.assertTrue(VkAuth.otpAlreadySent("sms"))
         org.junit.Assert.assertFalse(VkAuth.otpAlreadySent("password"))
     }
+
+    @Test
+    fun kateQrUrlsPointAtMusicConfirm() {
+        val session = VkKateQrSession(
+            anonym = "a",
+            hash = "h",
+            authCode = "abc123",
+            authUrl = "https://oauth.vk.com/authorize?q=abc123",
+        )
+        org.junit.Assert.assertEquals("https://qr.vk.ru/ca?q=abc123", VkAuth.kateQrConfirmUrl(session))
+        val login = VkAuth.vkIdMusicLoginUrl(session)
+        org.junit.Assert.assertTrue(login.startsWith("https://id.vk.com/"))
+        org.junit.Assert.assertTrue(login.contains("qr.vk.ru"))
+    }
 }

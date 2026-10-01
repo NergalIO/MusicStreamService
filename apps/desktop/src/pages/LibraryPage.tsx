@@ -1,7 +1,7 @@
 import type { SourceId, UnifiedTrack } from '@mss/shared';
 import { useQuery, useQueryClient, type QueryKey } from '@tanstack/react-query';
 import { FolderOpen, ListMusic, Play, Plus, Shuffle } from 'lucide-react';
-import { useMemo, useState } from 'react';
+import { useEffect, useMemo, useState } from 'react';
 import { NavLink, Navigate, useNavigate, useParams } from 'react-router-dom';
 import { toast } from 'sonner';
 import { ArtistGrid } from '@/components/artists/ArtistCard';
@@ -22,6 +22,7 @@ import { formatBytes, formatTrackCount } from '@/lib/format';
 import { playlistPath } from '@/lib/links';
 import { createPlaylist, deleteUploadedTrack } from '@/lib/mss-library';
 import { playCollection } from '@/lib/player-actions';
+import { syncListeningHistory } from '@/lib/listening';
 import { clearHistoryWithUndo, undoableToast } from '@/lib/undo';
 import {
   mssPlaylistToUnified,
@@ -503,6 +504,9 @@ function DownloadsTab() {
 function HistoryTab({ scope }: { scope: ServiceScope }) {
   const history = usePlayerStore((s) => s.history);
   const context: PlayContext = { type: 'history', title: 'Недавно играли', path: libraryPath(scope, 'history') };
+  useEffect(() => {
+    void syncListeningHistory();
+  }, []);
   return (
     <>
       <div className="mb-4 flex justify-end gap-2">
@@ -513,7 +517,7 @@ function HistoryTab({ scope }: { scope: ServiceScope }) {
         )}
         <PlayButtons tracks={history} context={context} />
       </div>
-      <TrackList tracks={history} context={context} emptyText="Вы ещё ничего не слушали" />
+      <TrackList tracks={history} context={context} emptyText="Здесь появятся треки, которые вы слушали на телефоне или компьютере" />
     </>
   );
 }

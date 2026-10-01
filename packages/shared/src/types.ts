@@ -108,6 +108,24 @@ export interface StatsTopArtist {
   minutes: number;
 }
 
+/** Последние уникальные прослушивания аккаунта — одни и те же на телефоне и компьютере. */
+export interface ListeningHistoryItem {
+  source: SourceId;
+  trackId: string;
+  title: string;
+  artist: string;
+  artists: ArtistRef[] | null;
+  album: string | null;
+  albumId: string | null;
+  coverUrl: string | null;
+  durationMs: number | null;
+  playedAt: string;
+}
+
+export interface ListeningHistory {
+  items: ListeningHistoryItem[];
+}
+
 export interface ListeningStats {
   period: ListeningPeriod;
   /** Календарный год, если статистика запрошена за год (итоги года). */

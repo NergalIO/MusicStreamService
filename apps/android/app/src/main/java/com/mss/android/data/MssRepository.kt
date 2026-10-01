@@ -9,6 +9,7 @@ import com.mss.core.localtracks.LocalTrackStore
 import com.mss.core.model.AuthSession
 import com.mss.core.model.CatalogArtistDto
 import com.mss.core.model.HomeShelves
+import com.mss.core.model.ListeningHistoryItem
 import com.mss.core.model.ListeningStats
 import com.mss.core.model.LocalHolding
 import com.mss.core.model.PlaylistDto
@@ -130,6 +131,8 @@ class MssRepository @Inject constructor(
     suspend fun shelves(): HomeShelves = api.shelves()
 
     suspend fun stats(period: String, year: Int? = null): ListeningStats = api.stats(period, year)
+
+    suspend fun listeningHistory(): List<ListeningHistoryItem> = api.listeningHistory()
 
     suspend fun subscription(): UserSubscriptionDto = api.subscription()
 

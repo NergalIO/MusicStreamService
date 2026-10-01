@@ -3,6 +3,8 @@ package com.mss.core.network
 import com.mss.core.datastore.MssPreferences
 import com.mss.core.model.AuthSession
 import com.mss.core.model.HomeShelves
+import com.mss.core.model.ListeningHistory
+import com.mss.core.model.ListeningHistoryItem
 import com.mss.core.model.ListeningStats
 import com.mss.core.model.LobbyDto
 import com.mss.core.model.LobbyListDto
@@ -344,6 +346,11 @@ class MssApiClient @Inject constructor(
 
     suspend fun postPlays(events: List<PlayEvent>) {
         authorizedPost("${apiBase()}/me/plays", PlaysBody(events))
+    }
+
+    suspend fun listeningHistory(): List<ListeningHistoryItem> {
+        val res = authorizedGet("${apiBase()}/me/history")
+        return res.body<ListeningHistory>().items
     }
 
     suspend fun subscription(): UserSubscriptionDto {

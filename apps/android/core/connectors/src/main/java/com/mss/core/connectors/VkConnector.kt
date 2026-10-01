@@ -39,6 +39,8 @@ import kotlinx.serialization.json.jsonObject
 import kotlinx.serialization.json.jsonPrimitive
 import kotlinx.serialization.json.longOrNull
 
+data class VkWebLoginSession(val startUrl: String, val confirmUrl: String)
+
 @Singleton
 class VkConnector @Inject constructor(
     private val vault: TokenVault,
@@ -60,6 +62,7 @@ class VkConnector @Inject constructor(
     private var smsSid: String = ""
     private var smsPhone: String = ""
     private var passwordCaptchaSid: String? = null
+    private var webQr: VkKateQrSession? = null
 
     private fun deviceId(): String {
         vault.get(DEVICE_KEY)?.let { return it }
@@ -83,7 +86,7 @@ class VkConnector @Inject constructor(
             extra["captcha_key"] = captchaKey
         }
         try {
-            val pair = VkAuth.loginPassword(username.trim(), password, extra)
+            val pair = VkAuth.ensureMusicToken(VkAuth.loginPassword(username.trim(), password, extra))
             passwordCaptchaSid = null
             saveTokens(VkTokens(pair.accessToken, pair.userId))
         } catch (e: VkAuthException) {
@@ -116,12 +119,40 @@ class VkConnector @Inject constructor(
         smsSid = ""
         smsPhone = ""
         passwordCaptchaSid = null
+        webQr = null
+    }
+
+    suspend fun beginKateWebLogin(): VkWebLoginSession {
+        val qr = VkAuth.startKateQr(deviceId())
+        webQr = qr
+        return VkWebLoginSession(
+            startUrl = VkAuth.vkIdMusicLoginUrl(qr),
+            confirmUrl = VkAuth.kateQrConfirmUrl(qr),
+        )
+    }
+
+    /** true — токен Kate с музыкой уже сохранён. */
+    suspend fun pollKateWebLogin(): Boolean {
+        val qr = webQr ?: return false
+        val check = VkAuth.checkKateQr(qr)
+        when (check.status) {
+            2 -> {
+                val token = check.token ?: throw VkAuthException("VK не вернул токен после подтверждения")
+                saveTokens(VkTokens(token.accessToken, token.userId))
+                webQr = null
+                return true
+            }
+            3 -> throw VkAuthException("Вход отклонён в VK")
+            4 -> throw VkAuthException("Сессия входа истекла. Попробуйте ещё раз")
+            else -> return false
+        }
     }
 
     suspend fun completeWebLogin(url: String) {
         val payload = VkAuth.parseOAuthRedirect(url) ?: throw VkAuthException("VK не вернул токен")
         val pair = VkAuth.materialize(payload)
         saveTokens(VkTokens(pair.accessToken, pair.userId))
+        webQr = null
     }
 
     /** Cookies из WebView после входа на id.vk.com. false — сессии ещё нет, окно не закрываем. */
@@ -133,6 +164,7 @@ class VkConnector @Inject constructor(
             ?: return false
         val pair = VkAuth.materialize(payload)
         saveTokens(VkTokens(pair.accessToken, pair.userId))
+        webQr = null
         return true
     }
 

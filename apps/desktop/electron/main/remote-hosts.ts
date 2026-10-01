@@ -1,4 +1,5 @@
 import net from 'node:net';
+import { getAppSettings } from './app-settings.js';
 
 /**
  * Протокол mss-stream доступен из страницы renderer, поэтому proxy и img — это чужой вход
@@ -27,6 +28,30 @@ const ALLOWED_SUFFIXES = [
   'beget.cloud',
 ];
 
+function configuredApiOrigin(): URL | null {
+  const candidates = [process.env.API_PUBLIC_URL, process.env.VITE_API_PUBLIC_URL, getAppSettings().apiPublicUrl];
+  for (const raw of candidates) {
+    const s = raw?.trim();
+    if (!s) continue;
+    try {
+      return new URL(s.includes('://') ? s : `https://${s}`);
+    } catch {
+      /* next */
+    }
+  }
+  return null;
+}
+
+function sameOrigin(url: URL, api: URL): boolean {
+  const urlPort = url.port || (url.protocol === 'https:' ? '443' : '80');
+  const apiPort = api.port || (api.protocol === 'https:' ? '443' : '80');
+  return (
+    url.protocol === api.protocol &&
+    url.hostname.toLowerCase() === api.hostname.toLowerCase() &&
+    urlPort === apiPort
+  );
+}
+
 function isPrivateHost(host: string): boolean {
   const lower = host.toLowerCase();
   if (lower === 'localhost' || lower.endsWith('.localhost') || lower.endsWith('.local')) return true;
@@ -54,6 +79,8 @@ export function isAllowedRemote(raw: string, { requireHttps = true } = {}): bool
   } catch {
     return false;
   }
+  const api = configuredApiOrigin();
+  if (api && sameOrigin(url, api)) return true;
   if (url.protocol !== 'https:' && (requireHttps || url.protocol !== 'http:')) return false;
   const host = url.hostname.toLowerCase();
   if (isPrivateHost(host)) return false;

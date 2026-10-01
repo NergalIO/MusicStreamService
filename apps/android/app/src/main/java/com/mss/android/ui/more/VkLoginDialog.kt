@@ -8,6 +8,7 @@ import android.webkit.WebView
 import android.webkit.WebViewClient
 import androidx.compose.foundation.background
 import androidx.compose.foundation.layout.Arrangement
+import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.fillMaxSize
@@ -19,6 +20,7 @@ import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.statusBarsPadding
 import androidx.compose.foundation.text.KeyboardOptions
 import androidx.compose.material3.AlertDialog
+import androidx.compose.material3.CircularProgressIndicator
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
@@ -129,6 +131,8 @@ fun VkLoginDialog(vm: MssViewModel) {
 @Composable
 fun VkIdOverlay(
     error: String?,
+    startUrl: String?,
+    confirmUrl: String?,
     onClose: () -> Unit,
     onForm: () -> Unit,
     onDone: (String) -> Unit,
@@ -152,13 +156,22 @@ fun VkIdOverlay(
             TextButton(onClick = onClose) { Text("Закрыть") }
         }
         Text(
-            "Войдите по номеру на странице VK. Токен подхватится сам.",
+            "Войдите в VK как обычно. После входа подтвердите доступ к музыке — обычный VK ID музыку не отдаёт.",
             modifier = Modifier.padding(horizontal = 16.dp, vertical = 2.dp),
             style = MaterialTheme.typography.bodySmall,
             color = MaterialTheme.colorScheme.onSurfaceVariant,
         )
         (pageError ?: error)?.let {
             Text(it, color = MaterialTheme.colorScheme.error, modifier = Modifier.padding(horizontal = 16.dp, vertical = 4.dp))
+        }
+        if (startUrl.isNullOrBlank()) {
+            Box(
+                Modifier.fillMaxWidth().weight(1f),
+                contentAlignment = Alignment.Center,
+            ) {
+                if (error.isNullOrBlank()) CircularProgressIndicator()
+            }
+            return@Column
         }
         AndroidView(
             factory = { ctx ->
@@ -183,20 +196,26 @@ fun VkIdOverlay(
                     web.webViewClient = object : WebViewClient() {
                         private var finished = false
                         private var fellBack = false
-                        private var openedFeed = false
+                        private var openedConfirm = false
                         private var connecting = false
                         private var connectAttempts = 0
                         private var lastConnectAt = 0L
+                        private val musicConfirm = confirmUrl.orEmpty()
+                        private val skipConnect = musicConfirm.isNotBlank()
 
                         init {
                             deliverConnect = { appId, body ->
                                 val payload = vkConnectPayload(body)
                                 when {
-                                    payload != null -> {
+                                    payload != null && appId == VkAuth.KATE_CLIENT_ID -> {
                                         connecting = false
                                         acceptOAuth(VkAuth.toRedirectUrl(payload))
                                     }
-                                    appId == VkAuth.KATE_CLIENT_ID && !finished ->
+                                    payload != null && appId == VkAuth.ANDROID_CLIENT_ID && !skipConnect -> {
+                                        connecting = false
+                                        acceptOAuth(VkAuth.toRedirectUrl(payload))
+                                    }
+                                    appId == VkAuth.KATE_CLIENT_ID && !finished && !skipConnect ->
                                         web.evaluateJavascript(vkConnectScript(VkAuth.ANDROID_CLIENT_ID), null)
                                     else -> connecting = false
                                 }
@@ -204,6 +223,7 @@ fun VkIdOverlay(
                         }
 
                         private fun tryConnect(target: WebView) {
+                            if (skipConnect) return
                             val now = android.os.SystemClock.elapsedRealtime()
                             if (finished || connecting || connectAttempts >= MAX_CONNECT_ATTEMPTS) return
                             if (now - lastConnectAt < CONNECT_INTERVAL_MS) return
@@ -233,15 +253,23 @@ fun VkIdOverlay(
                                 if (acceptOAuth(href)) return@evaluateJavascript
                                 if (!fellBack && snap.text.contains("direct auth", true)) {
                                     fellBack = true
-                                    target.loadUrl(VkAuth.ID_LOGIN)
+                                    target.loadUrl(startUrl)
                                     return@evaluateJavascript
                                 }
                                 val scraped = VkAuth.parsePageTokens(snap.html.ifBlank { snap.text })
                                 if (scraped != null && acceptOAuth(VkAuth.toRedirectUrl(scraped))) return@evaluateJavascript
                                 val host = runCatching { java.net.URI(href.ifBlank { candidate }).host.orEmpty() }.getOrDefault("")
                                 if (!VkAuth.isVkHost(host) || !vkLoggedIn()) return@evaluateJavascript
-                                if (!openedFeed && !VkAuth.looksLoggedIn(href) && !VkAuth.looksLoggedIn(candidate)) {
-                                    openedFeed = true
+                                if (musicConfirm.isNotBlank() && !openedConfirm && !isQrConfirmHost(host) &&
+                                    !host.contains("oauth.vk", true) && vkLoggedIn()
+                                ) {
+                                    openedConfirm = true
+                                    target.loadUrl(musicConfirm)
+                                    return@evaluateJavascript
+                                }
+                                if (musicConfirm.isNotBlank()) return@evaluateJavascript
+                                if (!openedConfirm && !VkAuth.looksLoggedIn(href) && !VkAuth.looksLoggedIn(candidate)) {
+                                    openedConfirm = true
                                     target.loadUrl(if (host.endsWith("vk.ru", true)) "https://vk.ru/" else "https://vk.com/")
                                     return@evaluateJavascript
                                 }
@@ -276,14 +304,14 @@ fun VkIdOverlay(
                             if (!request.isForMainFrame) return
                             if (!fellBack && (request.url?.host?.contains("oauth.vk") == true)) {
                                 fellBack = true
-                                view.loadUrl(VkAuth.ID_LOGIN)
+                                view.loadUrl(startUrl)
                                 return
                             }
                             pageError = err.description?.toString() ?: "Не удалось открыть VK"
                         }
                     }
                     web.webChromeClient = LoginPopupChrome(this, VkAuth.MOBILE_UA)
-                    web.loadUrl(VkAuth.ID_LOGIN)
+                    web.loadUrl(startUrl)
                     web.requestFocus()
                 }
             },
@@ -366,6 +394,8 @@ private fun vkConnectPayload(body: String): com.mss.core.connectors.VkOAuthPaylo
     val user = if (data.has("user_id") && !data.isNull("user_id")) data.optLong("user_id") else null
     return com.mss.core.connectors.VkOAuthPayload(access, user, silent, str("uuid") ?: str("silent_token_uuid"))
 }
+
+private fun isQrConfirmHost(host: String): Boolean = host.contains("qr.vk", true)
 
 private fun vkLoggedIn(): Boolean {
     val cookies = CookieManager.getInstance()
