@@ -147,6 +147,48 @@ class DownloadScheduler @Inject constructor(
         scope.launch { runWorker(key, url, fileName, "bin", track) }
     }
 
+    fun enqueueLocalCopy(uri: android.net.Uri, track: UnifiedTrack) {
+        val key = keyOf(track)
+        if (!begin(key)) return
+        scope.launch {
+            val copied = runCatching {
+                val ext = uri.lastPathSegment?.substringAfterLast('.', "")?.takeIf { it.length in 2..5 } ?: "bin"
+                val dest = File(File(context.filesDir, "downloads").apply { mkdirs() }, fileNameFor(track, ext))
+                if (uri.scheme == null || uri.scheme == "file") {
+                    val src = File(uri.path ?: error("Нет файла"))
+                    if (!src.exists()) error("Файл не найден")
+                    src.copyTo(dest, overwrite = true)
+                } else {
+                    context.contentResolver.openInputStream(uri)?.use { input ->
+                        dest.outputStream().use { input.copyTo(it) }
+                    } ?: error("Не удалось прочитать файл")
+                }
+                addRecord(
+                    DownloadRecord(
+                        key = key,
+                        path = dest.absolutePath,
+                        codec = ext,
+                        size = dest.length(),
+                        downloadedAt = Instant.now().toString(),
+                        track = track,
+                    ),
+                )
+                saveLyricsSidecar(dest, track)
+            }.isSuccess
+            if (copied) {
+                finish(key)
+                return@launch
+            }
+            val url = track.cloudDownloadUrl?.takeIf { it.isNotBlank() }
+                ?: runCatching { api.trackDownloadUrl(track.id) }.getOrNull()
+            if (url.isNullOrBlank()) {
+                finish(key)
+                return@launch
+            }
+            runWorker(key, url, fileNameFor(track, "bin"), "bin", track)
+        }
+    }
+
     private suspend fun runWorker(key: String, url: String, fileName: String, codec: String, track: UnifiedTrack) {
         try {
             val req = OneTimeWorkRequestBuilder<TrackDownloadWorker>()

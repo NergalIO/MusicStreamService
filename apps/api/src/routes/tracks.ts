@@ -15,7 +15,6 @@ import { trackHoldings, tracks } from '../db/schema.js';
 import { deleteObject, getObjectFull, getObjectRange, headObject, presignGet, presignPut, putObject, CLOUD_GET_TTL_SEC } from '../lib/storage.js';
 import { detectLyricsFormat, formatFromKey, lyricsObjectKey, LYRICS_MAX_BYTES, parseLyricsFile, type LyricsFormat } from '../lib/lyrics.js';
 import { enqueueTranscode } from '../lib/queue.js';
-import { getActiveSubscription } from '../services/subscription.js';
 import { albumIdsForUserTracks, appendToAlbum, findOwnAlbum } from '../lib/albums.js';
 import { appendToPlaylist, findOwnPlaylist } from './playlists.js';
 import { computeAvailability, hasStreamableBytes } from '../lib/track-availability.js';
@@ -178,11 +177,6 @@ export async function trackRoutes(app: FastifyInstance) {
     const { id } = req.params as { id: string };
     const deviceId = (req.headers['x-device-id'] as string) ?? '';
     if (!deviceId) return reply.badRequest('X-Device-Id required');
-
-    const sub = await getActiveSubscription(req.userId!);
-    if (!sub?.features.offline_enabled) {
-      return reply.forbidden('Offline requires Premium');
-    }
 
     const t = await ensureTrackStreamable(id);
     if (!t?.storageKeyMaster) return reply.code(503).send({ message: 'Трек недоступен — нет активных источников' });

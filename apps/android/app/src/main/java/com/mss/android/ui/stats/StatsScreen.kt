@@ -1,5 +1,7 @@
 package com.mss.android.ui.stats
 
+import android.content.Intent
+import android.net.Uri
 import androidx.compose.foundation.background
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.Arrangement
@@ -17,7 +19,11 @@ import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.verticalScroll
+import androidx.compose.material.icons.Icons
+import androidx.compose.material.icons.filled.AutoAwesome
+import androidx.compose.material.icons.filled.Favorite
 import androidx.compose.material3.Button
+import androidx.compose.material3.Icon
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.OutlinedTextField
 import androidx.compose.material3.Text
@@ -34,6 +40,7 @@ import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.text.style.TextOverflow
@@ -399,18 +406,73 @@ private fun bucketLabel(bucket: String, unit: String, long: Boolean = false): St
 
 @Composable
 fun SubScreen(vm: MssViewModel) {
-    LaunchedEffect(Unit) { vm.loadSubscription() }
-    val sub by vm.subscription.collectAsState()
-    var code by remember { mutableStateOf("") }
+    val context = LocalContext.current
+    val scheme = MaterialTheme.colorScheme
     Column(
         Modifier.fillMaxSize().verticalScroll(rememberScrollState()).padding(16.dp),
-        verticalArrangement = Arrangement.spacedBy(8.dp),
+        verticalArrangement = Arrangement.spacedBy(16.dp),
     ) {
-        sub?.let {
-            Text("${it.planName} (${it.status})", maxLines = 2, overflow = TextOverflow.Ellipsis)
-            Text("Офлайн: ${it.features.offlineEnabled}, макс. ${it.features.maxOfflineTracks ?: "∞"}")
+        Text("Подписка", style = MaterialTheme.typography.headlineSmall, fontWeight = FontWeight.Bold)
+        Text(
+            "MSS сейчас бесплатен для всех пользователей",
+            style = MaterialTheme.typography.bodyMedium,
+            color = scheme.onSurfaceVariant,
+        )
+        Box(
+            Modifier
+                .fillMaxWidth()
+                .clip(RoundedCornerShape(16.dp))
+                .background(scheme.primary.copy(alpha = 0.12f))
+                .padding(20.dp),
+        ) {
+            Row(horizontalArrangement = Arrangement.spacedBy(12.dp)) {
+                Icon(Icons.Default.AutoAwesome, null, tint = scheme.primary, modifier = Modifier.padding(top = 2.dp))
+                Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
+                    Text(
+                        "В данный момент подписка не предусмотрена, и доступен полный функционал программы.",
+                        style = MaterialTheme.typography.bodyLarge,
+                        fontWeight = FontWeight.Medium,
+                    )
+                    Text(
+                        "Все возможности MSS — внутренняя библиотека, подключение сервисов, офлайн, плейлисты и плеер — доступны без ограничений и без оплаты.",
+                        style = MaterialTheme.typography.bodyMedium,
+                        color = scheme.onSurfaceVariant,
+                    )
+                }
+            }
         }
-        OutlinedTextField(code, { code = it }, label = { Text("Промокод") }, modifier = Modifier.fillMaxWidth(), singleLine = true)
-        Button({ vm.activatePromo(code) }, Modifier.fillMaxWidth()) { Text("Активировать") }
+        Box(
+            Modifier
+                .fillMaxWidth()
+                .clip(RoundedCornerShape(16.dp))
+                .background(scheme.surfaceVariant.copy(alpha = 0.45f))
+                .padding(20.dp),
+        ) {
+            Column(verticalArrangement = Arrangement.spacedBy(12.dp)) {
+                Row(
+                    verticalAlignment = Alignment.CenterVertically,
+                    horizontalArrangement = Arrangement.spacedBy(8.dp),
+                ) {
+                    Icon(Icons.Default.Favorite, null, tint = scheme.primary)
+                    Text("Будем рады поддержке", style = MaterialTheme.typography.titleMedium, fontWeight = FontWeight.SemiBold)
+                }
+                Text(
+                    "Если MSS помогает вам слушать музыку, можно поддержать разработку добровольным донатом через ЮMoney.",
+                    style = MaterialTheme.typography.bodyMedium,
+                    color = scheme.onSurfaceVariant,
+                )
+                Button(
+                    onClick = {
+                        context.startActivity(
+                            Intent(Intent.ACTION_VIEW, Uri.parse("https://yoomoney.ru/to/4100118926337293/0"))
+                                .addFlags(Intent.FLAG_ACTIVITY_NEW_TASK),
+                        )
+                    },
+                    modifier = Modifier.fillMaxWidth(),
+                ) {
+                    Text("Подарить")
+                }
+            }
+        }
     }
 }

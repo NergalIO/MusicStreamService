@@ -84,7 +84,6 @@ import com.mss.android.ui.navigation.openRoute
 import com.mss.android.ui.theme.rememberMssWindow
 import com.mss.core.downloads.DownloadScheduler
 import com.mss.core.model.AlbumWithTracks
-import com.mss.core.model.DownloadRecord
 import com.mss.core.model.SourceId
 import com.mss.core.model.UnifiedAlbum
 import com.mss.core.model.UnifiedPlaylist
@@ -142,7 +141,7 @@ fun LibraryScreen(vm: MssViewModel, nav: NavHostController) {
                 LibraryTab.PLAYLISTS -> PlaylistsTab(vm, nav, library, activeSource)
                 LibraryTab.ARTISTS -> ArtistsTab(vm, nav, library, activeSource)
                 LibraryTab.ALBUMS -> AlbumsTab(vm, nav, library, activeSource)
-                LibraryTab.DOWNLOADS -> DownloadsTab(vm, activeSource)
+                LibraryTab.DOWNLOADS -> DownloadsTab(vm, nav, activeSource)
                 LibraryTab.UPLOADS -> UploadsTab(vm, nav, library)
                 LibraryTab.HISTORY -> HistoryTab(vm, nav, activeSource)
             }
@@ -515,6 +514,7 @@ private fun TrackColumn(
     nav: NavHostController,
     tracks: List<UnifiedTrack>,
     onDeleteMany: ((List<UnifiedTrack>) -> Unit)? = null,
+    deletePrompt: ((List<UnifiedTrack>) -> Pair<String, String>)? = null,
     header: LazyListScope.() -> Unit = {},
 ) {
     val liked by vm.likedIds.collectAsState()
@@ -534,6 +534,7 @@ private fun TrackColumn(
         onQueueMany = { vm.enqueueMany(it) },
         onPublishMany = { vm.publishTracksToMss(it) },
         onDeleteMany = onDeleteMany,
+        deletePrompt = deletePrompt,
         currentKey = currentKey,
         header = header,
     )
@@ -875,41 +876,25 @@ private fun AlbumSection(text: String) {
 }
 
 @Composable
-private fun DownloadsTab(vm: MssViewModel, source: SourceId?) {
+private fun DownloadsTab(vm: MssViewModel, nav: NavHostController, source: SourceId?) {
     val records by vm.downloadRecords.collectAsState()
     val shown = records.filter { source == null || it.track.source == source }
-    var removing by remember { mutableStateOf<DownloadRecord?>(null) }
     if (shown.isEmpty()) {
         EmptyState("Ничего не скачано", "Скачайте трек из меню «⋮» — он будет доступен без интернета.")
         return
     }
     val tracks = shown.map { it.track }
-    LazyColumn(Modifier.fillMaxSize(), contentPadding = PaddingValues(bottom = 16.dp)) {
+    TrackColumn(
+        vm,
+        nav,
+        tracks,
+        onDeleteMany = { vm.removeDownloads(it) },
+        deletePrompt = { list ->
+            if (list.size == 1) "Удалить загрузку?" to "«${list[0].title}» будет удалён с устройства."
+            else "Удалить загрузки?" to "${list.size} треков будут удалены с устройства."
+        },
+    ) {
         playAllHeader(tracks.size) { vm.play(tracks, 0) }
-        itemsIndexed(shown, key = { _, r -> r.key }) { i, r ->
-            EntityRow(
-                title = r.track.title,
-                subtitle = listOfNotNull(r.track.artist.ifBlank { null }, sourceLabel(r.track.source), formatSize(r.size)).joinToString(" · "),
-                cover = r.track.coverUrl,
-                onClick = { vm.play(tracks, i) },
-                trailing = {
-                    IconButton({ removing = r }) {
-                        Icon(Icons.Default.Delete, "Удалить", tint = MaterialTheme.colorScheme.onSurfaceVariant)
-                    }
-                },
-            )
-        }
-    }
-    removing?.let { r ->
-        AlertDialog(
-            onDismissRequest = { removing = null },
-            title = { Text("Удалить загрузку?") },
-            text = { Text("«${r.track.title}» будет удалён с устройства.") },
-            confirmButton = {
-                TextButton({ vm.removeDownload(r.key); removing = null }) { Text("Удалить", color = MaterialTheme.colorScheme.error) }
-            },
-            dismissButton = { TextButton({ removing = null }) { Text("Отмена") } },
-        )
     }
 }
 
@@ -1045,10 +1030,4 @@ private fun tracksWord(n: Int): String {
         else -> "треков"
     }
     return "$n $word"
-}
-
-private fun formatSize(bytes: Long): String? = when {
-    bytes <= 0 -> null
-    bytes >= 1_048_576 -> String.format(java.util.Locale("ru"), "%.1f МБ", bytes / 1_048_576.0)
-    else -> "${bytes / 1024} КБ"
 }

@@ -1,5 +1,5 @@
 import type { AlbumDetailDto, AlbumWithTracks, PlaylistEntryDto, UnifiedAlbum, UnifiedPlaylist, UnifiedTrack } from '@mss/shared';
-import { Copy, Download, FileDown, Heart, Link2, ListEnd, ListPlus, ListStart, MicVocal, Pin, PinOff, Play, Radio, Shuffle } from 'lucide-react';
+import { Copy, CloudUpload, Download, FileDown, Heart, Link2, ListEnd, ListPlus, ListStart, MicVocal, Pin, PinOff, Play, Radio, Shuffle } from 'lucide-react';
 import { toast } from 'sonner';
 import { openPlaylistPicker } from '@/components/tracks/PlaylistPicker';
 import type { MenuItem, MenuSpec } from '@/components/ui/context-menu';
@@ -10,6 +10,7 @@ import { formatTrackCount } from '@/lib/format';
 import { albumLink, mssAlbumUrl, mssPlaylistUrl, playlistPath } from '@/lib/links';
 import { playCollection, startWave } from '@/lib/player-actions';
 import { exportM3u8, importToMss } from '@/lib/playlist-io';
+import { publishAlbumToMssCollection } from '@/lib/publish-to-mss';
 import { queryClient } from '@/lib/query-client';
 import { mapLocalAlbumDetail } from '@/lib/queries';
 import { mapPlaylistEntry } from '@/lib/sources';
@@ -146,6 +147,18 @@ export function albumMenu(album: UnifiedAlbum): MenuSpec {
             ]
           : []),
         downloadAllItem(load),
+        {
+          icon: CloudUpload,
+          label: 'Отправить на сервер MSS',
+          action: withTracks(load, (tracks) => {
+            void toast.promise(publishAlbumToMssCollection(album, tracks), {
+              loading: 'Отправляем альбом на сервер MSS…',
+              success: (r) =>
+                r.uploaded > 0 || r.createdAlbum ? 'Отправлено на сервер MSS' : 'Альбом уже на сервере MSS',
+              error: (e) => (e instanceof Error ? e.message : 'Не удалось отправить на сервер MSS'),
+            });
+          }),
+        },
         ...(externalUrl
           ? [
               {

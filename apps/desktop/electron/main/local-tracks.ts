@@ -297,16 +297,30 @@ export async function bindLocalTrack(trackId: string, entry: LocalTrackEntry): P
   await saveIndex();
 }
 
-export async function resolveLocalTrackPath(trackId: string): Promise<string | null> {
-  const idx = await loadIndex();
-  const row = idx[trackId];
-  if (!row) return null;
+async function existingPath(filePath: string): Promise<string | null> {
   try {
-    await fs.access(row.path);
-    return row.path;
+    await fs.access(filePath);
+    return filePath;
   } catch {
     return null;
   }
+}
+
+export async function resolveLocalTrackPath(trackId: string, contentHash?: string | null): Promise<string | null> {
+  const idx = await loadIndex();
+  const row = idx[trackId];
+  if (row) {
+    const found = await existingPath(row.path);
+    if (found) return found;
+  }
+  const hash = contentHash?.toLowerCase();
+  if (!hash) return null;
+  for (const entry of Object.values(idx)) {
+    if (entry.contentHash.toLowerCase() !== hash) continue;
+    const found = await existingPath(entry.path);
+    if (found) return found;
+  }
+  return null;
 }
 
 export function isRegisteredLocalPath(filePath: string): boolean {

@@ -250,7 +250,7 @@ export function YandexHomePage() {
         </>
       )}
 
-      {yandex && <PersonalShelves yandex />}
+      {yandex && <PersonalShelves yandex onlySource="yandex" />}
 
       {yandex && (playlists.isLoading || (playlists.data?.length ?? 0) > 0) && (
         <Shelf title="Ваши плейлисты" moreTo={libraryPath('yandex', 'playlists')}>

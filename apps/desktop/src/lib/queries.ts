@@ -199,6 +199,16 @@ export function useYandexLikedTracks(limit = 1000) {
   });
 }
 
+export function useYandexLikedAlbums(limit = 200) {
+  const connected = useYandexConnected();
+  return useQuery({
+    queryKey: ['yandex', 'liked-albums', limit],
+    queryFn: () => window.electronAPI.yandex.likedAlbums(limit),
+    enabled: connected,
+    staleTime: 2 * 60_000,
+  });
+}
+
 export function useSimilarTracks(source: string | undefined, id: string | undefined) {
   const connected = useYandexConnected();
   return useQuery({

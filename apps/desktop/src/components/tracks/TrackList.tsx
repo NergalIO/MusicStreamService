@@ -110,9 +110,11 @@ interface RowProps {
   dropMark: 'above' | 'below' | null;
   dragging: boolean;
   selectable: boolean;
+  selecting: boolean;
   onPlay: (index: number) => void;
   onRowClick: (index: number, e: React.MouseEvent) => void;
   onToggleSelect: (index: number, e: React.MouseEvent) => void;
+  onLongPressSelect: (index: number) => void;
   onRowMenu: (index: number, e: React.MouseEvent | React.KeyboardEvent) => void;
   onDragStart: (index: number, e: React.DragEvent) => void;
   onDragOver: (index: number, e: React.DragEvent) => void;
@@ -134,9 +136,11 @@ const TrackRow = memo(function TrackRow({
   dropMark,
   dragging,
   selectable,
+  selecting,
   onPlay,
   onRowClick,
   onToggleSelect,
+  onLongPressSelect,
   onRowMenu,
   onDragStart,
   onDragOver,
@@ -147,6 +151,7 @@ const TrackRow = memo(function TrackRow({
   const albumTo = trackAlbumPath(track);
   const artists = trackArtistLinks(track);
   const disabled = !track.playable;
+  const press = useRef({ timer: 0, x: 0, y: 0, skipClick: false });
 
   return (
     <div
@@ -158,7 +163,39 @@ const TrackRow = memo(function TrackRow({
       onDragOver={draggable ? (e) => onDragOver(index, e) : undefined}
       onDrop={draggable ? (e) => onDrop(index, e) : undefined}
       onDragEnd={draggable ? onDragEnd : undefined}
-      onClick={(e) => onRowClick(index, e)}
+      onPointerDown={(e) => {
+        if (!selectable || e.button !== 0) return;
+        if ((e.target as HTMLElement).closest('button, a')) return;
+        press.current.x = e.clientX;
+        press.current.y = e.clientY;
+        window.clearTimeout(press.current.timer);
+        press.current.timer = window.setTimeout(() => {
+          press.current.skipClick = true;
+          onLongPressSelect(index);
+        }, 450);
+      }}
+      onPointerMove={(e) => {
+        if (!press.current.timer) return;
+        if (Math.abs(e.clientX - press.current.x) > 8 || Math.abs(e.clientY - press.current.y) > 8) {
+          window.clearTimeout(press.current.timer);
+          press.current.timer = 0;
+        }
+      }}
+      onPointerUp={() => {
+        window.clearTimeout(press.current.timer);
+        press.current.timer = 0;
+      }}
+      onPointerCancel={() => {
+        window.clearTimeout(press.current.timer);
+        press.current.timer = 0;
+      }}
+      onClick={(e) => {
+        if (press.current.skipClick) {
+          press.current.skipClick = false;
+          return;
+        }
+        onRowClick(index, e);
+      }}
       onDoubleClick={(e) => {
         if ((e.target as HTMLElement).closest('button, a')) return;
         if (!disabled) onPlay(index);
@@ -173,10 +210,10 @@ const TrackRow = memo(function TrackRow({
         isCurrent && 'bg-foreground/[0.04]',
         selected && 'bg-primary/15 hover:bg-primary/20',
         dragging && 'opacity-40',
-        listGrid(showCover, showAlbum, selectable),
+        listGrid(showCover, showAlbum, selecting),
       )}
     >
-      {selectable && (
+      {selecting && (
         <div className="flex items-center justify-center">
           <SelectCheck checked={selected} label={selected ? `Снять выделение «${track.title}»` : `Выделить «${track.title}»`} onClick={(e) => onToggleSelect(index, e)} />
         </div>
@@ -271,7 +308,7 @@ const TrackRow = memo(function TrackRow({
           {track.explicit && (
             <span className="shrink-0 rounded-[3px] bg-foreground/20 px-1 text-[9px] font-bold leading-[14px] text-foreground/80">E</span>
           )}
-          {track.source !== 'local' && <DownloadBadge track={track} />}
+          <DownloadBadge track={track} />
         </div>
         <div className="truncate text-xs text-muted">
           {artists.map((a, i) => (
@@ -546,7 +583,9 @@ export function TrackList<T extends ListTrack>({
   const onRowClick = useCallback(
     (index: number, e: React.MouseEvent) => {
       if (!selectable || (e.target as HTMLElement).closest('button, a')) return;
-      const { keys } = latest.current;
+      const { keys, selected } = latest.current;
+      const selecting = selected.size > 0;
+      if (!selecting && !e.ctrlKey && !e.metaKey && !e.shiftKey) return;
       const key = keys[index];
       if (e.shiftKey && anchor.current !== null) {
         const [a, b] = [Math.min(anchor.current, index), Math.max(anchor.current, index)];
@@ -558,7 +597,7 @@ export function TrackList<T extends ListTrack>({
         return;
       }
       anchor.current = index;
-      if (e.ctrlKey || e.metaKey) {
+      if (e.ctrlKey || e.metaKey || selecting) {
         setSelected((prev) => {
           const next = new Set(prev);
           if (next.has(key)) next.delete(key);
@@ -566,11 +605,22 @@ export function TrackList<T extends ListTrack>({
           return next;
         });
       } else {
-        setSelected((prev) => (prev.size === 1 && prev.has(key) ? prev : new Set([key])));
+        setSelected(new Set([key]));
       }
     },
     [selectable],
   );
+
+  const onLongPressSelect = useCallback((index: number) => {
+    const { keys } = latest.current;
+    const key = keys[index];
+    anchor.current = index;
+    setSelected((prev) => {
+      const next = new Set(prev);
+      next.add(key);
+      return next;
+    });
+  }, []);
 
   const onToggleSelect = useCallback((index: number, e: React.MouseEvent) => {
     e.stopPropagation();
@@ -626,6 +676,7 @@ export function TrackList<T extends ListTrack>({
   if (!tracks.length) return <EmptyState icon={Music} title={emptyText} className="py-10" />;
 
   const isCurrent = (t: ListTrack) => !!current && current.source === t.source && current.id === t.id;
+  const selecting = selected.size > 0;
   const row = (t: T, i: number) => (
     <TrackRow
       track={t}
@@ -641,9 +692,11 @@ export function TrackList<T extends ListTrack>({
       dragging={drag?.from === i}
       dropMark={drag && drag.over === i && drag.from !== i ? (drag.from < i ? 'below' : 'above') : null}
       selectable={selectable}
+      selecting={selecting}
       onPlay={play}
       onRowClick={onRowClick}
       onToggleSelect={onToggleSelect}
+      onLongPressSelect={onLongPressSelect}
       onRowMenu={onRowMenu}
       onDragStart={onDragStart}
       onDragOver={onDragOver}
@@ -666,10 +719,10 @@ export function TrackList<T extends ListTrack>({
           role="row"
           className={cn(
             'mb-1 grid gap-3 border-b border-border px-3 pb-2 text-[11px] font-medium uppercase tracking-wider text-muted',
-            listGrid(cover, album, selectable),
+            listGrid(cover, album, selecting),
           )}
         >
-          {selectable && (
+          {selecting && (
             <span className="flex items-center justify-center">
               <SelectCheck
                 checked={selected.size > 0 && selected.size === keys.length}

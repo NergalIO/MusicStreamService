@@ -58,10 +58,9 @@ class LocalTrackStore @Inject constructor(
     }
 
     suspend fun hashUri(uri: Uri): Pair<String, Long> = withContext(Dispatchers.IO) {
-        val cr = context.contentResolver
         val digest = MessageDigest.getInstance("SHA-256")
         var size = 0L
-        cr.openInputStream(uri)?.use { input ->
+        openInputStream(uri).use { input ->
             val buf = ByteArray(64 * 1024)
             while (true) {
                 val n = input.read(buf)
@@ -69,7 +68,7 @@ class LocalTrackStore @Inject constructor(
                 digest.update(buf, 0, n)
                 size += n
             }
-        } ?: throw IllegalStateException("Не удалось прочитать файл")
+        }
         digest.digest().joinToString("") { "%02x".format(it) } to size
     }
 
@@ -105,8 +104,17 @@ class LocalTrackStore @Inject constructor(
         error("Не удалось определить размер файла")
     }
 
-    fun openInputStream(uri: Uri): java.io.InputStream =
-        context.contentResolver.openInputStream(uri) ?: throw IllegalStateException("Не удалось прочитать файл")
+    fun openInputStream(uri: Uri): java.io.InputStream {
+        if (uri.scheme == null || uri.scheme == "file") {
+            val path = uri.path
+            if (!path.isNullOrBlank()) {
+                val file = File(path)
+                if (file.exists()) return file.inputStream()
+            }
+        }
+        return context.contentResolver.openInputStream(uri)
+            ?: throw IllegalStateException("Не удалось прочитать файл")
+    }
 
     /** Текст рядом с файлом: `track.lrc` (с таймингами) или `track.txt`, как на десктопе. */
     suspend fun lyrics(trackId: String): TrackLyrics? = withContext(Dispatchers.IO) {

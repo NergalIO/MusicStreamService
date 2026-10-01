@@ -26,8 +26,7 @@ import { copyTextWithToast } from '@/lib/clipboard';
 import { formatTrackCount } from '@/lib/format';
 import { suggestTrack } from '@/lib/lobby-api';
 import { mssTrackUrl, similarPath, trackAlbumPath, trackArtistLinks } from '@/lib/links';
-import { publishTracksToMss } from '@/lib/mss-library';
-import { downloadOffline } from '@/lib/offline';
+import { publishTracksToMss } from '@/lib/publish-to-mss';
 import { startSpotifyRadio, startWave, toggleLike } from '@/lib/player-actions';
 import { queryClient } from '@/lib/query-client';
 import { canDownload, downloadKey, useDownloadsStore } from '@/store/downloads-store';
@@ -130,12 +129,7 @@ export function trackMenuGroups(track: MenuTrack, extras: MenuExtras = {}): Menu
         : []),
     ],
     [
-      ...(track.source === 'local'
-        ? [
-            { icon: CloudUpload, label: 'Отправить на сервер MSS', action: () => publishToMss([track]) },
-            { icon: Download, label: 'Скачать офлайн', action: () => void downloadOffline(track.id) },
-          ]
-        : []),
+      { icon: CloudUpload, label: 'Отправить на сервер MSS', action: () => publishToMss([track]) },
       ...(downloads.items[downloadKey(track)]
         ? [
             { icon: FolderOpen, label: 'Показать в папке', action: () => downloads.reveal(track) },
@@ -175,7 +169,6 @@ export function bulkTrackActions(tracks: MenuTrack[], extras: BulkMenuExtras = {
   const playable = tracks.filter((t) => t.playable);
   const notLiked = tracks.filter((t) => !likes.isLiked(t));
   const downloadable = tracks.filter((t) => canDownload(t) && !downloads.items[downloadKey(t)] && !downloads.active[downloadKey(t)]);
-  const publishable = tracks.filter((t) => t.source === 'local');
   const n = formatTrackCount(tracks.length);
 
   return [
@@ -215,9 +208,9 @@ export function bulkTrackActions(tracks: MenuTrack[], extras: BulkMenuExtras = {
       },
       {
         icon: CloudUpload,
-        label: publishable.length > 1 ? `Отправить на сервер MSS (${publishable.length})` : 'Отправить на сервер MSS',
-        disabled: !publishable.length,
-        action: () => publishToMss(publishable),
+        label: tracks.length > 1 ? `Отправить на сервер MSS (${tracks.length})` : 'Отправить на сервер MSS',
+        disabled: !tracks.length,
+        action: () => publishToMss(tracks),
       },
       {
         icon: Copy,

@@ -251,6 +251,7 @@ fun TrackList(
     onQueueMany: ((List<UnifiedTrack>) -> Unit)? = null,
     onPublishMany: ((List<UnifiedTrack>) -> Unit)? = null,
     onDeleteMany: ((List<UnifiedTrack>) -> Unit)? = null,
+    deletePrompt: ((List<UnifiedTrack>) -> Pair<String, String>)? = null,
     currentKey: String? = null,
     selectable: Boolean = true,
     header: LazyListScope.() -> Unit = {},
@@ -322,7 +323,7 @@ fun TrackList(
                         items.forEach(onDownload)
                         clear()
                     }) { Icon(Icons.Default.Download, "Скачать") }
-                    if (onPublishMany != null && items.any { it.source == SourceId.LOCAL }) {
+                    if (onPublishMany != null) {
                         IconButton({
                             onPublishMany(items)
                             clear()
@@ -341,12 +342,13 @@ fun TrackList(
     }
     if (confirmDelete.value) {
         val items = picked()
+        val prompt = deletePrompt?.invoke(items)
         AlertDialog(
             onDismissRequest = { confirmDelete.value = false },
-            title = { Text(if (items.size == 1) "Удалить трек?" else "Удалить треки?") },
+            title = { Text(prompt?.first ?: if (items.size == 1) "Удалить трек?" else "Удалить треки?") },
             text = {
                 Text(
-                    if (items.size == 1) "«${items[0].title}» будет удалён с сервера MSS и из всех плейлистов."
+                    prompt?.second ?: if (items.size == 1) "«${items[0].title}» будет удалён с сервера MSS и из всех плейлистов."
                     else "${items.size} треков будут удалены с сервера MSS и из всех плейлистов.",
                 )
             },

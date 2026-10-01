@@ -197,12 +197,10 @@ fun TrackActionsSheet(track: UnifiedTrack, onDismiss: () -> Unit, extra: List<Pa
                 key in downloaded -> add(SheetItem(Icons.Default.Delete, "Удалить загрузку", action = run { vm.removeDownload(track) }))
                 key in active -> add(SheetItem(Icons.Filled.DownloadForOffline, "Скачивается…", action = {}))
                 canDownload(track) -> add(
-                    SheetItem(Icons.Outlined.DownloadForOffline, if (track.source == SourceId.LOCAL) "Скачать офлайн" else "Скачать", action = run { vm.download(track) }),
+                    SheetItem(Icons.Outlined.DownloadForOffline, "Скачать", action = run { vm.download(track) }),
                 )
             }
-            if (track.source == SourceId.LOCAL) {
-                add(SheetItem(Icons.Outlined.CloudUpload, "Отправить на сервер MSS", action = run { vm.publishTracksToMss(listOf(track)) }))
-            }
+            add(SheetItem(Icons.Outlined.CloudUpload, "Отправить на сервер MSS", action = run { vm.publishTracksToMss(listOf(track)) }))
             add(
                 SheetItem(Icons.Default.ContentCopy, "Скопировать название", action = run {
                     clipboard.setText(AnnotatedString("${track.artist} — ${track.title}"))

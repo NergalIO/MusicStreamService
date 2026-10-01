@@ -181,26 +181,53 @@ class MssRepository @Inject constructor(
     }
 
     suspend fun publishAlbumToMss(album: AlbumWithTracks, extraFiles: Map<String, Uri> = emptyMap()): PublishAlbumResult {
-        val uploaded = uploadLocalTracks(album.tracks, extraFiles)
-        val trackIds = album.tracks.filter { it.source == SourceId.LOCAL && isUuid(it.id) }.map { it.id }
-        val (albumId, created) = ensureAlbumOnServer(album, trackIds)
+        val uploadedLocal = uploadLocalTracks(album.tracks, extraFiles)
+        val trackIds = mutableListOf<String>()
+        var uploaded = uploadedLocal
+        for (track in album.tracks) {
+            if (track.source == SourceId.LOCAL && isUuid(track.id)) {
+                trackIds += track.id
+                continue
+            }
+            val uri = extraFiles[track.id] ?: extraFiles["${track.source}:${track.id}"] ?: continue
+            val created = registerLocalFile(
+                uri,
+                track.title.ifBlank { "Трек" },
+                track.artist.ifBlank { "Неизвестный исполнитель" },
+                album.title,
+            )
+            trackIds += created.id
+            uploaded += 1
+        }
+        val (albumId, created) = ensureAlbumOnServer(album, trackIds.distinct())
         if (uploaded == 0 && !created && !isUuid(album.id) && trackIds.isEmpty()) {
-            error("Нет локальных файлов для отправки на сервер MSS")
+            error("Нет файлов для отправки на сервер MSS")
         }
         return PublishAlbumResult(albumId = albumId, uploaded = uploaded, createdAlbum = created)
     }
 
     suspend fun publishTracksToMss(tracks: List<UnifiedTrack>, extraFiles: Map<String, Uri> = emptyMap()): PublishTracksResult {
-        val local = tracks.filter { it.source == SourceId.LOCAL && isUuid(it.id) }.distinctBy { it.id }
-        if (local.isEmpty()) error("Нет локальных файлов для отправки на сервер MSS")
         var files = 0
         var uploaded = 0
+        val local = tracks.filter { it.source == SourceId.LOCAL && isUuid(it.id) }.distinctBy { it.id }
         for (track in local) {
             val uri = localTracks.get(track.id)?.uri?.let(Uri::parse) ?: extraFiles[track.id] ?: continue
             files += 1
             if (uploadLocalFileToCloud(track.id, uri)) uploaded += 1
         }
-        if (files == 0) error("Нет локальных файлов для отправки на сервер MSS")
+        val rest = tracks.filterNot { it.source == SourceId.LOCAL && isUuid(it.id) }.distinctBy { "${it.source}:${it.id}" }
+        for (track in rest) {
+            val uri = extraFiles[track.id] ?: extraFiles["${track.source}:${track.id}"] ?: continue
+            files += 1
+            registerLocalFile(
+                uri,
+                track.title.ifBlank { "Трек" },
+                track.artist.ifBlank { "Неизвестный исполнитель" },
+                track.album,
+            )
+            uploaded += 1
+        }
+        if (files == 0) error("Нет файлов для отправки на сервер MSS")
         return PublishTracksResult(uploaded = uploaded)
     }
 

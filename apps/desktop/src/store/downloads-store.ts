@@ -61,25 +61,38 @@ export function downloadKey(track: TrackRef): string {
 }
 
 export function canDownload(track: UnifiedTrack): boolean {
-  if (!track.playable || !window.electronAPI) return false;
-  if (track.source === 'yandex' || track.source === 'vk' || track.source === 'spotify') return true;
-  if (track.source === 'local') {
-    return !!(
-      freshCloudDownloadUrl(track) ||
-      track.availability === 'cached' ||
-      track.availability === 'online'
-    );
-  }
-  return false;
+  if (track.playable === false || !window.electronAPI) return false;
+  return track.source === 'yandex' || track.source === 'vk' || track.source === 'spotify' || track.source === 'local';
 }
 
-async function resolveDownloadTrack(track: UnifiedTrack): Promise<UnifiedTrack> {
+async function withTimeout<T>(promise: Promise<T>, ms: number, message: string): Promise<T> {
+  let timer: ReturnType<typeof setTimeout> | undefined;
+  try {
+    return await Promise.race([
+      promise,
+      new Promise<T>((_, reject) => {
+        timer = setTimeout(() => reject(new Error(message)), ms);
+      }),
+    ]);
+  } finally {
+    if (timer) clearTimeout(timer);
+  }
+}
+
+async function resolveDownloadTrack(track: UnifiedTrack, opts?: { fresh?: boolean }): Promise<UnifiedTrack> {
   if (track.source !== 'local') return track;
-  const cached = freshCloudDownloadUrl(track);
-  if (cached) return { ...track, cloudDownloadUrl: cached };
-  const { url } = await apiFetch<{ url: string }>(`/tracks/${track.id}/download`, {
-    headers: { Accept: 'application/json' },
-  });
+  if (!opts?.fresh) {
+    const cached = freshCloudDownloadUrl(track);
+    if (cached) return { ...track, cloudDownloadUrl: cached };
+  }
+  const { url } = await withTimeout(
+    apiFetch<{ url: string }>(`/tracks/${track.id}/download`, {
+      headers: { Accept: 'application/json' },
+    }),
+    12_000,
+    'Сервер не выдал ссылку на скачивание',
+  );
+  if (!url) throw new Error('Нет файла для скачивания');
   return { ...track, cloudDownloadUrl: url };
 }
 
@@ -179,13 +192,22 @@ export const useDownloadsStore = create<DownloadsState>()((set, get) => ({
     set((s) => ({ active: { ...s.active, [key]: { received: 0, total: 0 } } }));
     try {
       const { downloadQuality, downloadCompression } = useSettingsStore.getState();
-      const [toDownload, lyrics] = await Promise.all([resolveDownloadTrack(track), lyricsForDownload(track)]);
-      const record = await window.electronAPI.downloads.start(
-        toDownload,
-        downloadQuality,
-        compressionKbps(downloadCompression),
-        lyrics,
-      );
+      const lyrics = await Promise.race([
+        lyricsForDownload(track),
+        new Promise<null>((resolve) => window.setTimeout(() => resolve(null), 4000)),
+      ]);
+      let toDownload = track;
+      if (track.source === 'local') {
+        const cached = freshCloudDownloadUrl(track);
+        if (cached) toDownload = { ...track, cloudDownloadUrl: cached };
+      }
+      const start = (item: UnifiedTrack) =>
+        window.electronAPI.downloads.start(item, downloadQuality, compressionKbps(downloadCompression), lyrics);
+      let record = await start(toDownload).catch(async (e) => {
+        if (track.source !== 'local') throw e;
+        const resolved = await resolveDownloadTrack(track, { fresh: true });
+        return start(resolved);
+      });
       set((s) => ({ items: { ...s.items, [key]: record } }));
       patchPanel(key, { status: 'ready', received: record.size, total: record.size });
       if (!opts?.silent) toast.success(`Скачано: ${track.artist} — ${track.title}`);

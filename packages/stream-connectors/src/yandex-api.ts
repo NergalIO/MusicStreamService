@@ -56,6 +56,19 @@ function waveSeeds(settings?: WaveSettings): string[] {
 
 const LIKED_IDS_TTL_MS = 90_000;
 
+type AlbumLikeRow = { album?: YAlbum; id?: number | string; title?: string };
+
+function likeAlbumRows(data: unknown): AlbumLikeRow[] {
+  if (Array.isArray(data)) return data as AlbumLikeRow[];
+  if (data && typeof data === 'object') {
+    const o = data as Record<string, unknown>;
+    const library = o.library && typeof o.library === 'object' ? (o.library as Record<string, unknown>) : null;
+    const albums = o.albums ?? library?.albums;
+    if (Array.isArray(albums)) return albums as AlbumLikeRow[];
+  }
+  return [];
+}
+
 export class YandexMusicApi {
   constructor(private readonly client: YandexClient) {}
 
@@ -121,14 +134,33 @@ export class YandexMusicApi {
 
   async likedAlbums(limit = 200): Promise<UnifiedAlbum[]> {
     const uid = await this.client.uid();
-    const data = await this.client.get<Array<{ album?: YAlbum } & Partial<YAlbum>>>(
-      `/users/${uid}/likes/albums`,
-    );
-    const rows = Array.isArray(data) ? data : [];
-    const albums = rows
+    const data = await this.client.get<unknown>(`/users/${uid}/likes/albums?rich=true`);
+    const rows = likeAlbumRows(data);
+    const mapped = rows
       .map((row) => row.album ?? (row.title ? row : undefined))
-      .filter((a): a is YAlbum => !!a?.title);
-    return albums.slice(0, limit).map(mapAlbum);
+      .filter((a): a is YAlbum => !!a?.title)
+      .map(mapAlbum);
+    if (mapped.length) return mapped.slice(0, limit);
+    const ids = rows
+      .map((row) => String(row.album?.id ?? row.id ?? ''))
+      .filter(Boolean)
+      .slice(0, limit);
+    return this.albumsByIds(ids);
+  }
+
+  private async albumsByIds(ids: string[]): Promise<UnifiedAlbum[]> {
+    if (!ids.length) return [];
+    const out: UnifiedAlbum[] = [];
+    for (let i = 0; i < ids.length; i += 50) {
+      const chunk = ids.slice(i, i + 50);
+      const data = await this.client.get<unknown>(`/albums?album-ids=${chunk.join(',')}`);
+      const list = Array.isArray(data) ? data : likeAlbumRows(data);
+      for (const row of list) {
+        const album = 'title' in row && row.title ? (row as YAlbum) : row.album;
+        if (album?.title) out.push(mapAlbum(album));
+      }
+    }
+    return out;
   }
 
   async setAlbumLike(albumId: string, liked: boolean): Promise<void> {

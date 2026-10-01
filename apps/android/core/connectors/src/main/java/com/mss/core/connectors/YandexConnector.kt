@@ -318,6 +318,47 @@ class YandexConnector @Inject constructor(
         apiPostForm("/users/$uid/likes/tracks/$action", mapOf("track-ids" to trackKey(track)))
     }
 
+    suspend fun likedAlbums(limit: Int = 200): List<UnifiedAlbum> {
+        val uid = userId()
+        val parsed = runCatching { apiGet<kotlinx.serialization.json.JsonElement>("/users/$uid/likes/albums?rich=true") }.getOrNull()
+            ?: return emptyList()
+        val rows = albumLikeRows(parsed)
+        val mapped = rows.mapNotNull { o -> mapYandexAlbum(o["album"]?.jsonObject ?: o) }
+        if (mapped.isNotEmpty()) return mapped.take(limit)
+        val ids = rows.mapNotNull { o ->
+            o["album"]?.jsonObject?.get("id")?.jsonPrimitive?.contentOrNull
+                ?: o["id"]?.jsonPrimitive?.contentOrNull
+        }.take(limit)
+        return albumsByIds(ids)
+    }
+
+    private fun albumLikeRows(parsed: kotlinx.serialization.json.JsonElement): List<JsonObject> {
+        val arr = when (parsed) {
+            is JsonArray -> parsed
+            is JsonObject -> (parsed["library"] as? JsonObject)?.get("albums") as? JsonArray
+                ?: parsed["albums"] as? JsonArray
+                ?: JsonArray(emptyList())
+            else -> JsonArray(emptyList())
+        }
+        return arr.mapNotNull { el -> el as? JsonObject }
+    }
+
+    private suspend fun albumsByIds(ids: List<String>): List<UnifiedAlbum> {
+        if (ids.isEmpty()) return emptyList()
+        val out = mutableListOf<UnifiedAlbum>()
+        for (chunk in ids.chunked(50)) {
+            val data = runCatching { apiGet<kotlinx.serialization.json.JsonElement>("/albums?album-ids=${chunk.joinToString(",")}") }.getOrNull()
+                ?: continue
+            val rows = when (data) {
+                is JsonArray -> data
+                is JsonObject -> data["result"]?.jsonArray ?: data["albums"]?.jsonArray ?: JsonArray(emptyList())
+                else -> JsonArray(emptyList())
+            }
+            out += rows.mapNotNull { el -> (el as? JsonObject)?.let(::mapYandexAlbum) }
+        }
+        return out
+    }
+
     suspend fun setAlbumLike(albumId: String, liked: Boolean) {
         val uid = userId()
         val action = if (liked) "add-multiple" else "remove"

@@ -41,6 +41,7 @@ export interface LocalTrackDto {
   cloudPlayUrl?: string | null;
   cloudDownloadUrl?: string | null;
   cloudUrlExpiresAt?: string | null;
+  contentHash?: string | null;
 }
 
 const LOCAL_STATUS_REASON: Record<string, string> = {
@@ -96,6 +97,7 @@ export function mapLocalTrack(
     cloudPlayUrl: t.cloudPlayUrl ?? cached?.cloudPlayUrl ?? undefined,
     cloudDownloadUrl: t.cloudDownloadUrl ?? cached?.cloudDownloadUrl ?? undefined,
     cloudUrlExpiresAt: t.cloudUrlExpiresAt ?? cached?.cloudUrlExpiresAt ?? undefined,
+    contentHash: t.contentHash ?? undefined,
   };
 }
 

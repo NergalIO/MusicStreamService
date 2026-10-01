@@ -66,6 +66,56 @@ type AlbumJob = {
 
 const albumJobs = new Map<string, AlbumJob>();
 const albumFinalizing = new Set<string>();
+const publishMeta = new Map<string, { title: string; artist: string; album?: string | null }>();
+
+export type PublishFile = { path: string; title: string; artist: string; album?: string | null };
+
+/** Ставит уже скачанные файлы в очередь загрузки на сервер MSS, с метаданными трека. */
+export function enqueuePublishFiles(
+  files: PublishFile[],
+  album?: { title: string; artist: string; year?: number | null },
+): void {
+  if (!files.length) return;
+  if (!currentAccessToken()) {
+    toast.error('Войдите в аккаунт MSS');
+    return;
+  }
+  let albumJobId: string | undefined;
+  if (album) {
+    albumJobId = crypto.randomUUID();
+    albumJobs.set(albumJobId, {
+      title: album.title.trim() || 'Альбом',
+      artist: album.artist.trim() || 'Неизвестный исполнитель',
+      year: album.year && album.year >= 1000 ? album.year : null,
+      items: [],
+    });
+  }
+  const ids: string[] = [];
+  const added: UploadItem[] = files.map((file) => {
+    const id = crypto.randomUUID();
+    ids.push(id);
+    paths.set(id, file.path);
+    publishMeta.set(id, { title: file.title, artist: file.artist, album: file.album });
+    return {
+      id,
+      name: file.path.replace(/^.*[/\\]/, ''),
+      size: 0,
+      albumJobId,
+      status: 'queued' as const,
+      progress: 0,
+      title: `${file.artist} — ${file.title}`,
+    };
+  });
+  if (albumJobId) {
+    const job = albumJobs.get(albumJobId);
+    if (job) job.items.push(...ids);
+  }
+  useUploadsStore.setState((s) => ({
+    items: [...s.items.filter((i) => i.status !== 'ready'), ...added],
+    collapsed: false,
+  }));
+  pump();
+}
 
 export function isAudioFile(file: File): boolean {
   return AUDIO_EXT.test(file.name) || file.type.startsWith('audio/');
@@ -132,11 +182,13 @@ async function registerPath(item: UploadItem, filePath: string): Promise<void> {
   if (item.playlistId) params.set('playlistId', item.playlistId);
   if (item.albumId) params.set('albumId', item.albumId);
   const query = params.size ? `?${params}` : '';
+  const meta = publishMeta.get(item.id);
+  publishMeta.delete(item.id);
   const body = JSON.stringify({
     contentHash: prepared.contentHash,
-    title: prepared.title,
-    artist: prepared.artist,
-    album: prepared.album ?? undefined,
+    title: (meta?.title || prepared.title).trim() || 'Трек',
+    artist: (meta?.artist || prepared.artist).trim() || 'Неизвестный исполнитель',
+    album: (meta?.album || prepared.album)?.trim() || undefined,
     durationMs: prepared.durationMs ?? undefined,
     sizeBytes: prepared.sizeBytes,
     originalFilename: prepared.originalFilename,

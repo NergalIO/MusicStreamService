@@ -37,6 +37,7 @@ import {
   useVkPlaylists,
   useVkSavedTracks,
   useYandexLikedTracks,
+  useYandexLikedAlbums,
   useYandexPlaylists,
 } from '@/lib/queries';
 import { SourceFilter } from '@/components/SourceFilter';
@@ -83,11 +84,51 @@ function PlayButtons({
   );
 }
 
+function mergeAlbums(...lists: UnifiedAlbum[][]): UnifiedAlbum[] {
+  const seen = new Set<string>();
+  const out: UnifiedAlbum[] = [];
+  for (const list of lists) {
+    for (const album of list) {
+      const key = `${album.source}:${album.id}`;
+      if (!album.id || seen.has(key)) continue;
+      seen.add(key);
+      out.push(album);
+    }
+  }
+  return out;
+}
+
+function albumsFromTracks(tracks: UnifiedTrack[]): UnifiedAlbum[] {
+  const map = new Map<string, UnifiedAlbum>();
+  for (const track of tracks) {
+    const id = track.albumId?.trim();
+    if (!id) continue;
+    const key = `${track.source}:${id}`;
+    const cur = map.get(key);
+    if (cur) {
+      cur.trackCount = (cur.trackCount ?? 0) + 1;
+      if (!cur.coverUrl && track.coverUrl) cur.coverUrl = track.coverUrl;
+    } else {
+      map.set(key, {
+        source: track.source,
+        id,
+        title: track.album?.trim() || 'Альбом',
+        artist: track.artist,
+        artists: track.artists,
+        coverUrl: track.coverUrl,
+        trackCount: 1,
+      });
+    }
+  }
+  return [...map.values()].sort((a, b) => (b.trackCount ?? 0) - (a.trackCount ?? 0));
+}
+
 function LikesTab({ scope }: { scope: ServiceScope }) {
   const yandexConnected = useYandexConnected();
   const vkConnected = useVkConnected();
   const spotifyConnected = useSpotifyConnected();
   const yandex = useYandexLikedTracks();
+  const yandexAlbums = useYandexLikedAlbums();
   const vk = useVkSavedTracks();
   const spotify = useSpotifySavedTracks();
   const local = useLocalLikedTracks();
@@ -96,6 +137,7 @@ function LikesTab({ scope }: { scope: ServiceScope }) {
   const likedYandex = useLikesStore((s) => s.yandex);
   const likedLocal = useLikesStore((s) => s.local);
   const likedVk = useLikesStore((s) => s.vk);
+  const storedAlbums = useAlbumLikesStore((s) => s.items);
   const [mediaFilter, setMediaFilter] = useState<SourceFilterId>('all');
   const filter: SourceFilterId =
     scope === 'media'
@@ -127,6 +169,14 @@ function LikesTab({ scope }: { scope: ServiceScope }) {
     return (['yandex', 'local', 'spotify', 'vk'] as const).filter((s) => matchesFilter(filter, s)).flatMap((s) => bySource[s]);
   }, [bySource, filter]);
   const { view: visible, sort, cycle, filter: text, setFilter: setText } = useTrackSort(bySelectedSource);
+
+  const likedAlbums = useMemo(() => {
+    const stored = storedAlbums.filter((a) => matchesFilter(filter, a.source));
+    const yandexOfficial = matchesFilter(filter, 'yandex') ? (yandexAlbums.data ?? []) : [];
+    const yandexPending = matchesFilter(filter, 'yandex') && yandexAlbums.isLoading;
+    const fromTracks = yandexPending || yandexOfficial.length ? [] : albumsFromTracks(bySelectedSource);
+    return mergeAlbums(yandexOfficial, stored, fromTracks);
+  }, [bySelectedSource, storedAlbums, filter, yandexAlbums.data, yandexAlbums.isLoading]);
 
   const context: PlayContext = { type: 'likes', title: 'Мне нравится', path: libraryPath(scope, 'likes') };
   const counts = {
@@ -198,7 +248,10 @@ function LikesTab({ scope }: { scope: ServiceScope }) {
             if (scope === 'mss') void local.refetch();
             else if (scope === 'vk') void vk.refetch();
             else if (scope === 'spotify') void spotify.refetch();
-            else void yandex.refetch();
+            else {
+              void yandex.refetch();
+              void yandexAlbums.refetch();
+            }
           }}
         />
       ) : scope === 'media' && local.isError && yandex.isError && vk.isError && !visible.length ? (
@@ -210,19 +263,28 @@ function LikesTab({ scope }: { scope: ServiceScope }) {
             void vk.refetch();
           }}
         />
-      ) : loading && !visible.length ? (
-        <TrackListSkeleton />
       ) : (
-        <TrackList
-          tracks={visible}
-          context={context}
-          header
-          sort={sort}
-          onSort={cycle}
-          emptyText={text ? 'Ничего не найдено' : 'Здесь появятся треки, которые вам понравились'}
-        />
+        <>
+          {(likedAlbums.length > 0 || (scope === 'yandex' && yandexConnected && yandexAlbums.isLoading)) && (
+            <section className="mb-8">
+              <h2 className="mb-4 text-lg font-semibold">Альбомы</h2>
+              {yandexAlbums.isLoading && !likedAlbums.length ? <CardRowSkeleton /> : <AlbumCards albums={likedAlbums} />}
+            </section>
+          )}
+          {loading && !visible.length ? (
+            <TrackListSkeleton />
+          ) : (
+            <TrackList
+              tracks={visible}
+              context={context}
+              header
+              sort={sort}
+              onSort={cycle}
+              emptyText={text ? 'Ничего не найдено' : 'Здесь появятся треки, которые вам понравились'}
+            />
+          )}
+        </>
       )}
-      <LikedAlbumsSection filter={filter} />
       <ArtistsSection filter={filter} />
     </>
   );
@@ -695,32 +757,13 @@ function AlbumCards({ albums }: { albums: UnifiedAlbum[] }) {
           coverUrl={a.coverUrl}
           to={albumLink(a)}
           menu={() => albumMenu(a)}
-          onPlay={
-            a.trackCount
-              ? async () => {
-                  const tracks = await loadAlbumTracks(a.id, albumPlaySource(a));
-                  playCollection(tracks, { type: 'album', title: a.title, path: albumLink(a) });
-                }
-              : undefined
-          }
+          onPlay={async () => {
+            const tracks = await loadAlbumTracks(a.id, albumPlaySource(a));
+            playCollection(tracks, { type: 'album', title: a.title, path: albumLink(a) });
+          }}
         />
       ))}
     </div>
-  );
-}
-
-function LikedAlbumsSection({ filter }: { filter: SourceFilterId }) {
-  const liked = useAlbumLikesStore((s) => s.items);
-  const albums = useMemo(
-    () => liked.filter((a) => matchesFilter(filter, a.source)),
-    [liked, filter],
-  );
-  if (!albums.length) return null;
-  return (
-    <section className="mt-10">
-      <h2 className="mb-4 text-lg font-semibold">Альбомы</h2>
-      <AlbumCards albums={albums} />
-    </section>
   );
 }
 

@@ -216,6 +216,7 @@ export interface UnifiedTrack {
   cloudPlayUrl?: string;
   cloudDownloadUrl?: string;
   cloudUrlExpiresAt?: string;
+  contentHash?: string | null;
 }
 
 export interface UnifiedArtist {

@@ -18,8 +18,9 @@ import { formatTotalDuration, formatTrackCount } from '@/lib/format';
 import { loadAlbum } from '@/lib/card-menus';
 import { albumMatchKey, findAlbumAlternatives } from '@/lib/album-match';
 import { albumPath, trackArtistLinks } from '@/lib/links';
-import { deleteAlbum, publishAlbumToMss, removeAlbumTracks, updateAlbum } from '@/lib/mss-library';
+import { deleteAlbum, removeAlbumTracks, updateAlbum } from '@/lib/mss-library';
 import { playCollection } from '@/lib/player-actions';
+import { publishAlbumToMssCollection } from '@/lib/publish-to-mss';
 import { MSS_UPLOADS } from '@/lib/service-routes';
 import { useIsAlbumLiked, useAlbumLikesStore } from '@/store/album-likes-store';
 import { canDownload, downloadKey, useDownloadsStore } from '@/store/downloads-store';
@@ -155,6 +156,31 @@ export function AlbumPage() {
                           toast(`Скачиваем ${formatTrackCount(todo.length)}`);
                         },
                       },
+                      {
+                        icon: CloudUpload,
+                        label: 'Отправить на сервер MSS',
+                        action: () => {
+                          void toast.promise(
+                            publishAlbumToMssCollection(album, album.tracks).then((r) => {
+                              if ('albumId' in r && r.albumId && r.albumId !== album.id) {
+                                navigate(albumPath('local', r.albumId), { replace: true });
+                              } else {
+                                void queryClient.invalidateQueries({ queryKey: ['album', 'local', album.id] });
+                                void queryClient.invalidateQueries({ queryKey: ['my-albums'] });
+                              }
+                              return r;
+                            }),
+                            {
+                              loading: 'Отправляем на сервер MSS…',
+                              success: (r) =>
+                                r.uploaded > 0 || r.createdAlbum
+                                  ? 'Отправлено на сервер MSS'
+                                  : 'Альбом уже на сервере MSS',
+                              error: (e) => (e instanceof Error ? e.message : 'Не удалось отправить на сервер MSS'),
+                            },
+                          );
+                        },
+                      },
                     ],
                     album.source === 'local'
                       ? [
@@ -164,30 +190,6 @@ export function AlbumPage() {
                             action: () => void useUploadsStore.getState().uploadFromDialog({ albumId: album.id }),
                           },
                           { icon: Pencil, label: 'Изменить', action: () => setDialog('edit') },
-                          {
-                            icon: CloudUpload,
-                            label: 'Отправить на сервер MSS',
-                            action: () => {
-                              void toast.promise(
-                                publishAlbumToMss(album).then((r) => {
-                                  if (r.albumId !== album.id) {
-                                    navigate(albumPath('local', r.albumId), { replace: true });
-                                  } else {
-                                    void queryClient.invalidateQueries({ queryKey: ['album', 'local', album.id] });
-                                  }
-                                  return r;
-                                }),
-                                {
-                                  loading: 'Отправляем на сервер MSS…',
-                                  success: (r) =>
-                                    r.uploaded > 0 || r.createdAlbum
-                                      ? 'Отправлено на сервер MSS'
-                                      : 'Альбом уже на сервере MSS',
-                                  error: (e) => (e instanceof Error ? e.message : 'Не удалось отправить на сервер MSS'),
-                                },
-                              );
-                            },
-                          },
                           { icon: Trash2, label: 'Удалить альбом', danger: true, action: () => setDialog('delete') },
                         ]
                       : [],

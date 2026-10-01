@@ -36,7 +36,7 @@ fun MoreHub(vm: MssViewModel, nav: NavHostController) {
         HubRow("Настройки", "Качество, оформление, сервер", Icons.Default.Settings) { nav.openRoute(Routes.SETTINGS) }
         HubRow("Статистика", "Что вы слушали", Icons.Default.BarChart) { nav.openRoute(Routes.STATS) }
         HubRow("Итоги года", "Wrapped", Icons.Default.Star) { nav.openRoute(Routes.WRAPPED) }
-        HubRow("Подписка", "План и промокод", Icons.Default.CardMembership) { nav.openRoute(Routes.SUBSCRIPTION) }
+        HubRow("Подписка", "MSS бесплатен для всех", Icons.Default.CardMembership) { nav.openRoute(Routes.SUBSCRIPTION) }
         SectionTitle("Слушать")
         HubRow("Моя волна", "Радио по настроению", Icons.Default.Radio) { nav.openRoute(Routes.WAVE) }
         HubRow("Лобби", "Слушать вместе", Icons.Default.Groups) { nav.openRoute(Routes.LOBBY) }

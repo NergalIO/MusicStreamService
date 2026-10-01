@@ -429,11 +429,11 @@ private fun AlbumActions(vm: MssViewModel, nav: NavHostController, album: AlbumW
                         vm.downloadAlbum(album)
                     }
                 }
+                AlbumMenuRow(Icons.Outlined.CloudUpload, "Отправить на сервер MSS") {
+                    menu = false
+                    vm.publishAlbumToMss(album)
+                }
                 if (album.source == SourceId.LOCAL) {
-                    AlbumMenuRow(Icons.Outlined.CloudUpload, "Отправить на сервер MSS") {
-                        menu = false
-                        vm.publishAlbumToMss(album)
-                    }
                     AlbumMenuRow(Icons.Default.Delete, "Удалить альбом", scheme.error) {
                         menu = false
                         confirmCloud = true

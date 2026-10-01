@@ -8,6 +8,7 @@ import androidx.work.workDataOf
 import dagger.assisted.Assisted
 import dagger.assisted.AssistedInject
 import java.io.File
+import java.util.concurrent.TimeUnit
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.withContext
 import okhttp3.OkHttpClient
@@ -25,14 +26,22 @@ class TrackDownloadWorker @AssistedInject constructor(
         val dir = File(applicationContext.filesDir, "downloads").apply { mkdirs() }
         val out = File(dir, fileName)
         try {
-            val res = OkHttpClient().newCall(Request.Builder().url(url).build()).execute()
-            if (!res.isSuccessful) return@withContext Result.retry()
+            val client = OkHttpClient.Builder()
+                .connectTimeout(20, TimeUnit.SECONDS)
+                .readTimeout(60, TimeUnit.SECONDS)
+                .writeTimeout(30, TimeUnit.SECONDS)
+                .retryOnConnectionFailure(false)
+                .build()
+            val res = client.newCall(Request.Builder().url(url).build()).execute()
+            if (!res.isSuccessful) {
+                return@withContext if (runAttemptCount >= 2) Result.failure() else Result.retry()
+            }
             res.body?.byteStream()?.use { input ->
                 out.outputStream().use { output -> input.copyTo(output) }
             }
             Result.success(workDataOf(KEY_PATH to out.absolutePath, KEY_SIZE to out.length()))
         } catch (_: Exception) {
-            Result.retry()
+            if (runAttemptCount >= 2) Result.failure() else Result.retry()
         }
     }
 

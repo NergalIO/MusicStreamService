@@ -244,6 +244,10 @@ export async function removeAlbumTracks(albumId: string, trackIds: string[]): Pr
 
 const UUID_RE = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
 
+export function isMssTrackId(id: string): boolean {
+  return UUID_RE.test(id);
+}
+
 export interface PublishAlbumResult {
   albumId: string;
   uploaded: number;
@@ -262,7 +266,7 @@ type CloudUploadRes = {
 } & Partial<LocalTrackDto>;
 
 function isUuid(id: string): boolean {
-  return UUID_RE.test(id);
+  return isMssTrackId(id);
 }
 
 async function albumOnServer(id: string): Promise<boolean> {

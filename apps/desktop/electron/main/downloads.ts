@@ -7,6 +7,7 @@ import { compressToAac, isFfmpegAvailable, shouldCompress } from './audio-compre
 import { flacMp4ToTaggedFlac, tagFlac, tagMp3, type AudioTags, type CoverImage } from './audio-tags.js';
 import { connectorRegistry } from './connectors.js';
 import { moveSidecarLyrics, removeSidecarLyrics, writeSidecarLyrics } from './lyrics-sidecar.js';
+import { resolveLocalTrackPath } from './local-tracks.js';
 import { materializeVkMp3, parseVkStreamTarget } from './vk-hls.js';
 
 const MAX_PARALLEL = 3;
@@ -125,26 +126,43 @@ function uniquePath(dir: string, base: string, ext: string): string {
 
 async function fetchWithProgress(url: string, key: string, signal: AbortSignal): Promise<Buffer> {
   throwIfCancelled(key);
-  const res = await net.fetch(url, { signal });
-  if (!res.ok || !res.body) throw new Error(`Хранилище ответило ${res.status}`);
-  const total = Number(res.headers.get('content-length')) || 0;
-  const reader = res.body.getReader();
-  const chunks: Uint8Array[] = [];
-  let received = 0;
-  let lastSent = 0;
-  for (;;) {
-    throwIfCancelled(key);
-    if (signal.aborted) throw new DownloadCancelledError();
-    const { done, value } = await reader.read();
-    if (done) break;
-    chunks.push(value);
-    received += value.length;
-    if (Date.now() - lastSent > PROGRESS_INTERVAL_MS) {
-      lastSent = Date.now();
-      broadcast('downloads:progress', { key, received, total } satisfies DownloadProgress);
-    }
+  const timeout = new AbortController();
+  const timer = setTimeout(() => timeout.abort(), 25_000);
+  const combined = new AbortController();
+  const abort = () => combined.abort();
+  if (signal.aborted || timeout.signal.aborted) combined.abort();
+  else {
+    signal.addEventListener('abort', abort, { once: true });
+    timeout.signal.addEventListener('abort', abort, { once: true });
   }
-  return Buffer.concat(chunks);
+  try {
+    const res = await fetch(url, { signal: combined.signal });
+    if (!res.ok || !res.body) throw new Error(`Хранилище ответило ${res.status}`);
+    const total = Number(res.headers.get('content-length')) || 0;
+    const reader = res.body.getReader();
+    const chunks: Uint8Array[] = [];
+    let received = 0;
+    let lastSent = 0;
+    for (;;) {
+      throwIfCancelled(key);
+      if (signal.aborted) throw new DownloadCancelledError();
+      const { done, value } = await reader.read();
+      if (done) break;
+      chunks.push(value);
+      received += value.length;
+      if (Date.now() - lastSent > PROGRESS_INTERVAL_MS) {
+        lastSent = Date.now();
+        broadcast('downloads:progress', { key, received, total } satisfies DownloadProgress);
+      }
+    }
+    return Buffer.concat(chunks);
+  } catch (e) {
+    if (signal.aborted || cancelled.has(key)) throw new DownloadCancelledError();
+    if (timeout.signal.aborted) throw new Error('Сервер не отдал файл — истекло время ожидания');
+    throw e;
+  } finally {
+    clearTimeout(timer);
+  }
 }
 
 async function fetchCover(url?: string): Promise<CoverImage | undefined> {
@@ -280,6 +298,31 @@ function sniffAudioExt(buf: Buffer): { ext: string; codec: string } {
   return { ext: '.bin', codec: 'bin' };
 }
 
+async function copyLocalFile(track: UnifiedTrack, srcPath: string, lyrics?: LyricsSidecar): Promise<DownloadRecord> {
+  const key = downloadKey(track);
+  const stat = await fs.promises.stat(srcPath);
+  broadcast('downloads:progress', { key, received: 0, total: stat.size } satisfies DownloadProgress);
+  const ext = path.extname(srcPath) || '.bin';
+  const codec = ext.replace('.', '') || 'bin';
+  await fs.promises.mkdir(downloadsDir(), { recursive: true });
+  const dest = uniquePath(downloadsDir(), sanitize(`${track.artist} - ${track.title}`), ext);
+  await fs.promises.copyFile(srcPath, dest);
+  broadcast('downloads:progress', { key, received: stat.size, total: stat.size } satisfies DownloadProgress);
+  const record: DownloadRecord = {
+    key,
+    path: dest,
+    size: stat.size,
+    codec,
+    downloadedAt: new Date().toISOString(),
+    track,
+  };
+  load().items[key] = record;
+  persist();
+  await writeSidecarLyrics(dest, lyrics).catch((e) => console.warn('[downloads] lyrics sidecar', e));
+  broadcast('downloads:changed');
+  return record;
+}
+
 async function performDownload(
   track: UnifiedTrack,
   quality: Quality,
@@ -292,8 +335,10 @@ async function performDownload(
   abortControllers.set(key, controller);
   try {
     if (track.source === 'local') {
+      const localPath = await resolveLocalTrackPath(track.id, track.contentHash);
+      if (localPath) return copyLocalFile(track, localPath, lyrics);
       const url = track.cloudDownloadUrl;
-      if (!url) throw new Error('Нет ссылки на оригинал в облаке');
+      if (!url) throw new Error('Нет файла для скачивания');
       broadcast('downloads:progress', { key, received: 0, total: 0 } satisfies DownloadProgress);
       const audio = await fetchWithProgress(url, key, controller.signal);
       throwIfCancelled(key);

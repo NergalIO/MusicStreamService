@@ -297,7 +297,7 @@ class MssViewModel @Inject constructor(
             null -> loadHomeAll()
             SourceId.LOCAL -> loadHomeMss()
             SourceId.YANDEX -> {
-                _shelves.value = null
+                _shelves.value = runCatching { repo.shelves() }.getOrNull()?.onlySource(SourceId.YANDEX)
                 _homeArtists.value = emptyList()
                 _homeAlbums.value = emptyList()
                 _playlists.value = emptyList()
@@ -422,6 +422,9 @@ class MssViewModel @Inject constructor(
             val uploadsD = async { runCatching { repo.uploads() } }
             val albumsD = async { runCatching { repo.albums() } }
             val likedD = async { runCatching { repo.likedAlbums() } }
+            val yandexAlbumsD = async {
+                if (sourceConnected(SourceId.YANDEX)) runCatching { yandex.likedAlbums() } else Result.success(emptyList())
+            }
             val perSource = coroutineScope {
                 connected.map { src ->
                     async { Triple(src, runCatching { libraryLikes(src) }, runCatching { libraryPlaylists(src) }) }
@@ -429,18 +432,21 @@ class MssViewModel @Inject constructor(
             }
             val uploads = uploadsD.await()
             val albums = albumsD.await()
-            val likedAlbums = likedD.await()
+            val likedAlbums = mergeLikedAlbums(
+                yandexAlbumsD.await().getOrDefault(emptyList()),
+                likedD.await().getOrDefault(_library.value.likedAlbums),
+            )
             val errors = perSource.mapNotNull { (src, likes, playlists) ->
                 (likes.exceptionOrNull() ?: playlists.exceptionOrNull())?.let { src to (it.message ?: "Не удалось загрузить") }
             }.toMap()
             val likes = perSource.associate { (src, result, _) -> src to result.getOrDefault(emptyList()) }
-            _likedAlbums.value = likedAlbums.getOrDefault(_likedAlbums.value)
+            _likedAlbums.value = likedAlbums
             _library.value = LibraryUi(
                 likes = likes,
                 playlists = perSource.associate { (src, _, result) -> src to result.getOrDefault(emptyList()) },
                 uploads = uploads.getOrDefault(_library.value.uploads),
                 albums = albums.getOrDefault(_library.value.albums),
-                likedAlbums = likedAlbums.getOrDefault(_library.value.likedAlbums),
+                likedAlbums = likedAlbums,
                 connected = connected,
                 errors = errors,
                 loading = false,
@@ -463,6 +469,17 @@ class MssViewModel @Inject constructor(
         SourceId.YANDEX -> yandex.listPlaylists()
         SourceId.SPOTIFY -> spotify.listPlaylists()
         SourceId.VK -> vk.listPlaylists()
+    }
+
+    private fun mergeLikedAlbums(vararg lists: List<UnifiedAlbum>): List<UnifiedAlbum> {
+        val seen = linkedSetOf<String>()
+        val out = mutableListOf<UnifiedAlbum>()
+        lists.forEach { list ->
+            list.forEach { album ->
+                if (seen.add("${album.source}:${album.id}")) out += album
+            }
+        }
+        return out
     }
 
     private suspend fun refreshLibraryUploads() {
@@ -1332,18 +1349,18 @@ class MssViewModel @Inject constructor(
     private suspend fun enqueueDownload(track: UnifiedTrack) {
         when (track.source) {
             SourceId.LOCAL -> {
+                val uri = localTracks.get(track.id)?.uri?.let(Uri::parse)
+                if (uri != null) {
+                    downloads.enqueueLocalCopy(uri, track)
+                    return
+                }
                 val cloud = repo.resolveCloudDownloadUrl(track)
                 if (cloud != null) {
                     val name = "${track.artist} - ${track.title}".replace(Regex("[^\\wа-яА-ЯёЁ .-]+"), "_")
                     downloads.enqueue(cloud, "${name.take(80)}.bin", track)
                     return
                 }
-                val sub = _subscription.value ?: runCatching { repo.subscription() }.getOrNull()
-                val max = sub?.features?.maxOfflineTracks
-                if (max != null && offline.listTrackIds().size >= max) {
-                    error("Лимит офлайн-треков ($max)")
-                }
-                downloads.enqueueOfflineMss(track)
+                error("Нет файла для скачивания")
             }
             SourceId.YANDEX -> downloads.enqueueYandex(track)
             SourceId.VK -> {
@@ -1431,6 +1448,7 @@ class MssViewModel @Inject constructor(
     }
 
     fun publishAlbumToMss(album: AlbumWithTracks) = launch {
+        ensurePublishFiles(album.tracks)
         val extra = extraPublishFiles(album.tracks)
         val result = repo.publishAlbumToMss(album, extra)
         refreshLibraryUploads()
@@ -1443,13 +1461,43 @@ class MssViewModel @Inject constructor(
     }
 
     fun publishTracksToMss(tracks: List<UnifiedTrack>) = launch {
+        ensurePublishFiles(tracks)
         val result = repo.publishTracksToMss(tracks, extraPublishFiles(tracks))
         refreshLibraryUploads()
         _notice.value = if (result.uploaded > 0) "Отправлено на сервер MSS" else "Уже на сервере MSS"
     }
 
+    private suspend fun ensurePublishFiles(tracks: List<UnifiedTrack>) {
+        for (track in tracks) {
+            if (downloads.fileFor(track) != null) continue
+            if (track.source == SourceId.LOCAL) continue
+            runCatching { enqueueDownload(track) }
+        }
+        val deadline = System.currentTimeMillis() + 180_000
+        while (System.currentTimeMillis() < deadline) {
+            val waiting = tracks.any { t ->
+                t.source != SourceId.LOCAL &&
+                    downloads.fileFor(t) == null &&
+                    DownloadScheduler.keyOf(t) in downloads.active.value
+            }
+            if (!waiting) break
+            delay(500)
+        }
+    }
+
     private fun extraPublishFiles(tracks: List<UnifiedTrack>): Map<String, Uri> =
-        tracks.mapNotNull { t -> downloads.fileFor(t)?.let { t.id to Uri.fromFile(it) } }.toMap()
+        buildMap {
+            for (track in tracks) {
+                val file = downloads.fileFor(track) ?: continue
+                val uri = Uri.fromFile(file)
+                put(track.id, uri)
+                put("${track.source}:${track.id}", uri)
+            }
+        }
+
+    fun removeDownloads(tracks: List<UnifiedTrack>) {
+        tracks.forEach { downloads.remove(DownloadScheduler.keyOf(it)) }
+    }
 
     fun createLobby(title: String, pub: Boolean) = launch { lobby.create(title, pub) }
 
@@ -1704,11 +1752,13 @@ private fun mergeHomePlaylists(vararg lists: List<UnifiedPlaylist>): List<Unifie
     return out.take(24)
 }
 
-private fun HomeShelves.onlyLocal() = copy(
-    frequent = frequent.filter { it.source == SourceId.LOCAL },
-    forgotten = forgotten.filter { it.source == SourceId.LOCAL },
-    topArtists = topArtists.filter { it.source == SourceId.LOCAL },
+private fun HomeShelves.onlySource(source: SourceId) = copy(
+    frequent = frequent.filter { it.source == source },
+    forgotten = forgotten.filter { it.source == source },
+    topArtists = topArtists.filter { it.source == source },
 )
+
+private fun HomeShelves.onlyLocal() = onlySource(SourceId.LOCAL)
 
 private fun splitArtistNames(raw: String): List<String> {
     val parts = raw.split(Regex("""\s*(?:,|&|\sfeat\.?\s|\sft\.?\s)\s*""", RegexOption.IGNORE_CASE))

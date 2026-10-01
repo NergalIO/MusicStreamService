@@ -83,7 +83,7 @@ fun HomeScreen(vm: MssViewModel, nav: NavHostController) {
     val currentKey = player.current?.let { "${it.source}:${it.id}" }
     val showWave = source == SourceId.YANDEX ||
         (source == null && sources.yandex != AuthStatus.DISCONNECTED)
-    val showShelves = source == null || source == SourceId.LOCAL
+    val showShelves = source == null || source == SourceId.LOCAL || source == SourceId.YANDEX
 
     LazyColumn(Modifier.fillMaxSize(), contentPadding = PaddingValues(bottom = 16.dp)) {
         item { ScreenTitle(greeting()) }
