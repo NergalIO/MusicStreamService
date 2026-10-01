@@ -121,10 +121,12 @@ export class YandexMusicApi {
 
   async likedAlbums(limit = 200): Promise<UnifiedAlbum[]> {
     const uid = await this.client.uid();
-    const data = await this.client.get<Array<YAlbum | { album?: YAlbum }>>(`/users/${uid}/likes/albums`);
+    const data = await this.client.get<Array<{ album?: YAlbum } & Partial<YAlbum>>>(
+      `/users/${uid}/likes/albums`,
+    );
     const rows = Array.isArray(data) ? data : [];
     const albums = rows
-      .map((row) => ('title' in row && row.title ? row : row.album))
+      .map((row) => row.album ?? (row.title ? row : undefined))
       .filter((a): a is YAlbum => !!a?.title);
     return albums.slice(0, limit).map(mapAlbum);
   }
