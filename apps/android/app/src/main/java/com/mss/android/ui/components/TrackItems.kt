@@ -26,6 +26,7 @@ import androidx.compose.material.icons.filled.GraphicEq
 import androidx.compose.material.icons.filled.MoreVert
 import androidx.compose.material.icons.filled.MusicNote
 import androidx.compose.material.icons.filled.Send
+import androidx.compose.material.icons.outlined.CloudUpload
 import androidx.compose.material.icons.automirrored.filled.QueueMusic
 import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.Checkbox
@@ -248,6 +249,7 @@ fun TrackList(
     onWave: ((UnifiedTrack) -> Unit)? = null,
     onSuggest: ((UnifiedTrack) -> Unit)? = null,
     onQueueMany: ((List<UnifiedTrack>) -> Unit)? = null,
+    onPublishMany: ((List<UnifiedTrack>) -> Unit)? = null,
     onDeleteMany: ((List<UnifiedTrack>) -> Unit)? = null,
     currentKey: String? = null,
     selectable: Boolean = true,
@@ -320,6 +322,12 @@ fun TrackList(
                         items.forEach(onDownload)
                         clear()
                     }) { Icon(Icons.Default.Download, "Скачать") }
+                    if (onPublishMany != null && items.any { it.source == SourceId.LOCAL }) {
+                        IconButton({
+                            onPublishMany(items)
+                            clear()
+                        }) { Icon(Icons.Outlined.CloudUpload, "Отправить на сервер MSS") }
+                    }
                     if (onDeleteMany != null) {
                         IconButton({ confirmDelete.value = true }) {
                             Icon(Icons.Default.Delete, "Удалить", tint = MaterialTheme.colorScheme.error)

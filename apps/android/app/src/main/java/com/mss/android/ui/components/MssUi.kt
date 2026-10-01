@@ -75,14 +75,36 @@ fun EmptyState(title: String, subtitle: String, modifier: Modifier = Modifier) {
 }
 
 @Composable
-fun SectionTitle(text: String, modifier: Modifier = Modifier) {
-    Text(
-        text,
-        style = MaterialTheme.typography.titleLarge,
-        modifier = modifier.padding(horizontal = 16.dp, vertical = 12.dp),
-        maxLines = 1,
-        overflow = TextOverflow.Ellipsis,
-    )
+fun SectionTitle(
+    text: String,
+    modifier: Modifier = Modifier,
+    action: String? = null,
+    onAction: (() -> Unit)? = null,
+) {
+    Row(
+        modifier
+            .fillMaxWidth()
+            .padding(start = 16.dp, end = 8.dp, top = 8.dp, bottom = 8.dp),
+        verticalAlignment = Alignment.CenterVertically,
+    ) {
+        Text(
+            text,
+            style = MaterialTheme.typography.titleLarge,
+            maxLines = 1,
+            overflow = TextOverflow.Ellipsis,
+            modifier = Modifier.weight(1f),
+        )
+        if (action != null && onAction != null) {
+            Text(
+                action,
+                style = MaterialTheme.typography.labelLarge,
+                color = MaterialTheme.colorScheme.onSurfaceVariant,
+                modifier = Modifier
+                    .clickable(onClick = onAction)
+                    .padding(horizontal = 8.dp, vertical = 8.dp),
+            )
+        }
+    }
 }
 
 @Composable
@@ -213,6 +235,7 @@ fun EntityRow(
     cover: String?,
     onClick: () -> Unit,
     trailing: @Composable () -> Unit = {},
+    coverCorner: Dp = 10.dp,
 ) {
     Row(
         Modifier
@@ -222,7 +245,7 @@ fun EntityRow(
         verticalAlignment = Alignment.CenterVertically,
         horizontalArrangement = Arrangement.spacedBy(12.dp),
     ) {
-        Cover(cover, Modifier.size(48.dp))
+        Cover(cover, Modifier.size(48.dp), corner = coverCorner)
         Column(Modifier.weight(1f)) {
             Text(title, style = MaterialTheme.typography.bodyLarge, maxLines = 1, overflow = TextOverflow.Ellipsis)
             if (!subtitle.isNullOrBlank()) {
@@ -247,10 +270,11 @@ fun MediaTile(
     onClick: () -> Unit,
     subtitle: String? = null,
     onPlay: (() -> Unit)? = null,
+    coverCorner: Dp = 10.dp,
 ) {
     Column(Modifier.width(size).clickable(onClick = onClick)) {
         Box {
-            Cover(cover, Modifier.size(size))
+            Cover(cover, Modifier.size(size), corner = coverCorner)
             if (onPlay != null) {
                 Box(
                     Modifier

@@ -3,6 +3,7 @@ package com.mss.core.localtracks
 import android.content.Context
 import android.net.Uri
 import android.provider.DocumentsContract
+import android.provider.OpenableColumns
 import androidx.datastore.preferences.core.edit
 import androidx.datastore.preferences.core.stringPreferencesKey
 import androidx.datastore.preferences.preferencesDataStore
@@ -83,6 +84,26 @@ class LocalTrackStore @Inject constructor(
     fun mimeType(uri: Uri): String =
         context.contentResolver.getType(uri)?.takeIf { it.isNotBlank() && it != "application/octet-stream" }
             ?: com.mss.core.model.audioContentType(displayName(uri))
+
+    fun sizeOf(uri: Uri): Long {
+        if (uri.scheme == null || uri.scheme == "file") {
+            val path = uri.path
+            if (!path.isNullOrBlank()) {
+                val n = File(path).length()
+                if (n > 0) return n
+            }
+        }
+        context.contentResolver.query(uri, arrayOf(OpenableColumns.SIZE), null, null, null)?.use { c ->
+            if (c.moveToFirst()) {
+                val i = c.getColumnIndex(OpenableColumns.SIZE)
+                if (i >= 0) {
+                    val n = c.getLong(i)
+                    if (n > 0) return n
+                }
+            }
+        }
+        error("Не удалось определить размер файла")
+    }
 
     fun openInputStream(uri: Uri): java.io.InputStream =
         context.contentResolver.openInputStream(uri) ?: throw IllegalStateException("Не удалось прочитать файл")

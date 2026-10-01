@@ -5,7 +5,7 @@ import { cachedCloudUrls, rememberCloudUrls } from '@/lib/cloud-urls';
 export type SourceFilterId = SourceId | 'all';
 
 export const SOURCE_FILTERS: { id: SourceFilterId; label: string }[] = [
-  { id: 'all', label: 'Везде' },
+  { id: 'all', label: 'Все' },
   { id: 'local', label: 'Наша библиотека' },
   { id: 'spotify', label: 'Spotify' },
   { id: 'yandex', label: 'Yandex' },

@@ -22,6 +22,7 @@ import { exportM3u8 } from '@/lib/playlist-io';
 import { useMssPlaylists, type MssPlaylist } from '@/lib/queries';
 import { mapLocalTrack, mapPlaylistEntry, type LocalTrackDto, type PlaylistEntryTrack } from '@/lib/sources';
 import { undoableToast } from '@/lib/undo';
+import { MSS_PLAYLISTS } from '@/lib/service-routes';
 
 function usePlaylistTracks(id?: string) {
   return useQuery({
@@ -282,7 +283,7 @@ export function PlaylistDetailPage() {
                 undo: () => queryClient.setQueryData(key, before),
                 commit: () =>
                   void deletePlaylist(id!).then(
-                    () => navigate('/mss/library/playlists'),
+                    () => navigate(MSS_PLAYLISTS),
                     () => {
                       queryClient.setQueryData(key, before);
                       toast.error('Не удалось удалить плейлист');

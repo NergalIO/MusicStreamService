@@ -33,6 +33,17 @@ import javax.inject.Inject
 import javax.inject.Singleton
 
 private val ALBUM_COVER_TYPES = setOf("image/jpeg", "image/png", "image/webp")
+private val UUID_RE = Regex("^[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12}$")
+
+data class PublishAlbumResult(
+    val albumId: String,
+    val uploaded: Int,
+    val createdAlbum: Boolean,
+)
+
+data class PublishTracksResult(
+    val uploaded: Int,
+)
 
 @Singleton
 class MssRepository @Inject constructor(
@@ -169,6 +180,30 @@ class MssRepository @Inject constructor(
         return api.putAlbumCover(id, bytes, mime).toUnifiedAlbum()
     }
 
+    suspend fun publishAlbumToMss(album: AlbumWithTracks, extraFiles: Map<String, Uri> = emptyMap()): PublishAlbumResult {
+        val uploaded = uploadLocalTracks(album.tracks, extraFiles)
+        val trackIds = album.tracks.filter { it.source == SourceId.LOCAL && isUuid(it.id) }.map { it.id }
+        val (albumId, created) = ensureAlbumOnServer(album, trackIds)
+        if (uploaded == 0 && !created && !isUuid(album.id) && trackIds.isEmpty()) {
+            error("Нет локальных файлов для отправки на сервер MSS")
+        }
+        return PublishAlbumResult(albumId = albumId, uploaded = uploaded, createdAlbum = created)
+    }
+
+    suspend fun publishTracksToMss(tracks: List<UnifiedTrack>, extraFiles: Map<String, Uri> = emptyMap()): PublishTracksResult {
+        val local = tracks.filter { it.source == SourceId.LOCAL && isUuid(it.id) }.distinctBy { it.id }
+        if (local.isEmpty()) error("Нет локальных файлов для отправки на сервер MSS")
+        var files = 0
+        var uploaded = 0
+        for (track in local) {
+            val uri = localTracks.get(track.id)?.uri?.let(Uri::parse) ?: extraFiles[track.id] ?: continue
+            files += 1
+            if (uploadLocalFileToCloud(track.id, uri)) uploaded += 1
+        }
+        if (files == 0) error("Нет локальных файлов для отправки на сервер MSS")
+        return PublishTracksResult(uploaded = uploaded)
+    }
+
     private fun cloudMergeAlbum(album: AlbumWithTracks): AlbumWithTracks =
         album.copy(tracks = album.tracks.map { cloudUrls.mergeAndRemember(it) })
 
@@ -264,6 +299,47 @@ class MssRepository @Inject constructor(
     val connectorsRegistry get() = connectors
     val apiClient get() = api
     val prefs get() = preferences
+
+    private suspend fun uploadLocalTracks(tracks: List<UnifiedTrack>, extraFiles: Map<String, Uri>): Int {
+        var uploaded = 0
+        for (track in tracks) {
+            if (track.source != SourceId.LOCAL || !isUuid(track.id)) continue
+            val uri = localTracks.get(track.id)?.uri?.let(Uri::parse) ?: extraFiles[track.id] ?: continue
+            if (uploadLocalFileToCloud(track.id, uri)) uploaded += 1
+        }
+        return uploaded
+    }
+
+    private suspend fun uploadLocalFileToCloud(trackId: String, uri: Uri): Boolean {
+        localTracks.persistUri(uri)
+        val name = localTracks.displayName(uri)
+        val contentType = localTracks.mimeType(uri).ifBlank { audioContentType(name) }
+        val cloud = api.cloudUpload(trackId, contentType)
+        if (cloud.skipUpload) return false
+        val url = cloud.uploadUrl ?: error("Сервер не выдал ссылку загрузки")
+        val size = localTracks.sizeOf(uri)
+        localTracks.openInputStream(uri).use { input ->
+            api.putToUrl(url, contentType, size, input)
+        }
+        if (!cloud.alreadyReady) unify(api.cloudComplete(trackId))
+        return true
+    }
+
+    private suspend fun ensureAlbumOnServer(album: AlbumWithTracks, trackIds: List<String>): Pair<String, Boolean> {
+        if (isUuid(album.id) && runCatching { api.getAlbum(album.id) }.getOrNull() != null) {
+            return album.id to false
+        }
+        if (trackIds.isEmpty()) return album.id to false
+        val created = api.createAlbum(
+            album.title.ifBlank { "Альбом" },
+            album.artist.ifBlank { "Неизвестный исполнитель" },
+            trackIds,
+            album.year,
+        )
+        return created.id to true
+    }
+
+    private fun isUuid(id: String) = UUID_RE.matches(id)
 
     private fun coverMime(uri: Uri): String {
         val raw = localTracks.mimeType(uri).lowercase()

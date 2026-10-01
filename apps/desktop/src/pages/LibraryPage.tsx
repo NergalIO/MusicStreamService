@@ -1,8 +1,9 @@
-import type { SourceId, UnifiedTrack } from '@mss/shared';
+import type { SourceId, UnifiedAlbum, UnifiedTrack } from '@mss/shared';
 import { useQuery, useQueryClient, type QueryKey } from '@tanstack/react-query';
 import { FolderOpen, ListMusic, Play, Plus, Shuffle } from 'lucide-react';
-import { useEffect, useMemo, useState } from 'react';
-import { NavLink, Navigate, useNavigate, useParams } from 'react-router-dom';
+import { useEffect, useMemo, useRef, useState } from 'react';
+import { Navigate, useNavigate, useParams, useSearchParams } from 'react-router-dom';
+import { ServiceNav } from '@/components/layout/ServiceNav';
 import { toast } from 'sonner';
 import { ArtistGrid } from '@/components/artists/ArtistCard';
 import { CardRowSkeleton, PageTitle, TrackListSkeleton } from '@/components/media/CollectionHeader';
@@ -22,7 +23,7 @@ import { formatBytes, formatTrackCount } from '@/lib/format';
 import { albumLink, playlistPath } from '@/lib/links';
 import { createPlaylist, deleteUploadedTrack } from '@/lib/mss-library';
 import { playCollection } from '@/lib/player-actions';
-import { SOURCE_LABEL } from '@/lib/sources';
+import { SOURCE_LABEL, matchesFilter, type SourceFilterId } from '@/lib/sources';
 import { syncListeningHistory } from '@/lib/listening';
 import { clearHistoryWithUndo, undoableToast } from '@/lib/undo';
 import {
@@ -39,83 +40,25 @@ import {
   useYandexPlaylists,
 } from '@/lib/queries';
 import { SourceFilter } from '@/components/SourceFilter';
-import { matchesFilter, type SourceFilterId } from '@/lib/sources';
-import { cn } from '@/lib/utils';
 import { useDownloadsStore } from '@/store/downloads-store';
 import { useLikesStore } from '@/store/likes-store';
 import { useAlbumLikesStore } from '@/store/album-likes-store';
-import { libraryPath, SPOTIFY_WEB, type ServiceScope } from '@/lib/service-routes';
+import { libraryPath, MSS_PLAYLISTS, MSS_UPLOADS, SPOTIFY_WEB, type CatalogScope, type ServiceScope } from '@/lib/service-routes';
 import { usePlayerStore, type PlayContext } from '@/store/player-store';
 
-const MSS_TABS = [
-  { id: 'likes', label: 'Мне нравится' },
-  { id: 'artists', label: 'Исполнители' },
-  { id: 'playlists', label: 'Плейлисты' },
-] as const;
+const MSS_TABS = [{ id: 'likes' }, { id: 'uploads' }] as const;
+const SERVICE_LIBRARY_TABS = [{ id: 'likes' }, { id: 'playlists' }] as const;
+const MEDIA_TABS = [{ id: 'likes' }, { id: 'history' }, { id: 'downloads' }] as const;
 
-const YANDEX_TABS = [
-  { id: 'likes', label: 'Мне нравится' },
-  { id: 'artists', label: 'Исполнители' },
-  { id: 'playlists', label: 'Плейлисты' },
-] as const;
+type TabId = 'likes' | 'uploads' | 'playlists' | 'history' | 'downloads';
 
-const VK_TABS = [
-  { id: 'likes', label: 'Моя музыка' },
-  { id: 'artists', label: 'Исполнители' },
-  { id: 'playlists', label: 'Плейлисты' },
-] as const;
-
-const SPOTIFY_TABS = [
-  { id: 'likes', label: 'Любимые треки' },
-  { id: 'artists', label: 'Исполнители' },
-  { id: 'playlists', label: 'Плейлисты' },
-] as const;
-
-const MEDIA_TABS = [
-  { id: 'likes', label: 'Мне нравится' },
-  { id: 'artists', label: 'Исполнители' },
-  { id: 'history', label: 'Недавно играли' },
-  { id: 'playlists', label: 'Плейлисты' },
-  { id: 'albums', label: 'Мои альбомы' },
-  { id: 'uploads', label: 'Мои треки' },
-  { id: 'downloads', label: 'Скачанные' },
-] as const;
-
-type MssTabId = (typeof MSS_TABS)[number]['id'];
-type YandexTabId = (typeof YANDEX_TABS)[number]['id'];
-type VkTabId = (typeof VK_TABS)[number]['id'];
-type MediaTabId = (typeof MEDIA_TABS)[number]['id'];
-type TabId = MssTabId | YandexTabId | VkTabId | MediaTabId;
-
-function tabsFor(scope: ServiceScope): readonly { id: TabId; label: string }[] {
+function tabsFor(scope: ServiceScope): readonly { id: TabId }[] {
   if (scope === 'mss') return MSS_TABS;
-  if (scope === 'yandex') return YANDEX_TABS;
-  if (scope === 'vk') return VK_TABS;
-  if (scope === 'spotify') return SPOTIFY_TABS;
+  if (scope === 'yandex' || scope === 'vk' || scope === 'spotify') return SERVICE_LIBRARY_TABS;
   return MEDIA_TABS;
 }
 
-function Tabs({ scope }: { scope: ServiceScope }) {
-  const tabs = tabsFor(scope);
-  return (
-    <div className="mb-6 flex gap-1 border-b border-border">
-      {tabs.map((t) => (
-        <NavLink
-          key={t.id}
-          to={libraryPath(scope, t.id)}
-          className={({ isActive }) =>
-            cn(
-              '-mb-px border-b-2 px-3 pb-2.5 text-sm font-medium transition-colors',
-              isActive ? 'border-primary text-foreground' : 'border-transparent text-muted hover:text-foreground',
-            )
-          }
-        >
-          {t.label}
-        </NavLink>
-      ))}
-    </div>
-  );
-}
+const ALBUM_GRID = 'grid grid-cols-2 gap-5 sm:grid-cols-3 lg:grid-cols-4 xl:grid-cols-6';
 
 function PlayButtons({
   tracks,
@@ -185,7 +128,7 @@ function LikesTab({ scope }: { scope: ServiceScope }) {
   }, [bySource, filter]);
   const { view: visible, sort, cycle, filter: text, setFilter: setText } = useTrackSort(bySelectedSource);
 
-  const context: PlayContext = { type: 'likes', title: scope === 'vk' ? 'Моя музыка' : 'Мне нравится', path: libraryPath(scope, 'likes') };
+  const context: PlayContext = { type: 'likes', title: 'Мне нравится', path: libraryPath(scope, 'likes') };
   const counts = {
     all: bySource.local.length + bySource.yandex.length + bySource.spotify.length + bySource.vk.length,
     local: local.isLoading ? null : bySource.local.length,
@@ -221,22 +164,22 @@ function LikesTab({ scope }: { scope: ServiceScope }) {
     return (
       <EmptyState
         title="Подключите VK Музыку"
-        description="Моя музыка из VK появится здесь после входа в аккаунт."
+        description="Лайки из VK появятся здесь после входа в аккаунт."
         className="py-16"
       />
     );
   }
   if (scope === 'spotify' && !spotifyConnected) {
-    return <SpotifyLoginState what="Любимые треки Spotify" />;
+    return <SpotifyLoginState what="Лайки Spotify" />;
   }
 
   return (
     <>
       <div className="mb-4 flex flex-wrap items-center justify-between gap-3">
-        {scope === 'mss' && <p className="text-sm text-muted">Треки из внутренней библиотеки MSS</p>}
-        {scope === 'spotify' && <p className="text-sm text-muted">«Любимые треки» вашего аккаунта Spotify</p>}
+        {scope === 'mss' && <p className="text-sm text-muted">Треки, альбомы и исполнители из внутренней библиотеки MSS</p>}
+        {scope === 'spotify' && <p className="text-sm text-muted">Лайки вашего аккаунта Spotify</p>}
         {scope === 'yandex' && <p className="text-sm text-muted">Лайки из вашего аккаунта Яндекс Музыки</p>}
-        {scope === 'vk' && <p className="text-sm text-muted">Аудио из раздела «Моя музыка» во VK</p>}
+        {scope === 'vk' && <p className="text-sm text-muted">Лайки из вашего аккаунта VK</p>}
         {scope === 'media' && <SourceFilter value={mediaFilter} onChange={setMediaFilter} counts={counts} />}
         <div className="ml-auto flex flex-wrap items-center gap-2">
           <TrackFilterInput value={text} onChange={setText} />
@@ -279,23 +222,17 @@ function LikesTab({ scope }: { scope: ServiceScope }) {
           emptyText={text ? 'Ничего не найдено' : 'Здесь появятся треки, которые вам понравились'}
         />
       )}
+      <LikedAlbumsSection filter={filter} />
+      <ArtistsSection filter={filter} />
     </>
   );
 }
 
-const SCOPE_SOURCE: Partial<Record<ServiceScope, SourceId>> = {
-  mss: 'local',
-  yandex: 'yandex',
-  vk: 'vk',
-  spotify: 'spotify',
-};
-
-function ArtistsTab({ scope }: { scope: ServiceScope }) {
+function ArtistsSection({ filter }: { filter: SourceFilterId }) {
   const yandexConnected = useYandexConnected();
   const vkConnected = useVkConnected();
   const spotifyConnected = useSpotifyConnected();
-  const only = SCOPE_SOURCE[scope];
-  const want = (s: SourceId) => !only || only === s;
+  const want = (s: SourceId) => matchesFilter(filter, s);
   const local = useLocalLikedTracks();
   const yandex = useYandexLikedTracks();
   const vk = useVkSavedTracks();
@@ -333,9 +270,9 @@ function ArtistsTab({ scope }: { scope: ServiceScope }) {
       ...(want('spotify') ? (spotifyFollowed.data ?? []) : []),
     ];
     return favoriteArtistGroups(followed, tracks);
-    // want зависит только от scope
+    // want зависит только от filter
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [scope, local.data, yandex.data, vk.data, spotify.data, spotifyDevice, likedYandex, likedLocal, yandexFollowed.data, spotifyFollowed.data]);
+  }, [filter, local.data, yandex.data, vk.data, spotify.data, spotifyDevice, likedYandex, likedLocal, yandexFollowed.data, spotifyFollowed.data]);
 
   const needle = normalizeSearch(text);
   const visible = needle ? groups.filter((g) => normalizeSearch(g.name).includes(needle)) : groups;
@@ -345,29 +282,12 @@ function ArtistsTab({ scope }: { scope: ServiceScope }) {
     (want('vk') && vkConnected && vk.isLoading) ||
     (want('spotify') && spotifyConnected && (spotify.isLoading || spotifyFollowed.isLoading));
 
-  if (scope === 'yandex' && !yandexConnected) {
-    return <EmptyState title="Подключите Яндекс Музыку" description="Ваши исполнители появятся после подключения аккаунта." className="py-16" />;
-  }
-  if (scope === 'vk' && !vkConnected) {
-    return <EmptyState title="Подключите VK Музыку" description="Исполнители из «Моей музыки» появятся после входа." className="py-16" />;
-  }
-  if (scope === 'spotify' && !spotifyConnected) return <SpotifyLoginState what="Ваши исполнители Spotify" />;
-
-  const hint =
-    scope === 'yandex'
-      ? 'Отмеченные в Яндекс Музыке и исполнители ваших любимых треков'
-      : scope === 'spotify'
-        ? 'Ваши подписки в Spotify и исполнители любимых треков'
-        : scope === 'vk'
-          ? 'Исполнители из «Моей музыки» во VK'
-          : scope === 'mss'
-            ? 'Исполнители ваших любимых треков в MSS'
-            : 'Исполнители из всех подключённых сервисов';
+  if (!loading && !groups.length) return null;
 
   return (
-    <>
+    <section className="mt-10">
       <div className="mb-4 flex flex-wrap items-center justify-between gap-3">
-        <p className="text-sm text-muted">{hint}</p>
+        <h2 className="text-lg font-semibold">Исполнители</h2>
         {groups.length > 0 && <TrackFilterInput value={text} onChange={setText} />}
       </div>
       {loading && !groups.length ? (
@@ -379,7 +299,7 @@ function ArtistsTab({ scope }: { scope: ServiceScope }) {
           emptyTitle={text ? 'Ничего не найдено' : 'Отметьте треки или исполнителей — они появятся здесь'}
         />
       )}
-    </>
+    </section>
   );
 }
 
@@ -392,7 +312,7 @@ function UploadsTab() {
   const { view, sort, cycle, filter, setFilter } = useTrackSort(uploads);
   const ready = uploads.filter((t) => t.playable);
   const processing = uploads.filter((t) => t.status === 'processing').length;
-  const context: PlayContext = { type: 'library', title: 'Мои треки', path: libraryPath('media', 'uploads') };
+  const context: PlayContext = { type: 'library', title: 'Мои треки', path: MSS_UPLOADS };
 
   const confirmDelete = () => {
     if (!pendingDelete?.length) return;
@@ -462,6 +382,8 @@ function UploadsTab() {
           </Button>
         </div>
       </Dialog>
+      <UploadedAlbumsSection />
+      <MssPlaylistsSection />
     </>
   );
 }
@@ -543,17 +465,17 @@ function SpotifyLoginState({ what }: { what: string }) {
   );
 }
 
-function PlaylistsTab({ scope }: { scope: ServiceScope }) {
+function MssPlaylistsSection() {
   const mss = useMssPlaylists();
-  const yandex = useYandexPlaylists();
-  const vk = useVkPlaylists();
-  const spotify = useSpotifyPlaylists();
-  const yandexConnected = useYandexConnected();
-  const vkConnected = useVkConnected();
-  const spotifyConnected = useSpotifyConnected();
   const navigate = useNavigate();
+  const [params] = useSearchParams();
+  const ref = useRef<HTMLElement>(null);
   const [creating, setCreating] = useState(false);
   const [name, setName] = useState('');
+
+  useEffect(() => {
+    if (params.get('section') === 'playlists') ref.current?.scrollIntoView({ behavior: 'smooth', block: 'start' });
+  }, [params, mss.data]);
 
   const create = async () => {
     if (!name.trim()) return;
@@ -567,7 +489,85 @@ function PlaylistsTab({ scope }: { scope: ServiceScope }) {
     }
   };
 
-  const grid = 'grid grid-cols-2 gap-5 sm:grid-cols-3 lg:grid-cols-4 xl:grid-cols-6';
+  return (
+    <section ref={ref} id="playlists" className="mt-10">
+      <div className="mb-4 flex items-center justify-between gap-3">
+        <h2 className="text-lg font-semibold">Мои плейлисты</h2>
+        <Button variant="secondary" size="sm" onClick={() => setCreating(true)}>
+          <Plus size={14} /> Новый плейлист
+        </Button>
+      </div>
+      {mss.isError ? (
+        <ErrorState className="py-8" title="Плейлисты MSS недоступны" error={mss.error} onRetry={() => void mss.refetch()} />
+      ) : mss.isLoading ? (
+        <CardRowSkeleton />
+      ) : mss.data?.length ? (
+        <div className={ALBUM_GRID}>
+          {mss.data.map((p) => {
+            const u = mssPlaylistToUnified(p);
+            return (
+              <MediaCard
+                key={p.id}
+                title={p.name}
+                subtitle={[p.author, formatTrackCount(p.trackCount)].filter(Boolean).join(' · ')}
+                coverUrl={u.coverUrl}
+                to={playlistPath(u)}
+                menu={() => playlistMenu(u)}
+                onPlay={
+                  p.trackCount
+                    ? async () => {
+                        const tracks = await loadPlaylistTracks(u);
+                        playCollection(tracks, { type: 'playlist', title: p.name, path: playlistPath(u) });
+                      }
+                    : undefined
+                }
+              />
+            );
+          })}
+        </div>
+      ) : (
+        <EmptyState
+          icon={ListMusic}
+          title="Плейлистов пока нет"
+          description="Соберите плейлист из треков вашей внутренней библиотеки MSS"
+          className="py-10"
+          action={
+            <Button size="sm" onClick={() => setCreating(true)}>
+              <Plus size={14} /> Создать плейлист
+            </Button>
+          }
+        />
+      )}
+      <Dialog open={creating} onClose={() => setCreating(false)} title="Новый плейлист">
+        <form
+          onSubmit={(e) => {
+            e.preventDefault();
+            void create();
+          }}
+          className="space-y-4"
+        >
+          <Input autoFocus placeholder="Название" value={name} onChange={(e) => setName(e.target.value)} />
+          <div className="flex justify-end gap-2">
+            <Button variant="ghost" onClick={() => setCreating(false)}>
+              Отмена
+            </Button>
+            <Button type="submit" disabled={!name.trim()}>
+              Создать
+            </Button>
+          </div>
+        </form>
+      </Dialog>
+    </section>
+  );
+}
+
+function PlaylistsTab({ scope }: { scope: ServiceScope }) {
+  const yandex = useYandexPlaylists();
+  const vk = useVkPlaylists();
+  const spotify = useSpotifyPlaylists();
+  const yandexConnected = useYandexConnected();
+  const vkConnected = useVkConnected();
+  const spotifyConnected = useSpotifyConnected();
 
   if (scope === 'yandex' && !yandexConnected) {
     return (
@@ -591,79 +591,16 @@ function PlaylistsTab({ scope }: { scope: ServiceScope }) {
 
   if (scope === 'spotify' && !spotifyConnected) return <SpotifyLoginState what="Плейлисты Spotify" />;
 
-  const showMss = scope === 'mss' || scope === 'media';
-  const showYandex = (scope === 'yandex' || scope === 'media') && yandexConnected;
-  const showVk = (scope === 'vk' || scope === 'media') && vkConnected;
-  const showSpotify = (scope === 'spotify' || scope === 'media') && spotifyConnected;
-
   return (
     <div className="space-y-10">
-      {scope === 'media' && (
-        <p className="text-sm text-muted">
-          Чтобы быстро открыть плейлист из боковой панели, выберите «Закрепить в боковой панели» в меню плейлиста (⋯).
-        </p>
-      )}
-      {showMss && (
-      <section>
-        <div className="mb-4 flex items-center justify-between gap-3">
-          <h2 className="text-xl font-bold tracking-tight">Плейлисты MSS</h2>
-          <Button variant="secondary" size="sm" onClick={() => setCreating(true)}>
-            <Plus size={14} /> {scope === 'media' ? 'Новый плейлист MSS' : 'Новый плейлист'}
-          </Button>
-        </div>
-        {mss.isError ? (
-          <ErrorState className="py-8" title="Плейлисты MSS недоступны" error={mss.error} onRetry={() => void mss.refetch()} />
-        ) : mss.isLoading ? (
-          <CardRowSkeleton />
-        ) : mss.data?.length ? (
-          <div className={grid}>
-            {mss.data.map((p) => {
-              const u = mssPlaylistToUnified(p);
-              return (
-                <MediaCard
-                  key={p.id}
-                  title={p.name}
-                  subtitle={[p.author, formatTrackCount(p.trackCount)].filter(Boolean).join(' · ')}
-                  coverUrl={u.coverUrl}
-                  to={playlistPath(u)}
-                  menu={() => playlistMenu(u)}
-                  onPlay={
-                    p.trackCount
-                      ? async () => {
-                          const tracks = await loadPlaylistTracks(u);
-                          playCollection(tracks, { type: 'playlist', title: p.name, path: playlistPath(u) });
-                        }
-                      : undefined
-                  }
-                />
-              );
-            })}
-          </div>
-        ) : (
-          <EmptyState
-            icon={ListMusic}
-            title="Плейлистов пока нет"
-            description="Соберите плейлист из треков вашей внутренней библиотеки MSS"
-            className="py-10"
-            action={
-              <Button size="sm" onClick={() => setCreating(true)}>
-                <Plus size={14} /> Создать плейлист
-              </Button>
-            }
-          />
-        )}
-      </section>
-      )}
-
-      {showYandex && (
+      {scope === 'yandex' && (
         <section>
-          <h2 className="mb-4 text-xl font-bold tracking-tight">Плейлисты Яндекс Музыки</h2>
           {yandex.isError ? (
             <ErrorState className="py-8" error={yandex.error} onRetry={() => void yandex.refetch()} />
           ) : yandex.isLoading ? (
             <CardRowSkeleton />
           ) : (
-            <div className={grid}>
+            <div className={ALBUM_GRID}>
               {(yandex.data ?? []).map((p) => (
                 <MediaCard
                   key={p.id}
@@ -683,15 +620,14 @@ function PlaylistsTab({ scope }: { scope: ServiceScope }) {
         </section>
       )}
 
-      {showVk && (
+      {scope === 'vk' && (
         <section>
-          <h2 className="mb-4 text-xl font-bold tracking-tight">Плейлисты VK</h2>
           {vk.isError ? (
             <ErrorState className="py-8" error={vk.error} onRetry={() => void vk.refetch()} />
           ) : vk.isLoading ? (
             <CardRowSkeleton />
           ) : (
-            <div className={grid}>
+            <div className={ALBUM_GRID}>
               {(vk.data ?? []).map((p) => (
                 <MediaCard
                   key={p.id}
@@ -711,15 +647,14 @@ function PlaylistsTab({ scope }: { scope: ServiceScope }) {
         </section>
       )}
 
-      {showSpotify && (
+      {scope === 'spotify' && (
         <section>
-          <h2 className="mb-4 text-xl font-bold tracking-tight">Плейлисты Spotify</h2>
           {spotify.isError ? (
             <ErrorState className="py-8" error={spotify.error} onRetry={() => void spotify.refetch()} />
           ) : spotify.isLoading ? (
             <CardRowSkeleton />
           ) : spotify.data?.length ? (
-            <div className={grid}>
+            <div className={ALBUM_GRID}>
               {spotify.data.map((p) => (
                 <MediaCard
                   key={p.id}
@@ -739,165 +674,101 @@ function PlaylistsTab({ scope }: { scope: ServiceScope }) {
           )}
         </section>
       )}
-
-      {showMss && (
-      <Dialog open={creating} onClose={() => setCreating(false)} title="Новый плейлист">
-        <form
-          onSubmit={(e) => {
-            e.preventDefault();
-            void create();
-          }}
-          className="space-y-4"
-        >
-          <Input autoFocus placeholder="Название" value={name} onChange={(e) => setName(e.target.value)} />
-          <div className="flex justify-end gap-2">
-            <Button variant="ghost" onClick={() => setCreating(false)}>
-              Отмена
-            </Button>
-            <Button type="submit" disabled={!name.trim()}>
-              Создать
-            </Button>
-          </div>
-        </form>
-      </Dialog>
-      )}
     </div>
   );
 }
 
-function AlbumsTab() {
-  const { data: albums = [], isLoading, isError, error, refetch } = useMyAlbums();
-  const liked = useAlbumLikesStore((s) => s.items);
-  const [filter, setFilter] = useState('');
-  const q = normalizeSearch(filter);
-  const likedView = useMemo(() => {
-    if (!q) return liked;
-    return liked.filter((a) => normalizeSearch(`${a.title} ${a.artist}`).includes(q));
-  }, [liked, q]);
-  const likedKeys = useMemo(() => new Set(liked.map((a) => `${a.source}:${a.id}`)), [liked]);
-  const mineView = useMemo(() => {
-    const rest = albums.filter((a) => !likedKeys.has(`local:${a.id}`));
-    if (!q) return rest;
-    return rest.filter((a) => normalizeSearch(`${a.title} ${a.artist}`).includes(q));
-  }, [albums, likedKeys, q]);
-  const grid = 'grid grid-cols-2 gap-5 sm:grid-cols-3 lg:grid-cols-4 xl:grid-cols-6';
-  const empty = !likedView.length && !mineView.length;
+function albumPlaySource(album: UnifiedAlbum): 'yandex' | 'spotify' | 'local' {
+  return album.source === 'spotify' || album.source === 'local' ? album.source : 'yandex';
+}
 
+function AlbumCards({ albums }: { albums: UnifiedAlbum[] }) {
   return (
-    <>
-      <div className="mb-4 flex flex-wrap items-center justify-between gap-3">
-        <p className="text-sm text-muted">
-          {liked.length || albums.length
-            ? 'Сердце на странице альбома сохраняет его здесь. Загруженные альбомы — обложка и ссылки на треки.'
-            : 'Загрузите папку альбома или отметьте альбом сердцем — он появится здесь'}
-        </p>
-        <div className="flex items-center gap-2">
-          {(liked.length > 0 || albums.length > 0) && <TrackFilterInput value={filter} onChange={setFilter} />}
-          <UploadButton album label="Загрузить альбом" />
-        </div>
-      </div>
-      {isError ? (
-        <ErrorState title="Не удалось загрузить альбомы" error={error} onRetry={() => void refetch()} />
-      ) : isLoading && !liked.length ? (
-        <CardRowSkeleton />
-      ) : empty ? (
-        <EmptyState
-          icon={ListMusic}
-          title={filter ? 'Ничего не найдено' : 'Альбомов пока нет'}
-          description={filter ? undefined : 'Выберите папку с треками или поставьте лайк альбому'}
-          className="py-16"
-          action={!filter ? <UploadButton album label="Загрузить альбом" /> : undefined}
+    <div className={ALBUM_GRID}>
+      {albums.map((a) => (
+        <MediaCard
+          key={`${a.source}:${a.id}`}
+          title={a.title}
+          subtitle={[a.artist, a.source !== 'local' ? SOURCE_LABEL[a.source] : null, a.year, a.trackCount ? formatTrackCount(a.trackCount) : null]
+            .filter(Boolean)
+            .join(' · ')}
+          coverUrl={a.coverUrl}
+          to={albumLink(a)}
+          menu={() => albumMenu(a)}
+          onPlay={
+            a.trackCount
+              ? async () => {
+                  const tracks = await loadAlbumTracks(a.id, albumPlaySource(a));
+                  playCollection(tracks, { type: 'album', title: a.title, path: albumLink(a) });
+                }
+              : undefined
+          }
         />
-      ) : (
-        <>
-          {likedView.length > 0 && (
-            <section className="mb-8">
-              <h2 className="mb-4 text-lg font-semibold">Понравившиеся</h2>
-              <div className={grid}>
-                {likedView.map((a) => (
-                  <MediaCard
-                    key={`liked:${a.source}:${a.id}`}
-                    title={a.title}
-                    subtitle={[a.artist, a.source !== 'local' ? SOURCE_LABEL[a.source] : null, a.year, a.trackCount ? formatTrackCount(a.trackCount) : null]
-                      .filter(Boolean)
-                      .join(' · ')}
-                    coverUrl={a.coverUrl}
-                    to={albumLink(a)}
-                    menu={() => albumMenu(a)}
-                    onPlay={
-                      a.trackCount
-                        ? async () => {
-                            const tracks = await loadAlbumTracks(a.id, a.source === 'spotify' || a.source === 'local' ? a.source : 'yandex');
-                            playCollection(tracks, { type: 'album', title: a.title, path: albumLink(a) });
-                          }
-                        : undefined
-                    }
-                  />
-                ))}
-              </div>
-            </section>
-          )}
-          {mineView.length > 0 && (
-            <section>
-              {likedView.length > 0 && <h2 className="mb-4 text-lg font-semibold">Мои альбомы</h2>}
-              <div className={grid}>
-                {mineView.map((a) => (
-                  <MediaCard
-                    key={a.id}
-                    title={a.title}
-                    subtitle={[a.artist, a.year, a.trackCount ? formatTrackCount(a.trackCount) : null].filter(Boolean).join(' · ')}
-                    coverUrl={a.coverUrl}
-                    to={albumLink(a)}
-                    menu={() => albumMenu(a)}
-                    onPlay={
-                      a.trackCount
-                        ? async () => {
-                            const tracks = await loadAlbumTracks(a.id, 'local');
-                            playCollection(tracks, { type: 'album', title: a.title, path: albumLink(a) });
-                          }
-                        : undefined
-                    }
-                  />
-                ))}
-              </div>
-            </section>
-          )}
-        </>
-      )}
-    </>
+      ))}
+    </div>
   );
 }
 
-const MEDIA_ONLY_TABS = new Set(['history', 'uploads', 'downloads', 'albums']);
+function LikedAlbumsSection({ filter }: { filter: SourceFilterId }) {
+  const liked = useAlbumLikesStore((s) => s.items);
+  const albums = useMemo(
+    () => liked.filter((a) => matchesFilter(filter, a.source)),
+    [liked, filter],
+  );
+  if (!albums.length) return null;
+  return (
+    <section className="mt-10">
+      <h2 className="mb-4 text-lg font-semibold">Альбомы</h2>
+      <AlbumCards albums={albums} />
+    </section>
+  );
+}
+
+function UploadedAlbumsSection() {
+  const { data: albums = [], isLoading, isError, error, refetch } = useMyAlbums();
+  if (isError) {
+    return (
+      <section className="mt-10">
+        <h2 className="mb-4 text-lg font-semibold">Альбомы</h2>
+        <ErrorState title="Не удалось загрузить альбомы" error={error} onRetry={() => void refetch()} />
+      </section>
+    );
+  }
+  if (isLoading && !albums.length) {
+    return (
+      <section className="mt-10">
+        <h2 className="mb-4 text-lg font-semibold">Альбомы</h2>
+        <CardRowSkeleton />
+      </section>
+    );
+  }
+  if (!albums.length) return null;
+  return (
+    <section className="mt-10">
+      <h2 className="mb-4 text-lg font-semibold">Альбомы</h2>
+      <AlbumCards albums={albums} />
+    </section>
+  );
+}
 
 export function LibraryPage({ scope }: { scope: ServiceScope }) {
   const { tab } = useParams();
-  if (scope === 'mss' && tab && MEDIA_ONLY_TABS.has(tab)) {
-    return <Navigate to={libraryPath('media', tab)} replace />;
-  }
+  if (tab === 'artists') return <Navigate to={libraryPath(scope, 'likes')} replace />;
+  if (scope === 'mss' && tab === 'playlists') return <Navigate to={MSS_PLAYLISTS} replace />;
+  if (scope === 'media' && (tab === 'albums' || tab === 'uploads')) return <Navigate to={MSS_UPLOADS} replace />;
+  if (scope === 'media' && tab === 'playlists') return <Navigate to={MSS_PLAYLISTS} replace />;
   const tabs = tabsFor(scope);
   if (!tabs.some((t) => t.id === tab)) return <Navigate to={libraryPath(scope, 'likes')} replace />;
   const id = tab as TabId;
-  const title =
-    scope === 'mss'
-      ? 'MSS'
-      : scope === 'yandex'
-        ? 'Яндекс Музыка'
-        : scope === 'vk'
-          ? 'VK Музыка'
-          : scope === 'spotify'
-            ? 'Spotify'
-            : 'Медиатека';
+  const catalog = scope !== 'media';
+  const mediaTitle = id === 'history' ? 'Недавно играли' : id === 'downloads' ? 'Скачанные' : 'Мне нравится';
   return (
     <div>
-      <PageTitle title={title} />
-      <Tabs scope={scope} />
+      {catalog ? <ServiceNav scope={scope as CatalogScope} /> : <PageTitle title={mediaTitle} />}
       {id === 'likes' && <LikesTab scope={scope} />}
-      {id === 'artists' && <ArtistsTab scope={scope} />}
       {id === 'history' && scope === 'media' && <HistoryTab scope={scope} />}
       {id === 'playlists' && <PlaylistsTab scope={scope} />}
-      {id === 'albums' && scope === 'media' && <AlbumsTab />}
-      {id === 'uploads' && scope === 'media' && <UploadsTab />}
+      {id === 'uploads' && scope === 'mss' && <UploadsTab />}
       {id === 'downloads' && scope === 'media' && <DownloadsTab />}
     </div>
   );

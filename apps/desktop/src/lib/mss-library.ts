@@ -1,9 +1,12 @@
-import type { AlbumDetailDto, AlbumDto, ExternalTrackSnapshot, UnifiedTrack } from '@mss/shared';
+import type { AlbumDetailDto, AlbumDto, AlbumWithTracks, ExternalTrackSnapshot, UnifiedTrack } from '@mss/shared';
 import { toast } from 'sonner';
 import { apiFetch } from '@/lib/api';
+import { audioContentType, rememberCloudUrls } from '@/lib/cloud-urls';
 import { formatTrackCount } from '@/lib/format';
 import { queryClient } from '@/lib/query-client';
+import type { LocalTrackDto } from '@/lib/sources';
 import { useAlbumLikesStore } from '@/store/album-likes-store';
+import { downloadKey, useDownloadsStore } from '@/store/downloads-store';
 import type { MssPlaylist } from '@/lib/queries';
 
 const json = (body: unknown): RequestInit => ({
@@ -237,4 +240,111 @@ export async function addTracksToAlbum(albumId: string, trackIds: string[]): Pro
 export async function removeAlbumTracks(albumId: string, trackIds: string[]): Promise<void> {
   await Promise.all(trackIds.map((trackId) => apiFetch(`/albums/${albumId}/tracks/${trackId}`, { method: 'DELETE' })));
   refreshAlbums(albumId);
+}
+
+const UUID_RE = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
+
+export interface PublishAlbumResult {
+  albumId: string;
+  uploaded: number;
+  createdAlbum: boolean;
+}
+
+export interface PublishTracksResult {
+  uploaded: number;
+}
+
+type CloudUploadRes = {
+  skipUpload: boolean;
+  alreadyReady: boolean;
+  uploadUrl?: string;
+  headers?: Record<string, string>;
+} & Partial<LocalTrackDto>;
+
+function isUuid(id: string): boolean {
+  return UUID_RE.test(id);
+}
+
+async function albumOnServer(id: string): Promise<boolean> {
+  if (!isUuid(id)) return false;
+  try {
+    await apiFetch(`/albums/${id}`);
+    return true;
+  } catch {
+    return false;
+  }
+}
+
+async function uploadTrackFile(trackId: string, filePath: string): Promise<boolean> {
+  const api = window.electronAPI?.localTracks;
+  if (!api?.putToUrl) throw new Error('Загрузка в облако доступна только в приложении');
+  const filename = filePath.replace(/^.*[\\/]/, '') || 'audio';
+  const contentType = audioContentType(filename);
+  const cloud = await apiFetch<CloudUploadRes>(`/tracks/${trackId}/cloud-upload`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ contentType }),
+  });
+  if (cloud.skipUpload) {
+    rememberCloudUrls(trackId, cloud);
+    return false;
+  }
+  if (!cloud.uploadUrl) throw new Error('Сервер не выдал ссылку загрузки');
+  await api.putToUrl(filePath, cloud.uploadUrl, cloud.headers ?? { 'Content-Type': contentType });
+  if (!cloud.alreadyReady) {
+    const done = await apiFetch<LocalTrackDto>(`/tracks/${trackId}/cloud-complete`, { method: 'POST' });
+    rememberCloudUrls(done.id, done);
+  } else {
+    rememberCloudUrls(trackId, cloud);
+  }
+  return true;
+}
+
+async function localFilePath(track: UnifiedTrack): Promise<string | null> {
+  if (track.source !== 'local' || !isUuid(track.id)) return null;
+  const api = window.electronAPI?.localTracks;
+  const fromIndex = api?.resolvePath ? await api.resolvePath(track.id) : null;
+  return fromIndex ?? useDownloadsStore.getState().items[downloadKey(track)]?.path ?? null;
+}
+
+async function uploadLocalFiles(tracks: UnifiedTrack[]): Promise<{ uploaded: number; files: number }> {
+  const seen = new Set<string>();
+  let uploaded = 0;
+  let files = 0;
+  for (const track of tracks) {
+    if (track.source !== 'local' || !isUuid(track.id) || seen.has(track.id)) continue;
+    seen.add(track.id);
+    const filePath = await localFilePath(track);
+    if (!filePath) continue;
+    files += 1;
+    if (await uploadTrackFile(track.id, filePath)) uploaded += 1;
+  }
+  return { uploaded, files };
+}
+
+export async function publishTracksToMss(tracks: UnifiedTrack[]): Promise<PublishTracksResult> {
+  const local = tracks.filter((t) => t.source === 'local' && isUuid(t.id));
+  if (!local.length) throw new Error('Нет локальных файлов для отправки на сервер MSS');
+  const result = await uploadLocalFiles(local);
+  if (result.files === 0) throw new Error('Нет локальных файлов для отправки на сервер MSS');
+  void queryClient.invalidateQueries({ queryKey: ['my-uploads'] });
+  void queryClient.invalidateQueries({ queryKey: ['tracks'] });
+  return { uploaded: result.uploaded };
+}
+
+export async function publishAlbumToMss(album: AlbumWithTracks): Promise<PublishAlbumResult> {
+  const { uploaded } = await uploadLocalFiles(album.tracks);
+  const trackIds = album.tracks.filter((t) => t.source === 'local' && isUuid(t.id)).map((t) => t.id);
+  if (await albumOnServer(album.id)) {
+    refreshAlbums(album.id);
+    return { albumId: album.id, uploaded, createdAlbum: false };
+  }
+  if (!trackIds.length) throw new Error('Нет локальных файлов для отправки на сервер MSS');
+  const created = await createAlbum({
+    title: album.title.trim() || 'Альбом',
+    artist: album.artist.trim() || 'Неизвестный исполнитель',
+    year: album.year,
+    trackIds,
+  });
+  return { albumId: created.id, uploaded, createdAlbum: true };
 }

@@ -289,7 +289,7 @@ class MssApiClient @Inject constructor(
                 artist = album.artist.ifBlank { "Неизвестный исполнитель" },
                 year = album.year?.takeIf { it in 1000..2100 },
                 type = album.type,
-                coverUrl = album.coverUrl,
+                coverUrl = album.coverUrl?.take(2000),
                 trackCount = album.trackCount,
                 genre = album.genre,
                 artists = album.artists,
@@ -615,8 +615,13 @@ class MssApiClient @Inject constructor(
             session = preferences.loadSession() ?: throw ApiException("Not authenticated")
             response = block(session.accessToken)
         }
-        if (!response.status.isSuccess()) throw ApiException(response.bodyAsText())
+        if (!response.status.isSuccess()) throw ApiException(apiErrorMessage(response.bodyAsText()))
         return response
+    }
+
+    private fun apiErrorMessage(text: String): String {
+        val parsed = runCatching { json.decodeFromString<AuthErrorBody>(text) }.getOrNull()
+        return parsed?.message?.takeIf { it.isNotBlank() } ?: text
     }
 
     private fun encode(q: String) = java.net.URLEncoder.encode(q, Charsets.UTF_8)

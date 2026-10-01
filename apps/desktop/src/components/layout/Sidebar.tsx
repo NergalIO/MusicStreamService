@@ -1,16 +1,13 @@
 import {
-  BarChart3,
   ChevronRight,
   CircleArrowDown,
-  EyeOff,
   Clock,
+  EyeOff,
   Globe,
   Heart,
   Home,
-  Library,
   ListMusic,
   LogOut,
-  MicVocal,
   PanelLeftClose,
   PanelLeftOpen,
   Radio,
@@ -18,6 +15,7 @@ import {
   Settings,
   Sparkles,
   Upload,
+  BarChart3,
   type LucideIcon,
 } from 'lucide-react';
 import { createContext, useContext, useEffect, useMemo, useState } from 'react';
@@ -170,19 +168,15 @@ function CollapsibleSection({
   );
 }
 
-function PlaylistSubsection({
-  id,
+function PinnedPlaylists({
   scope,
 }: {
-  id: Extract<SidebarSectionId, 'mssPlaylists' | 'yandexPlaylists' | 'vkPlaylists' | 'spotifyPlaylists'>;
   scope: 'mss' | 'yandex' | 'vk' | 'spotify';
 }) {
   const panelCollapsed = useContext(CollapsedContext);
   const parentSection: SidebarCategoryId = scope === 'mss' ? 'mss' : scope;
   const parentHidden = useSidebarStore((s) => s.sectionsHidden[parentSection]);
   const parentOpen = useSidebarStore((s) => s.sectionsOpen[parentSection]);
-  const open = useSidebarStore((s) => s.sectionsOpen[id]);
-  const toggleSection = useSidebarStore((s) => s.toggleSection);
   const pinned = useSidebarStore((s) => s.pinnedPlaylists);
   const { data: mssPlaylists = [] } = useMssPlaylists();
   const { data: yandexPlaylists = [] } = useYandexPlaylists();
@@ -210,38 +204,14 @@ function PlaylistSubsection({
 
   if (parentHidden) return null;
   if (!parentOpen && !panelCollapsed) return null;
-  if (!pins.length && panelCollapsed) return null;
-
-  if (panelCollapsed) {
-    return (
-      <>
-        {items.map((item) => (
-          <Item key={item.key} to={item.to} icon={ListMusic} label={item.label} image={item.image} />
-        ))}
-      </>
-    );
-  }
+  if (!items.length) return null;
 
   return (
-    <div className="space-y-0.5">
-      <button
-        type="button"
-        aria-expanded={open}
-        onClick={() => toggleSection(id)}
-        className="flex w-full items-center gap-1 py-1 pl-4 pr-2.5 text-left text-[11px] font-medium text-muted transition-colors hover:text-foreground"
-      >
-        <ChevronRight size={12} className={cn('shrink-0 transition-transform', open && 'rotate-90')} aria-hidden />
-        <span>Плейлисты{pins.length ? ` · ${pins.length}` : ''}</span>
-      </button>
-      {open &&
-        (items.length ? (
-          items.map((item) => (
-            <Item key={item.key} to={item.to} icon={ListMusic} label={item.label} image={item.image} indent />
-          ))
-        ) : (
-          <p className="px-6 py-1 text-[11px] leading-snug text-muted">Закрепите плейлисты через меню ⋯ на странице медиатеки</p>
-        ))}
-    </div>
+    <>
+      {items.map((item) => (
+        <Item key={item.key} to={item.to} icon={ListMusic} label={item.label} image={item.image} indent={!panelCollapsed} />
+      ))}
+    </>
   );
 }
 
@@ -270,8 +240,8 @@ function SidebarSearch() {
         value={value}
         onChange={(e) => setValue(e.target.value)}
         onFocus={() => location.pathname !== '/media/search' && navigate(searchBase)}
-        placeholder="Поиск"
-        aria-label="Поиск"
+        placeholder="Все"
+        aria-label="Все"
         data-search-input
         className="h-8 w-full rounded-md border border-foreground/[0.06] bg-foreground/[0.07] pl-8 pr-2 text-[13px] outline-none placeholder:text-muted focus:border-primary/60"
       />
@@ -314,8 +284,8 @@ export function Sidebar() {
           {collapsed ? (
             <NavLink
               to={searchPath('media')}
-              title="Поиск"
-              aria-label="Поиск"
+              title="Все"
+              aria-label="Все"
               className="flex h-8 items-center justify-center rounded-md text-muted hover:bg-foreground/[0.05] hover:text-foreground"
             >
               <Search size={18} />
@@ -326,48 +296,43 @@ export function Sidebar() {
         </div>
 
         <nav className={cn('min-h-0 flex-1 overflow-y-auto overflow-x-hidden pb-4', collapsed ? 'no-scrollbar px-2' : 'px-3')}>
-          <CollapsibleSection id="media" title="Медиатека">
-            <Item to={libraryPath('media', 'likes')} icon={Library} label="Мне нравится" />
-            <Item to={libraryPath('media', 'artists')} icon={MicVocal} label="Любимые исполнители" />
-            <Item to={libraryPath('media', 'history')} icon={Clock} label="Недавно играли" />
-            <Item to={libraryPath('media', 'playlists')} icon={ListMusic} label="Все плейлисты" />
-            <Item to={libraryPath('media', 'uploads')} icon={Upload} label="Мои треки" />
-            <Item to={libraryPath('media', 'downloads')} icon={CircleArrowDown} label="Скачанные" />
-            <Item to={lobbyPath()} icon={Radio} label="Listening party" />
-            <SidebarLobbyRooms collapsed={collapsed} />
-          </CollapsibleSection>
-
           <CollapsibleSection id="mss" title="MSS">
             <Item to={MSS_HOME} end icon={Home} label="Слушать сейчас" />
             <Item to={libraryPath('mss', 'likes')} icon={Heart} label="Мне нравится" />
-            <Item to={libraryPath('mss', 'artists')} icon={MicVocal} label="Любимые исполнители" />
-            <Item to={libraryPath('mss', 'playlists')} icon={ListMusic} label="Все плейлисты" />
-            <PlaylistSubsection id="mssPlaylists" scope="mss" />
+            <Item to={libraryPath('mss', 'uploads')} icon={Upload} label="Мои треки" />
+            <PinnedPlaylists scope="mss" />
           </CollapsibleSection>
 
           <CollapsibleSection id="yandex" title="Яндекс Музыка">
             <Item to={YANDEX_HOME} end icon={Home} label="Слушать сейчас" />
             <Item to={libraryPath('yandex', 'likes')} icon={Heart} label="Мне нравится" />
-            <Item to={libraryPath('yandex', 'artists')} icon={MicVocal} label="Любимые исполнители" />
-            <Item to={libraryPath('yandex', 'playlists')} icon={ListMusic} label="Все плейлисты" />
-            <PlaylistSubsection id="yandexPlaylists" scope="yandex" />
+            <Item to={libraryPath('yandex', 'playlists')} icon={ListMusic} label="Плейлисты" />
+            <PinnedPlaylists scope="yandex" />
           </CollapsibleSection>
 
           <CollapsibleSection id="spotify" title="Spotify">
             <Item to={SPOTIFY_HOME} end icon={Home} label="Слушать сейчас" />
-            <Item to={libraryPath('spotify', 'likes')} icon={Heart} label="Любимые треки" />
-            <Item to={libraryPath('spotify', 'artists')} icon={MicVocal} label="Любимые исполнители" />
-            <Item to={libraryPath('spotify', 'playlists')} icon={ListMusic} label="Все плейлисты" />
+            <Item to={libraryPath('spotify', 'likes')} icon={Heart} label="Мне нравится" />
+            <Item to={libraryPath('spotify', 'playlists')} icon={ListMusic} label="Плейлисты" />
             <Item to={SPOTIFY_WEB} icon={Globe} label="Веб-плеер" />
-            <PlaylistSubsection id="spotifyPlaylists" scope="spotify" />
+            <PinnedPlaylists scope="spotify" />
           </CollapsibleSection>
 
           <CollapsibleSection id="vk" title="VK Музыка">
             <Item to={VK_HOME} end icon={Home} label="Слушать сейчас" />
-            <Item to={libraryPath('vk', 'likes')} icon={Heart} label="Моя музыка" />
-            <Item to={libraryPath('vk', 'artists')} icon={MicVocal} label="Любимые исполнители" />
-            <Item to={libraryPath('vk', 'playlists')} icon={ListMusic} label="Все плейлисты" />
-            <PlaylistSubsection id="vkPlaylists" scope="vk" />
+            <Item to={libraryPath('vk', 'likes')} icon={Heart} label="Мне нравится" />
+            <Item to={libraryPath('vk', 'playlists')} icon={ListMusic} label="Плейлисты" />
+            <PinnedPlaylists scope="vk" />
+          </CollapsibleSection>
+
+          <div className="mt-4 space-y-0.5">
+            <Item to={libraryPath('media', 'history')} icon={Clock} label="Недавно играли" />
+            <Item to={libraryPath('media', 'downloads')} icon={CircleArrowDown} label="Скачанные" />
+          </div>
+
+          <CollapsibleSection id="party" title="Listening party">
+            <Item to={lobbyPath()} icon={Radio} label="Listening party" />
+            <SidebarLobbyRooms collapsed={collapsed} />
           </CollapsibleSection>
         </nav>
 

@@ -33,7 +33,7 @@ function snapshot(album: UnifiedAlbum) {
     artist: album.artist.trim() || 'Неизвестный исполнитель',
     year,
     type: album.type,
-    coverUrl: album.coverUrl,
+    coverUrl: album.coverUrl?.slice(0, 2000),
     trackCount: album.trackCount,
     genre: album.genre,
     artists: album.artists,

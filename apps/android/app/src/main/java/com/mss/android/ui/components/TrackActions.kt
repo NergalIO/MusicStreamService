@@ -32,6 +32,7 @@ import androidx.compose.material.icons.filled.Send
 import androidx.compose.material.icons.filled.Share
 import androidx.compose.material.icons.filled.SkipNext
 import androidx.compose.material.icons.filled.ThumbDown
+import androidx.compose.material.icons.outlined.CloudUpload
 import androidx.compose.material.icons.outlined.DownloadForOffline
 import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.CircularProgressIndicator
@@ -198,6 +199,9 @@ fun TrackActionsSheet(track: UnifiedTrack, onDismiss: () -> Unit, extra: List<Pa
                 canDownload(track) -> add(
                     SheetItem(Icons.Outlined.DownloadForOffline, if (track.source == SourceId.LOCAL) "Скачать офлайн" else "Скачать", action = run { vm.download(track) }),
                 )
+            }
+            if (track.source == SourceId.LOCAL) {
+                add(SheetItem(Icons.Outlined.CloudUpload, "Отправить на сервер MSS", action = run { vm.publishTracksToMss(listOf(track)) }))
             }
             add(
                 SheetItem(Icons.Default.ContentCopy, "Скопировать название", action = run {

@@ -379,25 +379,14 @@ class PlayerController @Inject constructor(
     }
 
     /**
-     * Повтор трека перематывает в начало: заново запрашивать ссылку не нужно, а веб-плеер Spotify
-     * вдобавок игнорирует запуск уже открытого трека. Если источник уже ушёл дальше, открываем трек заново.
+     * Повтор трека перематывает в начало. После STATE_ENDED seek часто не срабатывает
+     * (контент-URI и одноразовые ссылки уже закрыты) — ставим источник заново.
+     * Веб-плеер Spotify игнорирует повтор уже открытого трека, поэтому его перематываем.
      */
     private fun restartCurrent() {
         val track = queue.getOrNull(index) ?: return
         if (!usingSpotify) {
-            if (active.currentMediaItem == null || active.playbackState == Player.STATE_IDLE) {
-                playCurrent(crossfade = false)
-                return
-            }
-            playGen += 1
-            playedMs = 0
-            lastTickPos = 0
-            preloadedNext = false
-            awaitingStart = true
-            active.seekTo(0)
-            active.play()
-            _state.value = _state.value.copy(positionMs = 0, playing = true)
-            notifyWaveStarted(track)
+            playCurrent(crossfade = false)
             return
         }
         val d = spotifyWeb.dom.value

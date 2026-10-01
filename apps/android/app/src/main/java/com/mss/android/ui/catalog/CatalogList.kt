@@ -43,6 +43,7 @@ fun CatalogList(vm: MssViewModel, nav: NavHostController, modifier: Modifier = M
                 onWave = { vm.startWave(WaveSettings(seed = "track:${it.id}", seedTitle = it.title)) },
                 onSuggest = if (canSuggest) ({ vm.suggestToLobby(it) }) else null,
                 onQueueMany = { vm.enqueueMany(it) },
+                onPublishMany = { vm.publishTracksToMss(it) },
                 currentKey = currentKey,
                 modifier = Modifier.weight(1f),
             )

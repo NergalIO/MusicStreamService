@@ -49,7 +49,7 @@ export function LyricsView({ track }: { track: UnifiedTrack }) {
   if (isError) {
     const text =
       track.source === 'spotify'
-        ? 'Не удалось загрузить текст. Откройте Spotify → Веб-плеер в боковой панели и войдите в аккаунт.'
+        ? 'Не удалось загрузить текст. Откройте Spotify → Веб-плеер и войдите в аккаунт.'
         : 'Не удалось загрузить текст';
     return <Empty text={text} />;
   }

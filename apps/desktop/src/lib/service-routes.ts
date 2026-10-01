@@ -1,4 +1,5 @@
 export type ServiceScope = 'mss' | 'yandex' | 'spotify' | 'vk' | 'media';
+export type CatalogScope = Exclude<ServiceScope, 'media'>;
 
 export const MSS_HOME = '/mss';
 export const YANDEX_HOME = '/yandex';
@@ -6,6 +7,15 @@ export const SPOTIFY_HOME = '/spotify';
 export const SPOTIFY_WEB = '/spotify/web';
 export const VK_HOME = '/vk';
 export const MEDIA_HOME = '/media/library/likes';
+export const MSS_UPLOADS = '/mss/library/uploads';
+export const MSS_PLAYLISTS = `${MSS_UPLOADS}?section=playlists`;
+
+export const SERVICE_HOMES: Record<CatalogScope, string> = {
+  mss: MSS_HOME,
+  yandex: YANDEX_HOME,
+  spotify: SPOTIFY_HOME,
+  vk: VK_HOME,
+};
 
 export function libraryPath(scope: ServiceScope, tab: string): string {
   return `/${scope}/library/${tab}`;

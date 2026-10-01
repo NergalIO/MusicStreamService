@@ -1,16 +1,15 @@
 import type { UnifiedTrack } from '@mss/shared';
 import { keepPreviousData, useQuery, useQueryClient } from '@tanstack/react-query';
-import { ImagePlus, Heart, Loader2, Pencil, Trash2 } from 'lucide-react';
-import { Fragment, useRef, useState } from 'react';
+import { CloudUpload, Download, Heart, Loader2, MoreHorizontal, Pencil, Trash2, Upload } from 'lucide-react';
+import { Fragment, useState } from 'react';
 import { Link, useNavigate, useParams } from 'react-router-dom';
 import { toast } from 'sonner';
 import { CollectionHeader, TrackListSkeleton } from '@/components/media/CollectionHeader';
-import { DownloadAllButton } from '@/components/tracks/DownloadAllButton';
 import { TrackFilterInput, TrackList } from '@/components/tracks/TrackList';
 import { Button } from '@/components/ui/button';
+import { openContextMenu } from '@/components/ui/context-menu';
 import { Dialog } from '@/components/ui/dialog';
 import { Input } from '@/components/ui/input';
-import { UploadButton } from '@/components/uploads/UploadButton';
 import { SOURCE_LABEL } from '@/lib/sources';
 import { cn } from '@/lib/utils';
 import { EmptyState, ErrorState } from '@/components/ui/states';
@@ -19,10 +18,12 @@ import { formatTotalDuration, formatTrackCount } from '@/lib/format';
 import { loadAlbum } from '@/lib/card-menus';
 import { albumMatchKey, findAlbumAlternatives } from '@/lib/album-match';
 import { albumPath, trackArtistLinks } from '@/lib/links';
-import { deleteAlbum, prepareCover, removeAlbumTracks, setAlbumCover, updateAlbum } from '@/lib/mss-library';
+import { deleteAlbum, publishAlbumToMss, removeAlbumTracks, updateAlbum } from '@/lib/mss-library';
 import { playCollection } from '@/lib/player-actions';
-import { libraryPath } from '@/lib/service-routes';
+import { MSS_UPLOADS } from '@/lib/service-routes';
 import { useIsAlbumLiked, useAlbumLikesStore } from '@/store/album-likes-store';
+import { canDownload, downloadKey, useDownloadsStore } from '@/store/downloads-store';
+import { useUploadsStore } from '@/store/uploads-store';
 
 const NO_TRACKS: UnifiedTrack[] = [];
 
@@ -45,7 +46,6 @@ export function AlbumPage() {
   const { view, sort, cycle, filter, setFilter, isNatural } = useTrackSort(album?.tracks ?? NO_TRACKS);
   const [aboutOpen, setAboutOpen] = useState(false);
   const [dialog, setDialog] = useState<'edit' | 'delete' | null>(null);
-  const coverInput = useRef<HTMLInputElement>(null);
   const queryClient = useQueryClient();
   const navigate = useNavigate();
   const liked = useIsAlbumLiked(album);
@@ -133,41 +133,70 @@ export function AlbumPage() {
             >
               <Heart size={18} className={cn(liked && 'fill-primary text-primary')} />
             </Button>
-            {album.source === 'local' && (
-              <>
-                <UploadButton size="lg" variant="secondary" albumId={album.id} label="Добавить треки" />
-                <Button size="icon" variant="ghost" aria-label="Изменить" title="Изменить" onClick={() => setDialog('edit')}>
-                  <Pencil size={16} />
-                </Button>
-                <Button
-                  size="icon"
-                  variant="ghost"
-                  aria-label="Обложка"
-                  title="Обложка"
-                  onClick={() => coverInput.current?.click()}
-                >
-                  <ImagePlus size={16} />
-                </Button>
-                <Button size="icon" variant="ghost" aria-label="Удалить альбом" title="Удалить альбом" onClick={() => setDialog('delete')}>
-                  <Trash2 size={16} />
-                </Button>
-                <input
-                  ref={coverInput}
-                  type="file"
-                  accept="image/jpeg,image/png,image/webp"
-                  className="hidden"
-                  onChange={(e) => {
-                    const file = e.target.files?.[0];
-                    e.target.value = '';
-                    if (!file) return;
-                    void prepareCover(file)
-                      .then((blob) => setAlbumCover(album.id, blob))
-                      .catch((err) => toast.error(err instanceof Error ? err.message : 'Не удалось обновить обложку'));
-                  }}
-                />
-              </>
-            )}
-            <DownloadAllButton tracks={album.tracks} />
+            <Button
+              size="icon"
+              variant="ghost"
+              aria-label="Ещё"
+              title="Ещё"
+              onClick={(e) => {
+                const downloads = useDownloadsStore.getState();
+                const todo = album.tracks.filter((t) => canDownload(t) && !downloads.items[downloadKey(t)]);
+                openContextMenu(e, {
+                  title: album.title,
+                  groups: [
+                    [
+                      {
+                        icon: Download,
+                        label: todo.length ? 'Скачать альбом' : 'Уже скачано',
+                        disabled: !album.tracks.some(canDownload),
+                        action: () => {
+                          if (!todo.length) return void toast('Всё уже скачано');
+                          for (const t of todo) void downloads.download(t);
+                          toast(`Скачиваем ${formatTrackCount(todo.length)}`);
+                        },
+                      },
+                    ],
+                    album.source === 'local'
+                      ? [
+                          {
+                            icon: Upload,
+                            label: 'Добавить треки',
+                            action: () => void useUploadsStore.getState().uploadFromDialog({ albumId: album.id }),
+                          },
+                          { icon: Pencil, label: 'Изменить', action: () => setDialog('edit') },
+                          {
+                            icon: CloudUpload,
+                            label: 'Отправить на сервер MSS',
+                            action: () => {
+                              void toast.promise(
+                                publishAlbumToMss(album).then((r) => {
+                                  if (r.albumId !== album.id) {
+                                    navigate(albumPath('local', r.albumId), { replace: true });
+                                  } else {
+                                    void queryClient.invalidateQueries({ queryKey: ['album', 'local', album.id] });
+                                  }
+                                  return r;
+                                }),
+                                {
+                                  loading: 'Отправляем на сервер MSS…',
+                                  success: (r) =>
+                                    r.uploaded > 0 || r.createdAlbum
+                                      ? 'Отправлено на сервер MSS'
+                                      : 'Альбом уже на сервере MSS',
+                                  error: (e) => (e instanceof Error ? e.message : 'Не удалось отправить на сервер MSS'),
+                                },
+                              );
+                            },
+                          },
+                          { icon: Trash2, label: 'Удалить альбом', danger: true, action: () => setDialog('delete') },
+                        ]
+                      : [],
+                  ],
+                });
+              }}
+            >
+              <MoreHorizontal size={18} />
+            </Button>
           </>
         }
       />
@@ -260,7 +289,7 @@ export function AlbumPage() {
             variant="danger"
             onClick={() => {
               void deleteAlbum(album.id)
-                .then(() => navigate(libraryPath('media', 'albums'), { replace: true }))
+                .then(() => navigate(MSS_UPLOADS, { replace: true }))
                 .catch((e) => toast.error(e instanceof Error ? e.message : 'Не удалось удалить альбом'));
             }}
           >

@@ -16,7 +16,8 @@ import { albumMenu, artistMenu, loadAlbumTracks, loadPlaylistTracks, playlistMen
 import { statsArtistGroup, statsTrackToUnified, useShelves } from '@/lib/stats';
 import { albumLink, playlistPath } from '@/lib/links';
 import { playCollection, startWave, togglePlay } from '@/lib/player-actions';
-import { libraryPath, MSS_HOME, SPOTIFY_HOME, SPOTIFY_WEB, YANDEX_HOME } from '@/lib/service-routes';
+import { libraryPath, MSS_HOME, MSS_UPLOADS, SPOTIFY_HOME, SPOTIFY_WEB, YANDEX_HOME } from '@/lib/service-routes';
+import { ServiceNav } from '@/components/layout/ServiceNav';
 import { WavePanel } from '@/pages/WavePage';
 import {
   useLocalTracks,
@@ -96,28 +97,6 @@ function FeedShelf({ block }: { block: FeedBlock }) {
   );
 }
 
-function RecentShelf() {
-  const history = usePlayerStore((s) => s.history);
-  if (!history.length) return null;
-  const context: PlayContext = { type: 'history', title: 'Недавно играли', path: libraryPath('media', 'history') };
-  const recent = history.slice(0, 20);
-  return (
-    <Shelf title="Недавно играли" subtitle="Полная история — в медиатеке" moreTo={libraryPath('media', 'history')}>
-      <Carousel itemClassName="w-[148px]">
-        {recent.map((t, i) => (
-          <MediaCard
-            key={t.uid}
-            title={t.title}
-            subtitle={t.artist}
-            coverUrl={t.coverUrl}
-            onPlay={() => usePlayerStore.getState().playList(recent, i, context)}
-          />
-        ))}
-      </Carousel>
-    </Shelf>
-  );
-}
-
 function StatsTrackShelf({ title, subtitle, items }: { title: string; subtitle?: string; items: StatsTopTrack[] }) {
   if (items.length < 3) return null;
   const tracks = items.map(statsTrackToUnified);
@@ -170,14 +149,16 @@ function MixesShelf({ artists }: { artists: StatsTopArtist[] }) {
   );
 }
 
-function PersonalShelves({ yandex }: { yandex: boolean }) {
+function PersonalShelves({ yandex, onlySource }: { yandex: boolean; onlySource?: StatsTopTrack['source'] }) {
   const { data } = useShelves();
   if (!data) return null;
+  const frequent = onlySource ? data.frequent.filter((t) => t.source === onlySource) : data.frequent;
+  const forgotten = onlySource ? data.forgotten.filter((t) => t.source === onlySource) : data.forgotten;
   return (
     <>
-      <StatsTrackShelf title="Часто слушаете" subtitle="Ваши треки за последний месяц" items={data.frequent} />
+      <StatsTrackShelf title="Часто слушаете" subtitle="Ваши треки за последний месяц" items={frequent} />
       {yandex && <MixesShelf artists={data.topArtists} />}
-      <StatsTrackShelf title="Давно не слушали" subtitle="Любимое, что вы не включали больше полутора месяцев" items={data.forgotten} />
+      <StatsTrackShelf title="Давно не слушали" subtitle="Любимое, что вы не включали больше полутора месяцев" items={forgotten} />
     </>
   );
 }
@@ -189,11 +170,13 @@ function ChartGrid({ tracks, context }: { tracks: UnifiedTrack[]; context: PlayC
 export function MssHomePage() {
   const listenNow = useMssListenNow(30);
   const local = useLocalTracks(20);
-  const localContext: PlayContext = { type: 'library', title: 'Новое в MSS', path: libraryPath('media', 'uploads') };
+  const localContext: PlayContext = { type: 'library', title: 'Новое в MSS', path: MSS_UPLOADS };
   const listenContext: PlayContext = { type: 'other', title: 'Слушать сейчас', path: MSS_HOME };
 
   return (
-    <div className="space-y-10">
+    <div>
+      <ServiceNav scope="mss" />
+      <div className="space-y-10">
       <h1 className="text-3xl font-bold tracking-tight">{greeting()}</h1>
 
       {listenNow.isError && (
@@ -213,29 +196,28 @@ export function MssHomePage() {
             <ListenNowHero
               tracks={listenNow.tracks}
               homePath={MSS_HOME}
-              idleSubtitle="То, что вы слушаете чаще всего, и свежие треки из библиотеки"
+              idleSubtitle="То, что вы чаще слушаете из загруженных в MSS"
               trackInMix={(current) =>
                 !!current && listenNow.tracks.some((t) => t.source === current.source && t.id === current.id)
               }
             />
           )}
-          <Shelf title="Слушать сейчас" subtitle="Частое, недавнее и новое в MSS">
+          <Shelf title="Слушать сейчас" subtitle="Из треков, загруженных в MSS">
             {listenNow.isLoading ? (
               <TrackListSkeleton rows={8} />
             ) : (
               <TrackList
                 tracks={listenNow.tracks}
                 context={listenContext}
-                showSource
-                emptyText="Включите несколько треков — подборка соберётся из вашей статистики"
+                showSource={false}
+                emptyText="Загрузите треки в MSS — подборка соберётся из ваших прослушиваний"
               />
             )}
           </Shelf>
         </>
       )}
 
-      <RecentShelf />
-      <PersonalShelves yandex={false} />
+      <PersonalShelves yandex={false} onlySource="local" />
       <Shelf title="Новое в MSS" subtitle="Последние загрузки во внутреннюю библиотеку">
         {local.isError ? (
           <ErrorState className="py-8" title="Сервер MSS недоступен" error={local.error} onRetry={() => void local.refetch()} />
@@ -245,6 +227,7 @@ export function MssHomePage() {
           <TrackList tracks={local.data ?? []} context={localContext} showSource={false} emptyText="В библиотеке пока нет треков" />
         )}
       </Shelf>
+      </div>
     </div>
   );
 }
@@ -257,7 +240,9 @@ export function YandexHomePage() {
   const chartContext: PlayContext = { type: 'chart', title: 'Чарт Яндекс Музыки', path: YANDEX_HOME };
 
   return (
-    <div className="space-y-10">
+    <div>
+      <ServiceNav scope="yandex" />
+      <div className="space-y-10">
       {yandex ? <WavePanel /> : (
         <>
           <h1 className="text-3xl font-bold tracking-tight">Яндекс Музыка</h1>
@@ -307,6 +292,7 @@ export function YandexHomePage() {
           )}
         </Shelf>
       )}
+      </div>
     </div>
   );
 }
@@ -368,7 +354,9 @@ export function VkHomePage() {
   const context: PlayContext = { type: 'library', title: 'Моя музыка VK', path: libraryPath('vk', 'likes') };
 
   return (
-    <div className="space-y-10">
+    <div>
+      <ServiceNav scope="vk" />
+      <div className="space-y-10">
       <h1 className="text-3xl font-bold tracking-tight">VK Музыка</h1>
       {vk ? null : (
         <div className="flex flex-wrap items-center justify-between gap-4 rounded-2xl border border-border bg-card p-6">
@@ -416,6 +404,7 @@ export function VkHomePage() {
           )}
         </>
       )}
+      </div>
     </div>
   );
 }
@@ -493,7 +482,9 @@ export function SpotifyHomePage() {
   const context: PlayContext = { type: 'library', title: 'Spotify', path: SPOTIFY_HOME };
 
   return (
-    <div className="space-y-10">
+    <div>
+      <ServiceNav scope="spotify" />
+      <div className="space-y-10">
       <div className="flex flex-wrap items-center justify-between gap-3">
         <h1 className="text-3xl font-bold tracking-tight">Spotify</h1>
         <Link to={SPOTIFY_WEB} className="text-sm font-medium text-muted hover:text-foreground">
@@ -575,6 +566,7 @@ export function SpotifyHomePage() {
           )}
         </>
       )}
+      </div>
     </div>
   );
 }

@@ -94,7 +94,7 @@ export function useYandexPlaylists() {
   });
 }
 
-/** Подборка для MSS «Слушать сейчас»: частое из статистики, история, забытое, новые загрузки. */
+/** Подборка для MSS «Слушать сейчас»: только треки, загруженные в MSS. */
 export function useMssListenNow(limit = 30) {
   const shelves = useShelves();
   const local = useLocalTracks(limit);
@@ -104,7 +104,7 @@ export function useMssListenNow(limit = 30) {
     const out: UnifiedTrack[] = [];
     const seen = new Set<string>();
     const add = (t: UnifiedTrack) => {
-      if (t.playable === false) return;
+      if (t.source !== 'local' || t.playable === false) return;
       const key = `${t.source}:${t.id}`;
       if (seen.has(key)) return;
       seen.add(key);

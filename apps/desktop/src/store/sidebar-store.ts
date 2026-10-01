@@ -2,33 +2,33 @@ import { create } from 'zustand';
 import { persist } from 'zustand/middleware';
 
 export type SidebarSectionId =
-  | 'media'
   | 'mss'
   | 'yandex'
   | 'spotify'
+  | 'vk'
+  | 'party'
   | 'mssPlaylists'
   | 'yandexPlaylists'
   | 'spotifyPlaylists'
-  | 'vk'
   | 'vkPlaylists';
 
 /** Верхнеуровневые блоки боковой панели (можно полностью скрыть). */
-export type SidebarCategoryId = 'media' | 'mss' | 'yandex' | 'spotify' | 'vk';
+export type SidebarCategoryId = 'mss' | 'yandex' | 'spotify' | 'vk' | 'party';
 
 export const SIDEBAR_CATEGORIES: readonly { id: SidebarCategoryId; label: string }[] = [
-  { id: 'media', label: 'Медиатека' },
   { id: 'mss', label: 'MSS' },
   { id: 'yandex', label: 'Яндекс Музыка' },
   { id: 'spotify', label: 'Spotify' },
   { id: 'vk', label: 'VK Музыка' },
+  { id: 'party', label: 'Listening party' },
 ] as const;
 
 const defaultHidden: Record<SidebarCategoryId, boolean> = {
-  media: false,
   mss: false,
   yandex: false,
   spotify: false,
   vk: false,
+  party: false,
 };
 
 export function isSidebarCategory(id: SidebarSectionId): id is SidebarCategoryId {
@@ -54,14 +54,14 @@ interface SidebarState {
 }
 
 const defaultOpen: Record<SidebarSectionId, boolean> = {
-  media: true,
   mss: true,
   yandex: true,
   spotify: true,
+  vk: true,
+  party: true,
   mssPlaylists: true,
   yandexPlaylists: true,
   spotifyPlaylists: true,
-  vk: true,
   vkPlaylists: true,
 };
 
@@ -98,16 +98,24 @@ export const useSidebarStore = create<SidebarState>()(
     }),
     {
       name: 'mss-sidebar',
-      version: 3,
+      version: 4,
       migrate: (persisted) => {
         const state = persisted as {
-          sectionsOpen?: Partial<Record<SidebarSectionId, boolean>>;
-          sectionsHidden?: Partial<Record<SidebarCategoryId, boolean>>;
+          sectionsOpen?: Partial<Record<string, boolean>>;
+          sectionsHidden?: Partial<Record<string, boolean>>;
           pinnedPlaylists?: SidebarPlaylistPin[];
         } | undefined;
+        const sectionsHidden: Record<SidebarCategoryId, boolean> = { ...defaultHidden };
+        for (const id of Object.keys(defaultHidden) as SidebarCategoryId[]) {
+          if (state?.sectionsHidden?.[id]) sectionsHidden[id] = true;
+        }
+        const sectionsOpen: Record<SidebarSectionId, boolean> = { ...defaultOpen };
+        for (const id of Object.keys(defaultOpen) as SidebarSectionId[]) {
+          if (typeof state?.sectionsOpen?.[id] === 'boolean') sectionsOpen[id] = state.sectionsOpen[id]!;
+        }
         return {
-          sectionsOpen: { ...defaultOpen, ...state?.sectionsOpen },
-          sectionsHidden: { ...defaultHidden, ...state?.sectionsHidden },
+          sectionsOpen,
+          sectionsHidden,
           pinnedPlaylists: state?.pinnedPlaylists ?? [],
         };
       },

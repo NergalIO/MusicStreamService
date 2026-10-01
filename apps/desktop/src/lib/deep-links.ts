@@ -35,8 +35,17 @@ export function parseMssLink(url: string): { path: string; play?: { source: stri
       return { path: `/media/search${parsed.search}` };
     case 'library': {
       const tab = parts[0] || 'likes';
-      if (tab === 'history' || tab === 'uploads' || tab === 'downloads') {
+      if (tab === 'history' || tab === 'downloads') {
         return { path: `/media/library/${tab}` };
+      }
+      if (tab === 'uploads' || tab === 'albums') {
+        return { path: '/mss/library/uploads' };
+      }
+      if (tab === 'playlists') {
+        return { path: '/mss/library/uploads?section=playlists' };
+      }
+      if (tab === 'artists') {
+        return { path: '/mss/library/likes' };
       }
       return { path: `/mss/library/${tab}` };
     }

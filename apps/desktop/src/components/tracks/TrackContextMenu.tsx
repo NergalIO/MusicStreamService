@@ -1,6 +1,7 @@
 import type { UnifiedTrack } from '@mss/shared';
 import {
   Copy,
+  CloudUpload,
   Disc3,
   Download,
   FolderOpen,
@@ -25,6 +26,7 @@ import { copyTextWithToast } from '@/lib/clipboard';
 import { formatTrackCount } from '@/lib/format';
 import { suggestTrack } from '@/lib/lobby-api';
 import { mssTrackUrl, similarPath, trackAlbumPath, trackArtistLinks } from '@/lib/links';
+import { publishTracksToMss } from '@/lib/mss-library';
 import { downloadOffline } from '@/lib/offline';
 import { startSpotifyRadio, startWave, toggleLike } from '@/lib/player-actions';
 import { queryClient } from '@/lib/query-client';
@@ -66,6 +68,14 @@ function suggestToParty(track: UnifiedTrack): void {
 function partySuggestItem(track: UnifiedTrack): MenuItem[] {
   if (!isLobbyGuest()) return [];
   return [{ icon: Send, label: 'Предложить', action: () => suggestToParty(track) }];
+}
+
+function publishToMss(tracks: UnifiedTrack[]): void {
+  void toast.promise(publishTracksToMss(tracks), {
+    loading: 'Отправляем на сервер MSS…',
+    success: (r) => (r.uploaded > 0 ? 'Отправлено на сервер MSS' : 'Уже на сервере MSS'),
+    error: (e) => (e instanceof Error ? e.message : 'Не удалось отправить на сервер MSS'),
+  });
 }
 
 export function trackMenuGroups(track: MenuTrack, extras: MenuExtras = {}): MenuItem[][] {
@@ -121,7 +131,10 @@ export function trackMenuGroups(track: MenuTrack, extras: MenuExtras = {}): Menu
     ],
     [
       ...(track.source === 'local'
-        ? [{ icon: Download, label: 'Скачать офлайн', action: () => void downloadOffline(track.id) }]
+        ? [
+            { icon: CloudUpload, label: 'Отправить на сервер MSS', action: () => publishToMss([track]) },
+            { icon: Download, label: 'Скачать офлайн', action: () => void downloadOffline(track.id) },
+          ]
         : []),
       ...(downloads.items[downloadKey(track)]
         ? [
@@ -162,6 +175,7 @@ export function bulkTrackActions(tracks: MenuTrack[], extras: BulkMenuExtras = {
   const playable = tracks.filter((t) => t.playable);
   const notLiked = tracks.filter((t) => !likes.isLiked(t));
   const downloadable = tracks.filter((t) => canDownload(t) && !downloads.items[downloadKey(t)] && !downloads.active[downloadKey(t)]);
+  const publishable = tracks.filter((t) => t.source === 'local');
   const n = formatTrackCount(tracks.length);
 
   return [
@@ -198,6 +212,12 @@ export function bulkTrackActions(tracks: MenuTrack[], extras: BulkMenuExtras = {
           for (const t of downloadable) void downloads.download(t);
           toast(`Скачиваем ${formatTrackCount(downloadable.length)}`);
         },
+      },
+      {
+        icon: CloudUpload,
+        label: publishable.length > 1 ? `Отправить на сервер MSS (${publishable.length})` : 'Отправить на сервер MSS',
+        disabled: !publishable.length,
+        action: () => publishToMss(publishable),
       },
       {
         icon: Copy,

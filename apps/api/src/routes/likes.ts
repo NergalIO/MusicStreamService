@@ -3,7 +3,7 @@ import type { FastifyInstance } from 'fastify';
 import { albumLikeSchema, type LikedAlbumDto, type SourceId } from '@mss/shared';
 import { db } from '../db/client.js';
 import { albumLikes, albums, albumTracks, trackLikes, tracks } from '../db/schema.js';
-import { albumCoverPublicUrl, findOwnAlbum } from '../lib/albums.js';
+import { albumCoverPublicUrl } from '../lib/albums.js';
 import { toTrackDtoWithAvailability } from './tracks.js';
 
 const CATALOG_STATUSES = ['ready', 'registered', 'cached', 'processing'] as const;
@@ -77,18 +77,19 @@ export async function likeRoutes(app: FastifyInstance) {
     for (const row of rows) {
       if (row.source === 'local') {
         const cur = live.get(row.albumId);
-        if (!cur) continue;
-        items.push({
-          source: 'local',
-          id: row.albumId,
-          title: cur.title,
-          artist: cur.artist,
-          year: cur.year,
-          type: cur.type,
-          coverUrl: albumCoverPublicUrl(row.albumId, cur.coverStorageKey),
-          trackCount: cur.trackCount,
-        });
-        continue;
+        if (cur) {
+          items.push({
+            source: 'local',
+            id: row.albumId,
+            title: cur.title,
+            artist: cur.artist,
+            year: cur.year,
+            type: cur.type,
+            coverUrl: albumCoverPublicUrl(row.albumId, cur.coverStorageKey),
+            trackCount: cur.trackCount,
+          });
+          continue;
+        }
       }
       const snap = row.snapshot;
       if (!snap?.title) continue;
@@ -111,11 +112,6 @@ export async function likeRoutes(app: FastifyInstance) {
   app.post('/likes/albums', async (req, reply) => {
     await app.authenticate(req);
     const body = albumLikeSchema.parse(req.body);
-    if (body.source === 'local') {
-      if (!UUID_RE.test(body.id) || !(await findOwnAlbum(body.id, req.userId!))) {
-        return reply.notFound('Альбом не найден');
-      }
-    }
     await db
       .insert(albumLikes)
       .values({

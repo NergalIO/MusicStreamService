@@ -159,7 +159,7 @@ class MssViewModel @Inject constructor(
     private var albumToken = 0
     private val _library = MutableStateFlow(LibraryUi())
     val library: StateFlow<LibraryUi> = _library
-    private val _libraryTab = MutableStateFlow(LibraryTab.TRACKS)
+    private val _libraryTab = MutableStateFlow(LibraryTab.COLLECTION)
     val libraryTab: StateFlow<LibraryTab> = _libraryTab
     private val _librarySource = MutableStateFlow<SourceId?>(null)
     val librarySource: StateFlow<SourceId?> = _librarySource
@@ -499,6 +499,36 @@ class MssViewModel @Inject constructor(
         }
         _detailTitle.value = pl.title
         _tracks.value = pl.tracks
+    }
+
+    fun playPlaylist(playlist: UnifiedPlaylist) = launch {
+        val tracks = runCatching {
+            when (playlist.source) {
+                SourceId.LOCAL -> repo.playlistDetail(playlist.id).second
+                SourceId.YANDEX -> yandex.playlist(playlist.id).tracks
+                SourceId.SPOTIFY -> spotify.playlist(playlist.id).tracks
+                SourceId.VK -> vk.playlist(playlist.id).tracks
+            }
+        }.getOrElse {
+            _error.value = it.message ?: "Не удалось загрузить плейлист"
+            return@launch
+        }
+        if (tracks.isEmpty()) {
+            _error.value = "В плейлисте нет треков"
+            return@launch
+        }
+        play(tracks, 0)
+    }
+
+    fun playAlbum(album: UnifiedAlbum) = launch {
+        val saved = downloads.albums.value.firstOrNull { it.source == album.source && it.id == album.id }
+        val tracks = saved?.tracks?.takeIf { it.isNotEmpty() }
+            ?: runCatching { loadAlbum(album.source, album.id) }.getOrNull()?.tracks.orEmpty()
+        if (tracks.isEmpty()) {
+            _error.value = "Не удалось загрузить альбом"
+            return@launch
+        }
+        play(tracks, 0)
     }
 
     fun openAlbum(source: String, id: String) {
@@ -1400,6 +1430,27 @@ class MssViewModel @Inject constructor(
         _notice.value = "Обложка обновлена"
     }
 
+    fun publishAlbumToMss(album: AlbumWithTracks) = launch {
+        val extra = extraPublishFiles(album.tracks)
+        val result = repo.publishAlbumToMss(album, extra)
+        refreshLibraryUploads()
+        runCatching { repo.album(result.albumId) }.getOrNull()?.let { showAlbum(it) }
+        _notice.value = if (result.uploaded > 0 || result.createdAlbum) {
+            "Отправлено на сервер MSS"
+        } else {
+            "Альбом уже на сервере MSS"
+        }
+    }
+
+    fun publishTracksToMss(tracks: List<UnifiedTrack>) = launch {
+        val result = repo.publishTracksToMss(tracks, extraPublishFiles(tracks))
+        refreshLibraryUploads()
+        _notice.value = if (result.uploaded > 0) "Отправлено на сервер MSS" else "Уже на сервере MSS"
+    }
+
+    private fun extraPublishFiles(tracks: List<UnifiedTrack>): Map<String, Uri> =
+        tracks.mapNotNull { t -> downloads.fileFor(t)?.let { t.id to Uri.fromFile(it) } }.toMap()
+
     fun createLobby(title: String, pub: Boolean) = launch { lobby.create(title, pub) }
 
     fun joinLobby(code: String) = launch { lobby.join(code) }
@@ -1527,15 +1578,18 @@ private val AUTH_ERROR_HINTS = listOf("войдите", "сессия", "не п
 private val LIBRARY_SOURCES = listOf(SourceId.LOCAL, SourceId.YANDEX, SourceId.SPOTIFY, SourceId.VK)
 private const val LIBRARY_LIKES_LIMIT = 300
 
-enum class LibraryTab(val title: String) {
+enum class LibraryTab(val title: String, val inBar: Boolean = false) {
+    COLLECTION("Коллекция", true),
+    DOWNLOADS("Скачанное", true),
+    UPLOADS("Мои файлы", true),
+    HISTORY("История", true),
     TRACKS("Треки"),
     PLAYLISTS("Плейлисты"),
     ARTISTS("Исполнители"),
     ALBUMS("Альбомы"),
-    DOWNLOADS("Скачанное"),
-    UPLOADS("Мои файлы"),
-    HISTORY("История"),
 }
+
+val LibraryTab.barTab: LibraryTab get() = if (inBar) this else LibraryTab.COLLECTION
 
 data class LibraryUi(
     val likes: Map<SourceId, List<UnifiedTrack>> = emptyMap(),

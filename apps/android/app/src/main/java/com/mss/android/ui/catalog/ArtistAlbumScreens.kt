@@ -1,10 +1,16 @@
 package com.mss.android.ui.catalog
 
-import androidx.activity.compose.rememberLauncherForActivityResult
-import androidx.activity.result.contract.ActivityResultContracts
 import androidx.compose.animation.animateContentSize
 import androidx.compose.foundation.background
 import androidx.compose.foundation.clickable
+import androidx.compose.foundation.layout.navigationBarsPadding
+import androidx.compose.foundation.rememberScrollState
+import androidx.compose.foundation.verticalScroll
+import androidx.compose.material.icons.filled.MoreVert
+import androidx.compose.material3.ExperimentalMaterial3Api
+import androidx.compose.material3.HorizontalDivider
+import androidx.compose.material3.ModalBottomSheet
+import androidx.compose.material3.rememberModalBottomSheetState
 import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material3.FilterChip
@@ -31,6 +37,8 @@ import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.collectAsState
 import androidx.compose.runtime.getValue
+import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.graphics.vector.ImageVector
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.text.font.FontWeight
@@ -53,19 +61,19 @@ import androidx.compose.material.icons.filled.DownloadForOffline
 import androidx.compose.material.icons.filled.Favorite
 import androidx.compose.material.icons.filled.FavoriteBorder
 import androidx.compose.material.icons.filled.PlayArrow
+import androidx.compose.material.icons.outlined.CloudUpload
 import androidx.compose.material.icons.outlined.DownloadForOffline
-import androidx.compose.material.icons.outlined.Image
 import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.Button
 import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
-import androidx.compose.material3.OutlinedButton
 import androidx.compose.material3.TextButton
 import androidx.compose.runtime.remember
 import com.mss.core.model.AlbumWithTracks
 import androidx.compose.foundation.layout.ExperimentalLayoutApi
 import androidx.compose.foundation.layout.FlowRow
 import com.mss.android.ui.components.SourceTag
+import com.mss.android.ui.components.TrackList
 import com.mss.android.ui.components.TrackRow
 import com.mss.android.ui.components.sourceLabel
 import com.mss.android.ui.navigation.Routes
@@ -228,7 +236,21 @@ fun AlbumScreen(vm: MssViewModel, nav: NavHostController) {
     val album = page.album
     val scheme = MaterialTheme.colorScheme
     var aboutOpen by rememberSaveable(album?.id) { mutableStateOf(false) }
-    LazyColumn(Modifier.fillMaxSize(), contentPadding = PaddingValues(bottom = 24.dp)) {
+    val tracks = album?.tracks.orEmpty()
+    TrackList(
+        tracks = tracks,
+        liked = liked,
+        onPlay = { list, i -> vm.play(list, i) },
+        onLike = { vm.toggleLike(it) },
+        onDownload = { vm.download(it) },
+        onSimilar = { nav.openRoute(Routes.similar(it.source.name.lowercase(), it.id)) },
+        onQueue = { vm.player.enqueue(it) },
+        onWave = { vm.startWave(WaveSettings(seed = "track:${it.id}", seedTitle = it.title)) },
+        onSuggest = if (canSuggest) ({ vm.suggestToLobby(it) }) else null,
+        onQueueMany = { vm.enqueueMany(it) },
+        onPublishMany = { vm.publishTracksToMss(it) },
+        currentKey = currentKey,
+        header = {
         item {
             Column(
                 Modifier.fillMaxWidth().padding(16.dp),
@@ -334,16 +356,14 @@ fun AlbumScreen(vm: MssViewModel, nav: NavHostController) {
                 }
             }
         }
-        if (album?.tracks?.isNotEmpty() == true) {
+        if (tracks.isNotEmpty()) {
             item { SectionLabel("Треки") }
         }
-        val tracks = album?.tracks.orEmpty()
-        itemsIndexed(tracks, key = { i, t -> "${t.source}:${t.id}:$i" }) { index, track ->
-            trackRow(vm, nav, tracks, index, track, liked, canSuggest, currentKey)
-        }
-    }
+        },
+    )
 }
 
+@OptIn(ExperimentalMaterial3Api::class)
 @Composable
 private fun AlbumActions(vm: MssViewModel, nav: NavHostController, album: AlbumWithTracks, modifier: Modifier = Modifier) {
     val downloadedKeys by vm.downloadedKeys.collectAsState()
@@ -352,6 +372,8 @@ private fun AlbumActions(vm: MssViewModel, nav: NavHostController, album: AlbumW
     val likedAlbums by vm.likedAlbums.collectAsState()
     var confirm by remember { mutableStateOf(false) }
     var confirmCloud by remember { mutableStateOf(false) }
+    var menu by remember { mutableStateOf(false) }
+    val sheet = rememberModalBottomSheetState(skipPartiallyExpanded = true)
     val scheme = MaterialTheme.colorScheme
     val isLiked = likedAlbums.any { it.source == album.source && it.id == album.id }
     val tracks = album.tracks.filter { canDownload(it) }
@@ -360,50 +382,62 @@ private fun AlbumActions(vm: MssViewModel, nav: NavHostController, album: AlbumW
     val running = keys.count { it in active }
     val saved = savedAlbums.any { it.source == album.source && it.id == album.id }
     val complete = tracks.isNotEmpty() && done == tracks.size
-    val coverLauncher = rememberLauncherForActivityResult(ActivityResultContracts.GetContent()) { uri ->
-        uri?.let { vm.setAlbumCover(album.id, it) }
-    }
-    Column(modifier, verticalArrangement = Arrangement.spacedBy(8.dp), horizontalAlignment = Alignment.CenterHorizontally) {
-        Row(horizontalArrangement = Arrangement.spacedBy(8.dp), verticalAlignment = Alignment.CenterVertically) {
-            Button(onClick = { vm.play(album.tracks, 0) }, enabled = album.tracks.isNotEmpty()) {
-                Icon(Icons.Default.PlayArrow, null, Modifier.size(18.dp))
-                Text("Слушать", Modifier.padding(start = 4.dp))
-            }
-            IconButton({ vm.toggleAlbumLike(album) }) {
-                Icon(
-                    if (isLiked) Icons.Default.Favorite else Icons.Default.FavoriteBorder,
-                    contentDescription = if (isLiked) "Убрать из «Мне нравится»" else "Мне нравится",
-                    tint = if (isLiked) scheme.primary else scheme.onSurfaceVariant,
-                )
-            }
-            when {
-                tracks.isEmpty() -> {}
-                running > 0 -> OutlinedButton(onClick = {}, enabled = false) {
-                    CircularProgressIndicator(Modifier.size(16.dp), strokeWidth = 2.dp, color = DownloadedGreen)
-                    Text("Скачано $done из ${tracks.size}", Modifier.padding(start = 8.dp))
-                }
-                complete && saved -> OutlinedButton(onClick = { confirm = true }) {
-                    Icon(Icons.Filled.DownloadForOffline, null, Modifier.size(18.dp), tint = DownloadedGreen)
-                    Text("Скачано", Modifier.padding(start = 6.dp), color = DownloadedGreen)
-                }
-                else -> OutlinedButton(onClick = { vm.downloadAlbum(album) }) {
-                    Icon(Icons.Outlined.DownloadForOffline, null, Modifier.size(18.dp))
-                    Text(
-                        if (done > 0) "Докачать (${tracks.size - done})" else "Скачать альбом",
-                        Modifier.padding(start = 6.dp),
-                    )
-                }
-            }
+    Row(modifier, horizontalArrangement = Arrangement.spacedBy(8.dp), verticalAlignment = Alignment.CenterVertically) {
+        Button(onClick = { vm.play(album.tracks, 0) }, enabled = album.tracks.isNotEmpty()) {
+            Icon(Icons.Default.PlayArrow, null, Modifier.size(18.dp))
+            Text("Слушать", Modifier.padding(start = 4.dp))
         }
-        if (album.source == SourceId.LOCAL) {
-            Row(horizontalArrangement = Arrangement.spacedBy(8.dp), verticalAlignment = Alignment.CenterVertically) {
-                OutlinedButton(onClick = { coverLauncher.launch("image/*") }) {
-                    Icon(Icons.Outlined.Image, null, Modifier.size(18.dp))
-                    Text("Обложка", Modifier.padding(start = 6.dp))
+        IconButton({ vm.toggleAlbumLike(album) }) {
+            Icon(
+                if (isLiked) Icons.Default.Favorite else Icons.Default.FavoriteBorder,
+                contentDescription = if (isLiked) "Убрать из «Мне нравится»" else "Мне нравится",
+                tint = if (isLiked) scheme.primary else scheme.onSurfaceVariant,
+            )
+        }
+        IconButton({ menu = true }) {
+            Icon(Icons.Default.MoreVert, "Ещё", tint = scheme.onSurfaceVariant)
+        }
+    }
+    if (menu) {
+        ModalBottomSheet(onDismissRequest = { menu = false }, sheetState = sheet) {
+            Column(Modifier.fillMaxWidth().verticalScroll(rememberScrollState()).navigationBarsPadding().padding(bottom = 8.dp)) {
+                Text(
+                    album.title,
+                    style = MaterialTheme.typography.titleMedium,
+                    fontWeight = FontWeight.SemiBold,
+                    maxLines = 2,
+                    overflow = TextOverflow.Ellipsis,
+                    modifier = Modifier.padding(horizontal = 20.dp, vertical = 8.dp),
+                )
+                HorizontalDivider(Modifier.padding(vertical = 4.dp), color = scheme.onSurface.copy(alpha = 0.08f))
+                when {
+                    tracks.isEmpty() -> {}
+                    running > 0 -> AlbumMenuRow(
+                        Icons.Filled.DownloadForOffline,
+                        "Скачано $done из ${tracks.size}",
+                        DownloadedGreen,
+                    ) {}
+                    complete && saved -> AlbumMenuRow(Icons.Filled.DownloadForOffline, "Удалить загрузку", scheme.error) {
+                        menu = false
+                        confirm = true
+                    }
+                    else -> AlbumMenuRow(
+                        Icons.Outlined.DownloadForOffline,
+                        if (done > 0) "Докачать (${tracks.size - done})" else "Скачать альбом",
+                    ) {
+                        menu = false
+                        vm.downloadAlbum(album)
+                    }
                 }
-                OutlinedButton(onClick = { confirmCloud = true }) {
-                    Icon(Icons.Default.Delete, null, Modifier.size(18.dp), tint = scheme.error)
-                    Text("Удалить", Modifier.padding(start = 6.dp), color = scheme.error)
+                if (album.source == SourceId.LOCAL) {
+                    AlbumMenuRow(Icons.Outlined.CloudUpload, "Отправить на сервер MSS") {
+                        menu = false
+                        vm.publishAlbumToMss(album)
+                    }
+                    AlbumMenuRow(Icons.Default.Delete, "Удалить альбом", scheme.error) {
+                        menu = false
+                        confirmCloud = true
+                    }
                 }
             }
         }
@@ -433,6 +467,24 @@ private fun AlbumActions(vm: MssViewModel, nav: NavHostController, album: AlbumW
             },
             dismissButton = { TextButton({ confirmCloud = false }) { Text("Отмена") } },
         )
+    }
+}
+
+@Composable
+private fun AlbumMenuRow(
+    icon: ImageVector,
+    label: String,
+    tint: Color = MaterialTheme.colorScheme.onSurface,
+    onClick: () -> Unit,
+) {
+    val iconTint = if (tint == MaterialTheme.colorScheme.onSurface) MaterialTheme.colorScheme.onSurfaceVariant else tint
+    Row(
+        Modifier.fillMaxWidth().clickable(onClick = onClick).padding(horizontal = 20.dp, vertical = 13.dp),
+        verticalAlignment = Alignment.CenterVertically,
+        horizontalArrangement = Arrangement.spacedBy(18.dp),
+    ) {
+        Icon(icon, null, tint = iconTint, modifier = Modifier.size(22.dp))
+        Text(label, color = tint, style = MaterialTheme.typography.bodyLarge, maxLines = 1, overflow = TextOverflow.Ellipsis)
     }
 }
 

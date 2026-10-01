@@ -8,7 +8,7 @@ import {
   Routes,
   useParams,
 } from 'react-router-dom';
-import { libraryPath, YANDEX_HOME } from '@/lib/service-routes';
+import { libraryPath, MSS_PLAYLISTS, MSS_UPLOADS, YANDEX_HOME } from '@/lib/service-routes';
 import { Toaster } from 'sonner';
 import { AppShell } from '@/components/layout/AppShell';
 import { loadSession } from '@/lib/api';
@@ -32,8 +32,17 @@ import { WrappedPage } from '@/pages/WrappedPage';
 
 function LegacyLibraryRedirect() {
   const { tab } = useParams();
-  if (tab === 'history' || tab === 'uploads' || tab === 'downloads') {
+  if (tab === 'history' || tab === 'downloads') {
     return <Navigate to={libraryPath('media', tab)} replace />;
+  }
+  if (tab === 'uploads' || tab === 'albums') {
+    return <Navigate to={MSS_UPLOADS} replace />;
+  }
+  if (tab === 'playlists') {
+    return <Navigate to={MSS_PLAYLISTS} replace />;
+  }
+  if (tab === 'artists') {
+    return <Navigate to={libraryPath('mss', 'likes')} replace />;
   }
   return <Navigate to={libraryPath('mss', tab ?? 'likes')} replace />;
 }
@@ -118,7 +127,7 @@ function AppRoutes() {
           <Route path="/vk/library/:tab" element={<LibraryPage scope="vk" />} />
           <Route path="/library" element={<Navigate to="/mss/library/likes" replace />} />
           <Route path="/library/:tab" element={<LegacyLibraryRedirect />} />
-          <Route path="/playlists" element={<Navigate to="/mss/library/playlists" replace />} />
+          <Route path="/playlists" element={<Navigate to={MSS_PLAYLISTS} replace />} />
           <Route path="/playlists/:id" element={<PlaylistDetailPage />} />
           <Route path="/stats" element={<StatsPage />} />
           <Route path="/stats/wrapped" element={<WrappedPage />} />
