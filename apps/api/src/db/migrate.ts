@@ -243,6 +243,16 @@ CREATE TABLE IF NOT EXISTS album_likes (
   PRIMARY KEY (user_id, source, album_id)
 );
 CREATE INDEX IF NOT EXISTS album_likes_user_idx ON album_likes (user_id, created_at DESC);
+
+CREATE TABLE IF NOT EXISTS artist_likes (
+  user_id UUID NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+  source VARCHAR(20) NOT NULL,
+  artist_id VARCHAR(200) NOT NULL,
+  snapshot JSONB,
+  created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+  PRIMARY KEY (user_id, source, artist_id)
+);
+CREATE INDEX IF NOT EXISTS artist_likes_user_idx ON artist_likes (user_id, created_at DESC);
 `;
 
 async function main() {

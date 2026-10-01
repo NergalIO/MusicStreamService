@@ -8,9 +8,10 @@ import { Carousel, Shelf } from '@/components/media/Carousel';
 import { MediaCard } from '@/components/media/MediaCard';
 import { TrackList } from '@/components/tracks/TrackList';
 import { Button } from '@/components/ui/button';
+import { Heart } from 'lucide-react';
 import { Input } from '@/components/ui/input';
 import { ErrorState } from '@/components/ui/states';
-import { artistPath, loadLocalArtistTracks, resolveExternalArtist } from '@/lib/artists';
+import { artistPath, loadLocalArtistAlbums, loadLocalArtistTracks, localArtistLikeId, resolveExternalArtist } from '@/lib/artists';
 import { albumMenu, artistMenu, loadAlbumTracks } from '@/lib/card-menus';
 import { formatTrackCount } from '@/lib/format';
 import { albumLink } from '@/lib/links';
@@ -18,6 +19,7 @@ import { playCollection } from '@/lib/player-actions';
 import { EXTERNAL_SOURCES, SOURCE_LABEL } from '@/lib/sources';
 import { cn } from '@/lib/utils';
 import type { PlayContext } from '@/store/player-store';
+import { useArtistLikesStore, useIsArtistLiked } from '@/store/artist-likes-store';
 
 const ARTIST_TRACKS_LIMIT = 500;
 const SOURCE_ORDER: SourceId[] = ['local', 'yandex', 'spotify', 'vk'];
@@ -151,6 +153,7 @@ export function ArtistPage() {
   const [refs, setRefs] = useState<Partial<Record<SourceId, UnifiedArtist>>>({});
   const emptyTracks = (): TracksBySource => ({ local: null, spotify: null, yandex: null, vk: null });
   const [tracks, setTracks] = useState<TracksBySource>(emptyTracks);
+  const [localAlbums, setLocalAlbums] = useState<UnifiedAlbum[]>([]);
   const [failed, setFailed] = useState<SourceId[]>([]);
   const [reloadKey, setReloadKey] = useState(0);
 
@@ -158,6 +161,7 @@ export function ArtistPage() {
     let cancelled = false;
     setRefs({});
     setTracks(emptyTracks());
+    setLocalAlbums([]);
     setFailed([]);
     const specified = [spotifyId && 'spotify', yandexId && 'yandex', vkId && 'vk'].filter(Boolean) as SourceId[];
     setPicked(specified.length === 1 ? specified[0] : null);
@@ -176,6 +180,13 @@ export function ArtistPage() {
     loadLocalArtistTracks(name)
       .then((list) => put('local', list))
       .catch(() => fail('local'));
+    loadLocalArtistAlbums(name)
+      .then((albums) => {
+        if (!cancelled) setLocalAlbums(albums);
+      })
+      .catch(() => {
+        if (!cancelled) setLocalAlbums([]);
+      });
 
     const ids: Record<(typeof EXTERNAL_SOURCES)[number], string | null> = {
       spotify: spotifyId,
@@ -227,8 +238,11 @@ export function ArtistPage() {
         const profile = profiles[source];
         const ref = refs[source];
         const list = tracks[source] ?? [];
-        if (!profile && !ref && !list.length) return [];
-        const releases = (profile?.albums.length ?? 0) + (profile?.singles.length ?? 0);
+        if (!profile && !ref && !list.length && !(source === 'local' && localAlbums.length)) return [];
+        const releases =
+          source === 'local'
+            ? localAlbums.length
+            : (profile?.albums.length ?? 0) + (profile?.singles.length ?? 0);
         return [
           {
             source,
@@ -240,7 +254,7 @@ export function ArtistPage() {
           },
         ];
       }),
-    [profiles, refs, tracks],
+    [profiles, refs, tracks, localAlbums],
   );
 
   const loadingAny = SOURCE_ORDER.some((s) => tracks[s] === null);
@@ -285,6 +299,19 @@ export function ArtistPage() {
   }, [selectedTracks, textFilter]);
   const allTracks = SOURCE_ORDER.flatMap((s) => tracks[s] ?? []);
   const label = selected ? SOURCE_LABEL[selected] : '';
+  const mssArtist = useMemo<UnifiedArtist>(
+    () => ({
+      source: 'local',
+      id: localArtistLikeId(name),
+      name,
+      imageUrl,
+      genres,
+      trackCount: (tracks.local ?? []).length || undefined,
+    }),
+    [name, imageUrl, genres, tracks.local],
+  );
+  const liked = useIsArtistLiked(mssArtist);
+  const toggleArtistLike = useArtistLikesStore((s) => s.toggle);
 
   return (
     <div>
@@ -303,6 +330,18 @@ export function ArtistPage() {
           .join(' · ')}
         onPlay={() => playCollection(popular.length ? popular : allTracks, context)}
         onShuffle={() => playCollection(allTracks.length ? allTracks : popular, context, true)}
+        actions={
+          <Button
+            size="icon"
+            variant="ghost"
+            aria-label={liked ? 'Убрать из «Мне нравится»' : 'Мне нравится'}
+            aria-pressed={liked}
+            title={liked ? 'Убрать из «Мне нравится»' : 'Мне нравится'}
+            onClick={() => void toggleArtistLike(mssArtist)}
+          >
+            <Heart size={18} className={cn(liked && 'fill-primary text-primary')} />
+          </Button>
+        }
       />
 
       <div className="space-y-10">
@@ -367,8 +406,23 @@ export function ArtistPage() {
           </Shelf>
         )}
 
-        {selectedProfile && <AlbumShelf title={`Альбомы · ${label}`} albums={selectedProfile.albums} />}
-        {selectedProfile && <AlbumShelf title={`Синглы и EP · ${label}`} albums={selectedProfile.singles} />}
+        {selected === 'local' ? (
+          <>
+            <AlbumShelf
+              title={`Альбомы · ${label}`}
+              albums={localAlbums.filter((a) => a.type !== 'single' && a.type !== 'ep')}
+            />
+            <AlbumShelf
+              title={`Синглы и EP · ${label}`}
+              albums={localAlbums.filter((a) => a.type === 'single' || a.type === 'ep')}
+            />
+          </>
+        ) : (
+          <>
+            {selectedProfile && <AlbumShelf title={`Альбомы · ${label}`} albums={selectedProfile.albums} />}
+            {selectedProfile && <AlbumShelf title={`Синглы и EP · ${label}`} albums={selectedProfile.singles} />}
+          </>
+        )}
 
         <Shelf title={selected ? `Все треки · ${label}` : 'Все треки'}>
           <div className="mb-3 flex justify-end">

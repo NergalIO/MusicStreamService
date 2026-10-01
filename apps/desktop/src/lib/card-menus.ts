@@ -1,4 +1,4 @@
-import type { AlbumDetailDto, AlbumWithTracks, PlaylistEntryDto, UnifiedAlbum, UnifiedPlaylist, UnifiedTrack } from '@mss/shared';
+import type { AlbumDetailDto, AlbumWithTracks, PlaylistEntryDto, UnifiedAlbum, UnifiedArtist, UnifiedPlaylist, UnifiedTrack } from '@mss/shared';
 import { Copy, CloudUpload, Download, FileDown, Heart, Link2, ListEnd, ListPlus, ListStart, MicVocal, Pin, PinOff, Play, Radio, Shuffle } from 'lucide-react';
 import { toast } from 'sonner';
 import { openPlaylistPicker } from '@/components/tracks/PlaylistPicker';
@@ -16,6 +16,7 @@ import { mapLocalAlbumDetail } from '@/lib/queries';
 import { mapPlaylistEntry } from '@/lib/sources';
 import { canDownload, downloadKey, useDownloadsStore } from '@/store/downloads-store';
 import { useAlbumLikesStore } from '@/store/album-likes-store';
+import { useArtistLikesStore } from '@/store/artist-likes-store';
 import { usePlayerStore, type PlayContext } from '@/store/player-store';
 import { useSidebarStore } from '@/store/sidebar-store';
 
@@ -237,6 +238,14 @@ export function artistMenu(group: ArtistGroup): MenuSpec {
   const artist = yandex ?? vk ?? spotify;
   const loadPopular = () => window.electronAPI.connectors.artistTracks(source!, artist!.id, 50, artist!.name);
   const context: PlayContext = { type: 'artist', title: group.name, path: artistPath(group.name, group.refs) };
+  const localArtist: UnifiedArtist = group.refs.local ?? {
+    source: 'local',
+    id: group.name,
+    name: group.name,
+    imageUrl: group.imageUrl,
+    genres: group.genres,
+  };
+  const liked = useArtistLikesStore.getState().isLiked(localArtist);
   return {
     title: group.name,
     groups: [
@@ -256,6 +265,11 @@ export function artistMenu(group: ArtistGroup): MenuSpec {
           ]
         : [],
       [
+        {
+          icon: Heart,
+          label: liked ? 'Убрать из «Мне нравится»' : 'Мне нравится',
+          action: () => void useArtistLikesStore.getState().toggle(localArtist),
+        },
         { icon: MicVocal, label: 'Открыть страницу', action: (nav) => nav(artistPath(group.name, group.refs)) },
         { icon: Copy, label: 'Скопировать имя', action: () => copyTextWithToast(group.name, 'Имя скопировано') },
       ],

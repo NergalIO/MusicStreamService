@@ -118,6 +118,15 @@ export const reorderAlbumSchema = z.object({
   trackIds: z.array(z.string().uuid()).max(500),
 });
 
+export const artistLikeSchema = z.object({
+  source: z.enum(['local', 'yandex', 'spotify', 'vk']),
+  id: z.string().trim().min(1).max(200),
+  name: z.string().trim().min(1).max(500),
+  imageUrl: z.string().trim().max(2000).optional(),
+  genres: z.array(z.string().trim().max(80)).max(20).optional(),
+  trackCount: z.number().int().min(0).max(10000).optional(),
+});
+
 export const albumLikeSchema = z.object({
   source: z.enum(['local', 'yandex', 'spotify', 'vk']),
   id: z.string().trim().min(1).max(100),

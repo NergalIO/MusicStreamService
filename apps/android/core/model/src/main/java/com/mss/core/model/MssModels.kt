@@ -183,6 +183,9 @@ data class UnifiedArtist(
     val trackCount: Int? = null,
 )
 
+fun localArtistLikeId(name: String): String =
+    name.trim().lowercase().replace('ё', 'е').replace(Regex("\\s+"), " ").take(200)
+
 @Serializable
 data class UnifiedAlbum(
     val source: SourceId,

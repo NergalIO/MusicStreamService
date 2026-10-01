@@ -94,6 +94,16 @@ export interface LikedAlbumDto {
   genre?: string | null;
 }
 
+/** Лайк исполнителя MSS: снимок имени и обложки, отдельной сущности в каталоге нет. */
+export interface LikedArtistDto {
+  source: SourceId;
+  id: string;
+  name: string;
+  imageUrl?: string | null;
+  genres?: string[];
+  trackCount?: number;
+}
+
 export interface ExternalTrackSnapshot {
   title: string;
   artist: string;

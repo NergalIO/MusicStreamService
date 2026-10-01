@@ -2,55 +2,23 @@ import { and, asc, desc, eq, inArray, sql } from 'drizzle-orm';
 import { config } from '../config.js';
 import { db } from '../db/client.js';
 import { albumLikes, albumTracks, albums, tracks } from '../db/schema.js';
+import { normalizeAlbumIdentity, sameTrack, type TrackIdentity } from './identity.js';
 import { deleteObject } from './storage.js';
 
 type AlbumRow = typeof albums.$inferSelect;
 type AlbumDb = typeof db;
+type TrackSig = TrackIdentity & { contentHash: string | null; durationMs: number | null };
 
-type TrackSig = {
-  id: string;
-  title: string;
-  artist: string;
-  contentHash: string | null;
-  durationMs: number | null;
-};
+export { normalizeAlbumIdentity };
 
 export function albumCoverPublicUrl(id: string, coverStorageKey: string | null): string | null {
   if (!coverStorageKey) return null;
   return `${config.publicUrl}/albums/${id}/cover?v=${encodeURIComponent(coverStorageKey.split('/').pop()!)}`;
 }
 
-function foldText(value: string): string {
-  return value.trim().toLowerCase().replace(/ё/g, 'е').replace(/\s+/g, ' ');
-}
-
-export function normalizeAlbumIdentity(title: string, artist: string): string {
-  return `${foldText(title)}\0${foldText(artist)}`;
-}
-
-function normalizeTrackIdentity(title: string, artist: string): string {
-  return `${foldText(title)}\0${foldText(artist)}`;
-}
-
 function yearsCompatible(a: number | null | undefined, b: number | null | undefined): boolean {
   if (!a || !b) return true;
   return a === b;
-}
-
-function durationClose(a: number | null | undefined, b: number | null | undefined): boolean {
-  if (!a || !b) return true;
-  return Math.abs(a - b) <= 8000;
-}
-
-function sameTrack(a: TrackSig, b: TrackSig): boolean {
-  if (a.id === b.id) return true;
-  const ha = a.contentHash?.toLowerCase();
-  const hb = b.contentHash?.toLowerCase();
-  if (ha && hb && ha === hb) return true;
-  return (
-    normalizeTrackIdentity(a.title, a.artist) === normalizeTrackIdentity(b.title, b.artist) &&
-    durationClose(a.durationMs, b.durationMs)
-  );
 }
 
 function enoughTrackOverlap(matched: number, total: number): boolean {

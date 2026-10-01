@@ -140,6 +140,8 @@ class MssViewModel @Inject constructor(
     val likedIds: StateFlow<Set<String>> = _likedIds
     private val _likedAlbums = MutableStateFlow<List<UnifiedAlbum>>(emptyList())
     val likedAlbums: StateFlow<List<UnifiedAlbum>> = _likedAlbums
+    private val _likedArtists = MutableStateFlow<List<UnifiedArtist>>(emptyList())
+    val likedArtists: StateFlow<List<UnifiedArtist>> = _likedArtists
     private val _albums = MutableStateFlow<List<UnifiedAlbum>>(emptyList())
     val albums: StateFlow<List<UnifiedAlbum>> = _albums
     private val _searchPlaylists = MutableStateFlow<List<UnifiedPlaylist>>(emptyList())
@@ -207,6 +209,7 @@ class MssViewModel @Inject constructor(
                     loadLikesIds()
                 } else {
                     _likedAlbums.value = emptyList()
+                    _likedArtists.value = emptyList()
                 }
             }
         }
@@ -422,6 +425,7 @@ class MssViewModel @Inject constructor(
             val uploadsD = async { runCatching { repo.uploads() } }
             val albumsD = async { runCatching { repo.albums() } }
             val likedD = async { runCatching { repo.likedAlbums() } }
+            val likedArtistsD = async { runCatching { repo.likedArtists() } }
             val yandexAlbumsD = async {
                 if (sourceConnected(SourceId.YANDEX)) runCatching { yandex.likedAlbums() } else Result.success(emptyList())
             }
@@ -436,17 +440,20 @@ class MssViewModel @Inject constructor(
                 yandexAlbumsD.await().getOrDefault(emptyList()),
                 likedD.await().getOrDefault(_library.value.likedAlbums),
             )
+            val likedArtists = likedArtistsD.await().getOrDefault(_library.value.likedArtists)
             val errors = perSource.mapNotNull { (src, likes, playlists) ->
                 (likes.exceptionOrNull() ?: playlists.exceptionOrNull())?.let { src to (it.message ?: "Не удалось загрузить") }
             }.toMap()
             val likes = perSource.associate { (src, result, _) -> src to result.getOrDefault(emptyList()) }
             _likedAlbums.value = likedAlbums
+            _likedArtists.value = likedArtists
             _library.value = LibraryUi(
                 likes = likes,
                 playlists = perSource.associate { (src, _, result) -> src to result.getOrDefault(emptyList()) },
                 uploads = uploads.getOrDefault(_library.value.uploads),
                 albums = albums.getOrDefault(_library.value.albums),
                 likedAlbums = likedAlbums,
+                likedArtists = likedArtists,
                 connected = connected,
                 errors = errors,
                 loading = false,
@@ -486,8 +493,10 @@ class MssViewModel @Inject constructor(
         val uploads = repo.uploads()
         val albums = runCatching { repo.albums() }.getOrDefault(_library.value.albums)
         val likedAlbums = runCatching { repo.likedAlbums() }.getOrDefault(_likedAlbums.value)
+        val likedArtists = runCatching { repo.likedArtists() }.getOrDefault(_likedArtists.value)
         _likedAlbums.value = likedAlbums
-        _library.value = _library.value.copy(uploads = uploads, albums = albums, likedAlbums = likedAlbums)
+        _likedArtists.value = likedArtists
+        _library.value = _library.value.copy(uploads = uploads, albums = albums, likedAlbums = likedAlbums, likedArtists = likedArtists)
     }
 
     private fun reloadLibraryUploads() = launch { refreshLibraryUploads() }
@@ -771,7 +780,7 @@ class MssViewModel @Inject constructor(
     }
 
     private suspend fun loadMssArtist(name: String): ArtistBundle {
-        val tracks = runCatching { repo.artistTracks(name) }.getOrDefault(emptyList())
+        val tracks = dedupeMssTracks(runCatching { repo.artistTracks(name) }.getOrDefault(emptyList()))
         val owned = runCatching { repo.albums(name) }.getOrDefault(emptyList())
             .filter { album ->
                 album.artist.contains(name, ignoreCase = true) ||
@@ -1072,6 +1081,38 @@ class MssViewModel @Inject constructor(
         }
         if (_library.value.loaded) {
             _library.value = _library.value.copy(likedAlbums = _likedAlbums.value)
+        }
+    }
+
+    fun toggleArtistLike(name: String, imageUrl: String? = null, genres: List<String> = emptyList(), trackCount: Int = 0) {
+        val artist = UnifiedArtist(
+            source = SourceId.LOCAL,
+            id = com.mss.core.model.localArtistLikeId(name),
+            name = name,
+            imageUrl = imageUrl,
+            genres = genres.ifEmpty { null },
+            trackCount = trackCount.takeIf { it > 0 },
+        )
+        toggleArtistLike(artist)
+    }
+
+    fun toggleArtistLike(artist: UnifiedArtist) = launch {
+        val key = if (artist.source == SourceId.LOCAL) com.mss.core.model.localArtistLikeId(artist.name) else artist.id
+        val liked = _likedArtists.value.any {
+            it.source == artist.source && (it.id == key || it.id == artist.id || it.name.equals(artist.name, ignoreCase = true))
+        }
+        repo.toggleArtistLike(artist, !liked)
+        _likedArtists.value = if (liked) {
+            _likedArtists.value.filterNot {
+                it.source == artist.source && (it.id == key || it.id == artist.id || it.name.equals(artist.name, ignoreCase = true))
+            }
+        } else {
+            listOf(artist.copy(id = key)) + _likedArtists.value.filterNot {
+                it.source == artist.source && (it.id == key || it.id == artist.id)
+            }
+        }
+        if (_library.value.loaded) {
+            _library.value = _library.value.copy(likedArtists = _likedArtists.value)
         }
     }
 
@@ -1591,6 +1632,12 @@ class MssViewModel @Inject constructor(
                     _library.value = _library.value.copy(likedAlbums = it)
                 }
             }
+            runCatching { repo.likedArtists() }.getOrNull()?.let {
+                _likedArtists.value = it
+                if (_library.value.loaded) {
+                    _library.value = _library.value.copy(likedArtists = it)
+                }
+            }
         }
     }
 
@@ -1645,6 +1692,7 @@ data class LibraryUi(
     val uploads: List<UnifiedTrack> = emptyList(),
     val albums: List<UnifiedAlbum> = emptyList(),
     val likedAlbums: List<UnifiedAlbum> = emptyList(),
+    val likedArtists: List<UnifiedArtist> = emptyList(),
     val connected: List<SourceId> = listOf(SourceId.LOCAL),
     val errors: Map<SourceId, String> = emptyMap(),
     val loading: Boolean = false,
@@ -1798,6 +1846,36 @@ private fun mssCatalogArtists(dtos: List<CatalogArtistDto>, tracks: List<Unified
     return map.values
         .sortedByDescending { it.count }
         .map { UnifiedArtist(SourceId.LOCAL, it.name, it.name, imageUrl = it.cover, trackCount = it.count.takeIf { n -> n > 0 }) }
+}
+
+private fun foldArtistText(value: String): String =
+    value.trim().lowercase().replace('ё', 'е').replace(Regex("\\s+"), " ")
+
+private fun sameMssTrack(a: UnifiedTrack, b: UnifiedTrack): Boolean {
+    if (a.id == b.id) return true
+    val ha = a.contentHash?.lowercase()
+    val hb = b.contentHash?.lowercase()
+    if (!ha.isNullOrBlank() && ha == hb) return true
+    val durationOk = a.durationMs == null || b.durationMs == null ||
+        kotlin.math.abs((a.durationMs ?: 0) - (b.durationMs ?: 0)) <= 8000
+    return foldArtistText(a.title) == foldArtistText(b.title) &&
+        foldArtistText(a.artist) == foldArtistText(b.artist) &&
+        durationOk
+}
+
+private fun rankMssTrack(track: UnifiedTrack): Int =
+    (if (!track.coverUrl.isNullOrBlank()) 4 else 0) +
+        (if (track.userHolds == true) 2 else 0) +
+        (if (track.availability == "cached" || track.availability == "online") 1 else 0)
+
+private fun dedupeMssTracks(tracks: List<UnifiedTrack>): List<UnifiedTrack> {
+    val out = mutableListOf<UnifiedTrack>()
+    for (track in tracks) {
+        val idx = out.indexOfFirst { sameMssTrack(it, track) }
+        if (idx < 0) out += track
+        else if (rankMssTrack(track) > rankMssTrack(out[idx])) out[idx] = track
+    }
+    return out
 }
 
 private fun albumsFromTracks(tracks: List<UnifiedTrack>): List<UnifiedAlbum> {

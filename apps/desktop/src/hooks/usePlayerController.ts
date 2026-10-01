@@ -33,6 +33,7 @@ import {
 import { downloadedFileUrl } from '@/store/downloads-store';
 import { useLikesStore } from '@/store/likes-store';
 import { useAlbumLikesStore } from '@/store/album-likes-store';
+import { useArtistLikesStore } from '@/store/artist-likes-store';
 import { usePlaybackStore } from '@/store/playback-store';
 import { upcomingTracks, usePlayerStore, type QueueItem } from '@/store/player-store';
 import { syncLobbyPause, syncLobbyPlay } from '@/lib/lobby-host-sync';
@@ -612,6 +613,7 @@ export function usePlayerController(): void {
   useEffect(() => {
     void useLikesStore.getState().sync({ yandex: yandexConnected, vk: vkConnected, spotify: spotifyConnected });
     void useAlbumLikesStore.getState().sync();
+    void useArtistLikesStore.getState().sync();
   }, [yandexConnected, vkConnected, spotifyConnected]);
 
   useEffect(() => {

@@ -51,5 +51,5 @@ export function favoriteArtistGroups(followed: UnifiedArtist[], likedTracks: Uni
 
 export function favoriteArtistSubtitle(g: FavoriteArtistGroup): string {
   if (g.likedTracks) return `${g.likedTracks} ${plural(g.likedTracks, 'любимый трек', 'любимых трека', 'любимых треков')}`;
-  return g.followed ? 'В подписках' : 'Исполнитель';
+  return g.followed ? 'Любимый исполнитель' : 'Исполнитель';
 }

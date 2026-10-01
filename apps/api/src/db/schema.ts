@@ -134,6 +134,27 @@ export const albumLikes = pgTable(
   (t) => [primaryKey({ columns: [t.userId, t.source, t.albumId] })],
 );
 
+export interface ArtistLikeSnapshot {
+  name: string;
+  imageUrl?: string | null;
+  genres?: string[];
+  trackCount?: number;
+}
+
+export const artistLikes = pgTable(
+  'artist_likes',
+  {
+    userId: uuid('user_id')
+      .notNull()
+      .references(() => users.id, { onDelete: 'cascade' }),
+    source: varchar('source', { length: 20 }).notNull(),
+    artistId: varchar('artist_id', { length: 200 }).notNull(),
+    snapshot: jsonb('snapshot').$type<ArtistLikeSnapshot>(),
+    createdAt: timestamp('created_at').defaultNow().notNull(),
+  },
+  (t) => [primaryKey({ columns: [t.userId, t.source, t.artistId] })],
+);
+
 export const playlists = pgTable('playlists', {
   id: uuid('id').primaryKey().defaultRandom(),
   userId: uuid('user_id')

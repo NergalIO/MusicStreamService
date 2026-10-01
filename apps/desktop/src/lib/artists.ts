@@ -1,5 +1,6 @@
-import type { SourceId, UnifiedArtist, UnifiedTrack } from '@mss/shared';
+import type { AlbumDto, SourceId, UnifiedAlbum, UnifiedArtist, UnifiedTrack } from '@mss/shared';
 import { apiFetch } from '@/lib/api';
+import { apiMediaUrl } from '@/lib/api-base';
 import {
   EXTERNAL_SOURCES,
   mapLocalTrack,
@@ -18,6 +19,10 @@ export interface ArtistGroup {
 
 export function normalizeArtistName(name: string): string {
   return name.trim().toLowerCase().replace(/ё/g, 'е').replace(/\s+/g, ' ');
+}
+
+export function localArtistLikeId(name: string): string {
+  return normalizeArtistName(name).slice(0, 200);
 }
 
 export function splitArtists(artist: string): string[] {
@@ -110,5 +115,70 @@ export async function loadLocalArtistTracks(name: string): Promise<UnifiedTrack[
   const data = await apiFetch<{ items: LocalTrackDto[] }>(
     `/artists/${encodeURIComponent(name)}/tracks`,
   );
-  return data.items.map((t) => mapLocalTrack(t));
+  return dedupeLocalTracks(data.items.map((t) => mapLocalTrack(t)));
+}
+
+export async function loadLocalArtistAlbums(name: string): Promise<UnifiedAlbum[]> {
+  try {
+    const data = await apiFetch<{ items: AlbumDto[] }>(`/artists/${encodeURIComponent(name)}/albums`);
+    return data.items.map(mapArtistAlbum);
+  } catch {
+    const data = await apiFetch<{ items: AlbumDto[] }>('/albums');
+    const key = normalizeArtistName(name);
+    return data.items
+      .filter(
+        (album) =>
+          normalizeArtistName(album.artist) === key ||
+          splitArtists(album.artist).some((part) => normalizeArtistName(part) === key),
+      )
+      .map(mapArtistAlbum);
+  }
+}
+
+function mapArtistAlbum(a: AlbumDto): UnifiedAlbum {
+  const q = a.coverUrl?.includes('?') ? a.coverUrl.slice(a.coverUrl.indexOf('?')) : '';
+  return {
+    source: 'local',
+    id: a.id,
+    title: a.title,
+    artist: a.artist,
+    year: a.year ?? undefined,
+    type: a.type ?? undefined,
+    trackCount: a.trackCount,
+    coverUrl: a.coverUrl ? apiMediaUrl(`/albums/${a.id}/cover${q}`) : undefined,
+  };
+}
+
+function durationClose(a?: number | null, b?: number | null): boolean {
+  if (!a || !b) return true;
+  return Math.abs(a - b) <= 8000;
+}
+
+function sameLocalTrack(a: UnifiedTrack, b: UnifiedTrack): boolean {
+  if (a.id === b.id) return true;
+  const ha = a.contentHash?.toLowerCase();
+  const hb = b.contentHash?.toLowerCase();
+  if (ha && hb && ha === hb) return true;
+  return (
+    normalizeArtistName(a.title) === normalizeArtistName(b.title) &&
+    normalizeArtistName(a.artist) === normalizeArtistName(b.artist) &&
+    durationClose(a.durationMs, b.durationMs)
+  );
+}
+
+function rankLocalTrack(t: UnifiedTrack): number {
+  return (t.coverUrl ? 4 : 0) + (t.availability === 'cached' || t.availability === 'online' ? 1 : 0);
+}
+
+function dedupeLocalTracks(tracks: UnifiedTrack[]): UnifiedTrack[] {
+  const out: UnifiedTrack[] = [];
+  for (const track of tracks) {
+    const idx = out.findIndex((item) => sameLocalTrack(item, track));
+    if (idx < 0) {
+      out.push(track);
+      continue;
+    }
+    if (rankLocalTrack(track) > rankLocalTrack(out[idx])) out[idx] = track;
+  }
+  return out;
 }

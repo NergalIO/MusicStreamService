@@ -81,6 +81,7 @@ import com.mss.android.ui.navigation.openRoute
 import com.mss.core.model.SourceId
 import com.mss.core.model.UnifiedTrack
 import com.mss.core.model.WaveSettings
+import com.mss.core.model.localArtistLikeId
 import java.util.Locale
 
 private val SOURCE_ORDER = listOf(SourceId.LOCAL, SourceId.YANDEX, SourceId.SPOTIFY, SourceId.VK)
@@ -89,6 +90,7 @@ private val SOURCE_ORDER = listOf(SourceId.LOCAL, SourceId.YANDEX, SourceId.SPOT
 fun ArtistScreen(vm: MssViewModel, nav: NavHostController) {
     val page by vm.artistPage.collectAsState()
     val liked by vm.likedIds.collectAsState()
+    val likedArtists by vm.likedArtists.collectAsState()
     val player by vm.playerState.collectAsState()
     val canSuggest by vm.canSuggestToLobby.collectAsState()
     val currentKey = player.current?.let { "${it.source}:${it.id}" }
@@ -117,6 +119,24 @@ fun ArtistScreen(vm: MssViewModel, nav: NavHostController) {
                     maxLines = 3,
                     overflow = TextOverflow.Ellipsis,
                 )
+                val likeId = localArtistLikeId(page.name)
+                val artistLiked = likedArtists.any {
+                    it.source == SourceId.LOCAL && (it.id == likeId || it.name.equals(page.name, ignoreCase = true))
+                }
+                IconButton({
+                    vm.toggleArtistLike(
+                        page.name,
+                        page.imageUrl,
+                        page.genres,
+                        page.tracksBySource[SourceId.LOCAL].orEmpty().size,
+                    )
+                }) {
+                    Icon(
+                        if (artistLiked) Icons.Filled.Favorite else Icons.Filled.FavoriteBorder,
+                        if (artistLiked) "Убрать из «Мне нравится»" else "Мне нравится",
+                        tint = if (artistLiked) MaterialTheme.colorScheme.primary else scheme.onSurfaceVariant,
+                    )
+                }
                 totalListeners(present)?.let {
                     Text(it, style = MaterialTheme.typography.bodyMedium, color = scheme.onSurfaceVariant)
                 }

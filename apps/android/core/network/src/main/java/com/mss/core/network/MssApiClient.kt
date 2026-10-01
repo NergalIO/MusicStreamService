@@ -26,6 +26,7 @@ import com.mss.core.model.CatalogArtistDto
 import com.mss.core.model.SourceId
 import com.mss.core.model.ArtistRef
 import com.mss.core.model.UnifiedAlbum
+import com.mss.core.model.UnifiedArtist
 import com.mss.core.model.UnifiedTrack
 import com.mss.core.model.UserSubscriptionDto
 import io.ktor.client.HttpClient
@@ -301,6 +302,37 @@ class MssApiClient @Inject constructor(
     suspend fun unlikeAlbum(source: SourceId, id: String) {
         withAuth { token ->
             http.delete("${apiBase()}/likes/albums/${source.name.lowercase()}/${encode(id)}") {
+                header(HttpHeaders.Authorization, "Bearer $token")
+            }
+        }
+    }
+
+    suspend fun likedArtists(): List<UnifiedArtist> {
+        val res = authorizedGet("${apiBase()}/me/liked-artists")
+        return res.body<LikedArtistsResponse>().items
+    }
+
+    suspend fun likeArtist(artist: UnifiedArtist) {
+        authorizedPost(
+            "${apiBase()}/likes/artists",
+            ArtistLikeBody(
+                source = artist.source,
+                id = if (artist.source == SourceId.LOCAL) {
+                    com.mss.core.model.localArtistLikeId(artist.name)
+                } else {
+                    artist.id
+                },
+                name = artist.name.ifBlank { "Исполнитель" },
+                imageUrl = artist.imageUrl?.take(2000),
+                genres = artist.genres,
+                trackCount = artist.trackCount,
+            ),
+        )
+    }
+
+    suspend fun unlikeArtist(source: SourceId, id: String) {
+        withAuth { token ->
+            http.delete("${apiBase()}/likes/artists/${source.name.lowercase()}/${encode(id)}") {
                 header(HttpHeaders.Authorization, "Bearer $token")
             }
         }
@@ -693,6 +725,15 @@ class MssApiClient @Inject constructor(
         val artists: List<ArtistRef>? = null,
     )
     @Serializable private data class LikedAlbumsResponse(val items: List<UnifiedAlbum> = emptyList())
+    @Serializable private data class ArtistLikeBody(
+        val source: SourceId,
+        val id: String,
+        val name: String,
+        val imageUrl: String? = null,
+        val genres: List<String>? = null,
+        val trackCount: Int? = null,
+    )
+    @Serializable private data class LikedArtistsResponse(val items: List<UnifiedArtist> = emptyList())
     @Serializable private data class UpdatePlaylistBody(val name: String? = null, val description: String? = null, val author: String? = null)
     @Serializable private data class AddTrackBody(val trackId: String)
     @Serializable private data class AddExternalBody(val items: List<ExternalItem>)

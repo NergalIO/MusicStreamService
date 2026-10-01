@@ -44,6 +44,7 @@ import { SourceFilter } from '@/components/SourceFilter';
 import { useDownloadsStore } from '@/store/downloads-store';
 import { useLikesStore } from '@/store/likes-store';
 import { useAlbumLikesStore } from '@/store/album-likes-store';
+import { useArtistLikesStore } from '@/store/artist-likes-store';
 import { libraryPath, MSS_PLAYLISTS, MSS_UPLOADS, SPOTIFY_WEB, type CatalogScope, type ServiceScope } from '@/lib/service-routes';
 import { usePlayerStore, type PlayContext } from '@/store/player-store';
 
@@ -302,6 +303,7 @@ function ArtistsSection({ filter }: { filter: SourceFilterId }) {
   const spotifyDevice = useLikesStore((s) => s.spotifyTracks);
   const likedYandex = useLikesStore((s) => s.yandex);
   const likedLocal = useLikesStore((s) => s.local);
+  const likedMssArtists = useArtistLikesStore((s) => s.items);
   const yandexFollowed = useQuery({
     queryKey: ['yandex', 'favorite-artists'],
     queryFn: () => window.electronAPI.connectors.favoriteArtists('yandex'),
@@ -328,13 +330,14 @@ function ArtistsSection({ filter }: { filter: SourceFilterId }) {
         : []),
     ];
     const followed = [
+      ...(want('local') ? likedMssArtists.filter((a) => a.source === 'local') : []),
       ...(want('yandex') ? (yandexFollowed.data ?? []) : []),
       ...(want('spotify') ? (spotifyFollowed.data ?? []) : []),
     ];
     return favoriteArtistGroups(followed, tracks);
     // want зависит только от filter
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [filter, local.data, yandex.data, vk.data, spotify.data, spotifyDevice, likedYandex, likedLocal, yandexFollowed.data, spotifyFollowed.data]);
+  }, [filter, local.data, yandex.data, vk.data, spotify.data, spotifyDevice, likedYandex, likedLocal, likedMssArtists, yandexFollowed.data, spotifyFollowed.data]);
 
   const needle = normalizeSearch(text);
   const visible = needle ? groups.filter((g) => normalizeSearch(g.name).includes(needle)) : groups;

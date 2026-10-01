@@ -1,9 +1,10 @@
 import { and, desc, eq, inArray, sql } from 'drizzle-orm';
 import type { FastifyInstance } from 'fastify';
-import { albumLikeSchema, type LikedAlbumDto, type SourceId } from '@mss/shared';
+import { albumLikeSchema, artistLikeSchema, type LikedAlbumDto, type LikedArtistDto, type SourceId } from '@mss/shared';
 import { db } from '../db/client.js';
-import { albumLikes, albums, albumTracks, trackLikes, tracks } from '../db/schema.js';
+import { albumLikes, albums, albumTracks, artistLikes, trackLikes, tracks } from '../db/schema.js';
 import { albumCoverPublicUrl } from '../lib/albums.js';
+import { localArtistLikeId } from '../lib/identity.js';
 import { toTrackDtoWithAvailability } from './tracks.js';
 
 const CATALOG_STATUSES = ['ready', 'registered', 'cached', 'processing'] as const;
@@ -155,6 +156,68 @@ export async function likeRoutes(app: FastifyInstance) {
     await db
       .delete(albumLikes)
       .where(and(eq(albumLikes.userId, req.userId!), eq(albumLikes.source, parsed.data), eq(albumLikes.albumId, id)));
+    return reply.code(204).send();
+  });
+
+  app.get('/me/liked-artists', async (req) => {
+    await app.authenticate(req);
+    const rows = await db
+      .select()
+      .from(artistLikes)
+      .where(eq(artistLikes.userId, req.userId!))
+      .orderBy(desc(artistLikes.createdAt));
+    const items: LikedArtistDto[] = [];
+    for (const row of rows) {
+      const snap = row.snapshot;
+      const name = snap?.name?.trim() || row.artistId;
+      if (!name) continue;
+      items.push({
+        source: row.source as SourceId,
+        id: row.artistId,
+        name,
+        imageUrl: snap?.imageUrl ?? null,
+        genres: snap?.genres,
+        trackCount: snap?.trackCount,
+      });
+    }
+    return { items };
+  });
+
+  app.post('/likes/artists', async (req, reply) => {
+    await app.authenticate(req);
+    const body = artistLikeSchema.parse(req.body);
+    const artistId = body.source === 'local' ? localArtistLikeId(body.name) : body.id;
+    const snapshot = {
+      name: body.name,
+      imageUrl: body.imageUrl ?? null,
+      genres: body.genres,
+      trackCount: body.trackCount,
+    };
+    await db
+      .insert(artistLikes)
+      .values({
+        userId: req.userId!,
+        source: body.source,
+        artistId,
+        snapshot,
+      })
+      .onConflictDoUpdate({
+        target: [artistLikes.userId, artistLikes.source, artistLikes.artistId],
+        set: { snapshot },
+      });
+    return reply.code(204).send();
+  });
+
+  app.delete('/likes/artists/:source/:id', async (req, reply) => {
+    await app.authenticate(req);
+    const { source, id } = req.params as { source: string; id: string };
+    const parsed = artistLikeSchema.shape.source.safeParse(source);
+    if (!parsed.success) return reply.badRequest('Неизвестный источник');
+    await db
+      .delete(artistLikes)
+      .where(
+        and(eq(artistLikes.userId, req.userId!), eq(artistLikes.source, parsed.data), eq(artistLikes.artistId, id)),
+      );
     return reply.code(204).send();
   });
 }

@@ -221,7 +221,7 @@ private fun LoadingOr(loading: Boolean, empty: Boolean, title: String, subtitle:
 private fun CollectionHub(vm: MssViewModel, nav: NavHostController, library: LibraryUi, source: SourceId?) {
     val likes = library.likedTracks(source)
     val playlists = library.playlists(source)
-    val artists = remember(library.likes, source) { favoriteArtists(library, source) }
+    val artists = remember(library.likes, library.likedArtists, source) { favoriteArtists(library, source) }
     val savedAll by vm.downloadedAlbums.collectAsState()
     val albumShelf = remember(library.likes, library.albums, library.likedAlbums, savedAll, source) {
         albumShelfItems(vm, nav, library, source, savedAll)
@@ -325,12 +325,12 @@ private fun CollectionHub(vm: MssViewModel, nav: NavHostController, library: Lib
                         items(artists.take(SHELF_CARDS), key = { it.name.lowercase() }) { a ->
                             MediaTile(
                                 title = a.name,
-                                subtitle = tracksWord(a.count),
+                                subtitle = if (a.count > 0) tracksWord(a.count) else if (a.liked) "Любимый исполнитель" else tracksWord(a.count),
                                 cover = a.cover,
                                 size = size,
                                 coverCorner = size / 2,
-                                onClick = { nav.openRoute(Routes.artist(a.sample)) },
-                                onPlay = { vm.play(a.tracks, 0) },
+                                onClick = { nav.openRoute(Routes.artist(a.name, a.source.name.lowercase(), a.id)) },
+                                onPlay = { if (a.tracks.isNotEmpty()) vm.play(a.tracks, 0) },
                             )
                         }
                     }
@@ -666,12 +666,14 @@ private data class ArtistEntry(
     val name: String,
     val count: Int,
     val cover: String?,
-    val sample: UnifiedTrack,
     val tracks: List<UnifiedTrack>,
+    val liked: Boolean = false,
+    val source: SourceId = SourceId.LOCAL,
+    val id: String = name,
 )
 
-private fun favoriteArtists(library: LibraryUi, source: SourceId?): List<ArtistEntry> =
-    library.likedTracks(source)
+private fun favoriteArtists(library: LibraryUi, source: SourceId?): List<ArtistEntry> {
+    val fromTracks = library.likedTracks(source)
         .groupBy { (it.artists?.firstOrNull()?.name ?: it.artist).trim().lowercase() }
         .filterKeys { it.isNotBlank() }
         .map { (_, list) ->
@@ -680,32 +682,64 @@ private fun favoriteArtists(library: LibraryUi, source: SourceId?): List<ArtistE
                 name = first.artists?.firstOrNull()?.name ?: first.artist,
                 count = list.size,
                 cover = list.firstNotNullOfOrNull { it.coverUrl },
-                sample = first,
                 tracks = list,
             )
         }
-        .sortedWith(compareByDescending<ArtistEntry> { it.count }.thenBy { it.name.lowercase() })
+    val fromLikes = library.likedArtists
+        .filter { source == null || it.source == source }
+        .map { artist ->
+            ArtistEntry(
+                name = artist.name,
+                count = artist.trackCount ?: 0,
+                cover = artist.imageUrl,
+                tracks = emptyList(),
+                liked = true,
+                source = artist.source,
+                id = artist.id,
+            )
+        }
+    val merged = linkedMapOf<String, ArtistEntry>()
+    (fromLikes + fromTracks).forEach { entry ->
+        val key = entry.name.trim().lowercase()
+        val cur = merged[key]
+        merged[key] = if (cur == null) entry else entry.copy(
+            count = maxOf(cur.count, entry.count),
+            cover = cur.cover ?: entry.cover,
+            tracks = if (cur.tracks.isNotEmpty()) cur.tracks else entry.tracks,
+            liked = cur.liked || entry.liked,
+        )
+    }
+    return merged.values.sortedWith(
+        compareByDescending<ArtistEntry> { it.liked }.thenByDescending { it.count }.thenBy { it.name.lowercase() },
+    )
+}
 
 @Composable
 private fun ArtistsTab(vm: MssViewModel, nav: NavHostController, library: LibraryUi, source: SourceId?) {
-    val artists = remember(library.likes, source) { favoriteArtists(library, source) }
+    val artists = remember(library.likes, library.likedArtists, source) { favoriteArtists(library, source) }
     LoadingOr(
         loading = library.loading || !library.loaded,
         empty = artists.isEmpty(),
         title = "Нет исполнителей",
-        subtitle = "Исполнители появятся здесь по вашим лайкам.",
+        subtitle = "Лайкните исполнителя в MSS — он появится здесь.",
     ) {
         LazyColumn(Modifier.fillMaxSize(), contentPadding = PaddingValues(bottom = 16.dp)) {
             items(artists, key = { it.name.lowercase() }) { a ->
                 EntityRow(
                     title = a.name,
-                    subtitle = "${tracksWord(a.count)} в лайках",
+                    subtitle = when {
+                        a.count > 0 -> "${tracksWord(a.count)} в лайках"
+                        a.liked -> "Любимый исполнитель"
+                        else -> "Исполнитель"
+                    },
                     cover = a.cover,
-                    onClick = { nav.openRoute(Routes.artist(a.sample)) },
+                    onClick = { nav.openRoute(Routes.artist(a.name, a.source.name.lowercase(), a.id)) },
                     coverCorner = 24.dp,
                     trailing = {
-                        IconButton({ vm.play(a.tracks, 0) }) {
-                            Icon(Icons.Default.PlayArrow, "Слушать", tint = MaterialTheme.colorScheme.primary)
+                        if (a.tracks.isNotEmpty()) {
+                            IconButton({ vm.play(a.tracks, 0) }) {
+                                Icon(Icons.Default.PlayArrow, "Слушать", tint = MaterialTheme.colorScheme.primary)
+                            }
                         }
                     },
                 )

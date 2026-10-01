@@ -20,6 +20,7 @@ import com.mss.core.model.RegisterPending
 import com.mss.core.model.SourceId
 import com.mss.core.model.TrackDto
 import com.mss.core.model.UnifiedAlbum
+import com.mss.core.model.UnifiedArtist
 import com.mss.core.model.UnifiedPlaylist
 import com.mss.core.model.UnifiedTrack
 import com.mss.core.model.UserSubscriptionDto
@@ -122,6 +123,8 @@ class MssRepository @Inject constructor(
 
     suspend fun likedAlbums(): List<UnifiedAlbum> = api.likedAlbums()
 
+    suspend fun likedArtists(): List<UnifiedArtist> = api.likedArtists()
+
     suspend fun toggleLike(track: UnifiedTrack, liked: Boolean) {
         if (track.source == SourceId.LOCAL) {
             if (liked) api.likeTrack(track.id) else api.unlikeTrack(track.id)
@@ -135,6 +138,11 @@ class MssRepository @Inject constructor(
         if (album.source == SourceId.YANDEX) {
             runCatching { connectors.yandex.setAlbumLike(album.id, liked) }
         }
+    }
+
+    suspend fun toggleArtistLike(artist: UnifiedArtist, liked: Boolean) {
+        val id = if (artist.source == SourceId.LOCAL) com.mss.core.model.localArtistLikeId(artist.name) else artist.id
+        if (liked) api.likeArtist(artist.copy(id = id)) else api.unlikeArtist(artist.source, id)
     }
 
     suspend fun playlistTracks(playlistId: String): List<UnifiedTrack> =
