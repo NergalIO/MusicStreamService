@@ -4,7 +4,7 @@ import { db } from '../db/client.js';
 import { trackLikes, tracks } from '../db/schema.js';
 import { toTrackDtoWithAvailability } from './tracks.js';
 
-const CATALOG_STATUSES = ['ready', 'registered', 'cached'] as const;
+const CATALOG_STATUSES = ['ready', 'registered', 'cached', 'processing'] as const;
 
 const UUID_RE = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
 

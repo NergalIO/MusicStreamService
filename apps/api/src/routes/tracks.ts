@@ -14,7 +14,7 @@ import { db } from '../db/client.js';
 import { trackHoldings, tracks } from '../db/schema.js';
 import { deleteObject, getObjectFull, getObjectRange, headObject, presignGet, presignPut, putObject, CLOUD_GET_TTL_SEC } from '../lib/storage.js';
 import { detectLyricsFormat, formatFromKey, lyricsObjectKey, LYRICS_MAX_BYTES, parseLyricsFile, type LyricsFormat } from '../lib/lyrics.js';
-import { transcodeQueue, type TranscodeJob } from '../lib/queue.js';
+import { enqueueTranscode } from '../lib/queue.js';
 import { getActiveSubscription } from '../services/subscription.js';
 import { appendToPlaylist, findOwnPlaylist } from './playlists.js';
 import { computeAvailability, hasStreamableBytes } from '../lib/track-availability.js';
@@ -37,7 +37,7 @@ const AUDIO_EXTENSIONS = new Set([
   '.webm',
 ]);
 
-const CATALOG_STATUSES = ['ready', 'registered', 'cached'] as const;
+const CATALOG_STATUSES = ['ready', 'registered', 'cached', 'processing'] as const;
 
 /** «Исполнитель - Название.mp3» → теги; без разделителя всё имя становится названием. */
 export function tagsFromFilename(filename: string): { title: string; artist: string } {
@@ -295,11 +295,16 @@ export async function trackRoutes(app: FastifyInstance) {
       .where(eq(tracks.id, id));
 
     const fallback = tagsFromFilename(t.originalFilename || `${t.artist} - ${t.title}`);
-    await transcodeQueue.add('transcode', {
-      trackId: id,
-      originalKey,
-      fallback: { title: t.title || fallback.title, artist: t.artist || fallback.artist },
-    } satisfies TranscodeJob);
+    try {
+      await enqueueTranscode({
+        trackId: id,
+        originalKey,
+        fallback: { title: t.title || fallback.title, artist: t.artist || fallback.artist },
+      });
+    } catch (err) {
+      await db.update(tracks).set({ status: 'failed' }).where(eq(tracks.id, id));
+      throw err;
+    }
     const [updated] = await db.select().from(tracks).where(eq(tracks.id, id)).limit(1);
     return reply.code(202).send(await toTrackDtoWithAvailability(updated ?? t));
   });
@@ -361,7 +366,7 @@ export async function trackRoutes(app: FastifyInstance) {
     await db.insert(trackHoldings).values({ userId: req.userId!, trackId });
 
     if (playlistId) await appendToPlaylist(playlistId, trackId);
-    await transcodeQueue.add('transcode', { trackId, inputPath: tmpPath, fallback } satisfies TranscodeJob);
+    await enqueueTranscode({ trackId, inputPath: tmpPath, fallback });
     return reply.code(202).send(await toTrackDtoWithAvailability(row));
   });
 

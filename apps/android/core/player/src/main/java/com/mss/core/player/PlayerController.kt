@@ -1,5 +1,6 @@
 package com.mss.core.player
 
+import android.annotation.SuppressLint
 import android.content.Context
 import android.content.Intent
 import android.media.AudioFocusRequest
@@ -28,6 +29,7 @@ import com.mss.core.network.PlayReporter
 import dagger.hilt.android.qualifiers.ApplicationContext
 import javax.inject.Inject
 import javax.inject.Singleton
+import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.Job
@@ -119,6 +121,7 @@ class PlayerController @Inject constructor(
     private var lastSpotifyPos = 0L
     private var foreignTitleTicks = 0
     private var lastTickPos = 0L
+    private var playbackServiceRunning = false
     private var lastSettings: PlaybackSettings? = null
     private val audioManager = context.getSystemService(Context.AUDIO_SERVICE) as AudioManager
     private var focusRequest: AudioFocusRequest? = null
@@ -166,7 +169,7 @@ class PlayerController @Inject constructor(
             state.collect { nowPlaying.publish(it) }
         }
         scope.launch {
-            spotifyWeb.dom.collect { if (usingSpotify && tickJob?.isActive == true) tickProgress() }
+            spotifyWeb.dom.collect { if (usingSpotify && tickJob?.isActive == true) safeTick() }
         }
     }
 
@@ -861,7 +864,7 @@ class PlayerController @Inject constructor(
         tickJob?.cancel()
         tickJob = scope.launch {
             while (true) {
-                tickProgress()
+                safeTick()
                 if (usingSpotify) {
                     spotifyWeb.pollState()
                     spotifyTicks += 1
@@ -874,12 +877,53 @@ class PlayerController @Inject constructor(
         }
     }
 
+    fun notifyPlaybackServiceStarted() {
+        playbackServiceRunning = true
+    }
+
+    fun notifyPlaybackServiceStopped() {
+        playbackServiceRunning = false
+    }
+
+    /**
+     * Повторный startForegroundService из фона (автопереход на следующий трек) на Android 12+
+     * кидает ForegroundServiceStartNotAllowedException, даже если сервис уже играет.
+     */
     private fun ensurePlaybackService() {
+        if (playbackServiceRunning) return
         val intent = Intent(context, PlaybackService::class.java)
-        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
-            context.startForegroundService(intent)
-        } else {
-            context.startService(intent)
+        try {
+            if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
+                context.startForegroundService(intent)
+            } else {
+                context.startService(intent)
+            }
+        } catch (e: IllegalStateException) {
+            if (isBackgroundStartBlocked(e)) {
+                session("warn", "player", "сервис воспроизведения не стартовал из фона")
+                return
+            }
+            throw e
+        }
+    }
+
+    private fun isBackgroundStartBlocked(error: IllegalStateException): Boolean {
+        if (Build.VERSION.SDK_INT < Build.VERSION_CODES.S) return false
+        return isForegroundStartNotAllowed(error)
+    }
+
+    @SuppressLint("NewApi")
+    private fun isForegroundStartNotAllowed(error: IllegalStateException): Boolean =
+        error is android.app.ForegroundServiceStartNotAllowedException
+
+    /** Сбой тика не должен ронять процесс: автопереход идёт из коллектора на главном потоке. */
+    private fun safeTick() {
+        try {
+            tickProgress()
+        } catch (e: CancellationException) {
+            throw e
+        } catch (e: Exception) {
+            session("error", "player", e.message ?: e.javaClass.simpleName)
         }
     }
 

@@ -31,6 +31,12 @@ const optionalText = (max: number) =>
     .nullish()
     .transform((v) => (v == null ? v : v.trim() || null));
 
+/** Kotlin кодирует отсутствие как null, а z.number().optional() такой null отвергает. */
+const optionalMs = z.preprocess(
+  (value) => (value === null ? undefined : value),
+  z.number().int().min(0).optional(),
+);
+
 export const updatePlaylistSchema = z.object({
   name: z.string().trim().min(1).max(200).optional(),
   description: optionalText(2000),
@@ -51,7 +57,7 @@ export const externalTrackSnapshotSchema = z.object({
   artists: z.array(artistRefSchema).max(20).optional(),
   album: z.string().max(500).optional(),
   albumId: z.string().max(100).optional(),
-  durationMs: z.number().int().min(0).optional(),
+  durationMs: optionalMs,
   coverUrl: z.string().url().max(1000).optional(),
   explicit: z.boolean().optional(),
 });
@@ -84,7 +90,7 @@ export const registerTrackSchema = z.object({
   title: z.string().trim().min(1).max(500),
   artist: z.string().trim().min(1).max(500),
   album: optionalText(500),
-  durationMs: z.number().int().min(0).optional(),
+  durationMs: optionalMs,
   sizeBytes: z.number().int().min(1).max(500 * 1024 * 1024),
   originalFilename: z.string().min(1).max(500),
   loudnessLufs: z.number().min(-70).max(0).optional(),
@@ -100,7 +106,7 @@ export const listeningEventSchema = z.object({
   album: z.string().max(500).optional(),
   albumId: z.string().max(100).optional(),
   coverUrl: z.string().max(1000).optional(),
-  durationMs: z.number().int().min(0).optional(),
+  durationMs: optionalMs,
   playedMs: z.number().int().min(0),
   completed: z.boolean(),
   playedAt: z.string().datetime(),
@@ -142,7 +148,7 @@ export const lobbySuggestSchema = z.object({
     artist: z.string().max(500),
     album: z.string().max(500).optional(),
     albumId: z.string().max(100).optional(),
-    durationMs: z.number().int().min(0).optional(),
+    durationMs: optionalMs,
     coverUrl: z.string().max(1000).optional(),
     playable: z.boolean().optional(),
   }),
@@ -151,5 +157,5 @@ export const lobbySuggestSchema = z.object({
 export const lobbyPlaybackSchema = z.object({
   action: z.enum(['play', 'pause', 'skip', 'seek']),
   track: lobbySuggestSchema.shape.track.optional(),
-  positionMs: z.number().int().min(0).optional(),
+  positionMs: optionalMs,
 });

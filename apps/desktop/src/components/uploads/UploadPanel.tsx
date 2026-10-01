@@ -24,19 +24,20 @@ function statusText(item: UploadItem): string {
 }
 
 function StatusIcon({ status }: { status: UploadItem['status'] }) {
-  if (status === 'ready' || status === 'processing') return <CheckCircle2 size={16} className="text-emerald-400" />;
+  if (status === 'ready') return <CheckCircle2 size={16} className="text-emerald-400" />;
   if (status === 'failed') return <AlertCircle size={16} className="text-danger" />;
   return <Loader2 size={16} className={cn('text-primary', status !== 'queued' && 'animate-spin')} />;
 }
 
 export function UploadPanel() {
   const { items, collapsed, setCollapsed, clearFinished } = useUploadsStore();
-  const pending = items.filter(
-    (i) => i.status !== 'ready' && i.status !== 'failed' && i.status !== 'processing',
-  ).length;
+  const converting = items.filter((i) => i.status === 'processing').length;
+  const pending = items.filter((i) => i.status !== 'ready' && i.status !== 'failed').length;
   const failed = items.filter((i) => i.status === 'failed').length;
   const title = pending
-    ? `Загрузка: осталось ${pending}`
+    ? converting && pending === converting
+      ? `На сервере: конвертация (${converting})`
+      : `Загрузка: осталось ${pending}`
     : failed
       ? `Загружено с ошибками: ${failed}`
       : 'Загрузка завершена';

@@ -14,7 +14,7 @@ export async function measureLoudness(ffmpeg: string, file: string): Promise<num
     '-f',
     'null',
     '-',
-  ]);
+  ], { timeoutMs: 15 * 60 * 1000 });
   const summary = log.slice(log.lastIndexOf('Summary:'));
   const match = /I:\s*(-?\d+(?:\.\d+)?)\s*LUFS/.exec(summary);
   const value = match ? Number(match[1]) : NaN;

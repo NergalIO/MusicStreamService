@@ -504,7 +504,16 @@ fun TrackDto.toUnifiedTrack(apiBase: String): UnifiedTrack {
         album = album,
         durationMs = durationMs,
         coverUrl = coverUrl,
-        playable = stream != null || userHolds == true || freshCloudUrl(cloudPlayUrl, cloudUrlExpiresAt) != null,
+        playable = when (status) {
+            "processing", "uploading", "failed" -> false
+            else -> stream != null || userHolds == true || freshCloudUrl(cloudPlayUrl, cloudUrlExpiresAt) != null
+        },
+        unplayableReason = when (status) {
+            "processing" -> "Трек ещё обрабатывается"
+            "uploading" -> "Файл загружается в облако"
+            "failed" -> "Не удалось обработать файл"
+            else -> null
+        },
         streamUrl = stream,
         loudnessLufs = loudnessLufs,
         availability = availability,

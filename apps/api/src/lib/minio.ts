@@ -48,6 +48,9 @@ export async function ensureBuckets(): Promise<void> {
   }
 }
 
+const TRANSFER_MS = 15 * 60 * 1000;
+const QUICK_MS = 30_000;
+
 export async function putObject(bucket: string, key: string, body: Buffer, contentType?: string) {
   await clientFor(bucket).send(
     new PutObjectCommand({
@@ -56,15 +59,20 @@ export async function putObject(bucket: string, key: string, body: Buffer, conte
       Body: body,
       ContentType: contentType,
     }),
+    { abortSignal: AbortSignal.timeout(TRANSFER_MS) },
   );
 }
 
 export async function deleteObject(bucket: string, key: string): Promise<void> {
-  await clientFor(bucket).send(new DeleteObjectCommand({ Bucket: bucket, Key: key }));
+  await clientFor(bucket).send(new DeleteObjectCommand({ Bucket: bucket, Key: key }), {
+    abortSignal: AbortSignal.timeout(QUICK_MS),
+  });
 }
 
 export async function headObject(bucket: string, key: string): Promise<{ size: number; contentType?: string }> {
-  const res = await clientFor(bucket).send(new HeadObjectCommand({ Bucket: bucket, Key: key }));
+  const res = await clientFor(bucket).send(new HeadObjectCommand({ Bucket: bucket, Key: key }), {
+    abortSignal: AbortSignal.timeout(QUICK_MS),
+  });
   return { size: res.ContentLength ?? 0, contentType: res.ContentType };
 }
 
@@ -80,6 +88,7 @@ export async function getObjectRange(
       Key: key,
       Range: `bytes=${start}-${end}`,
     }),
+    { abortSignal: AbortSignal.timeout(TRANSFER_MS) },
   );
   const total = Number(res.ContentRange?.split('/')[1] ?? res.ContentLength ?? 0);
   const len = Number(res.ContentLength ?? end - start + 1);
@@ -92,7 +101,9 @@ export async function getObjectRange(
 }
 
 export async function getObjectFull(bucket: string, key: string): Promise<Buffer> {
-  const res = await clientFor(bucket).send(new GetObjectCommand({ Bucket: bucket, Key: key }));
+  const res = await clientFor(bucket).send(new GetObjectCommand({ Bucket: bucket, Key: key }), {
+    abortSignal: AbortSignal.timeout(TRANSFER_MS),
+  });
   const chunks: Buffer[] = [];
   for await (const chunk of res.Body as AsyncIterable<Uint8Array>) {
     chunks.push(Buffer.from(chunk));

@@ -48,6 +48,7 @@ import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.sync.Mutex
 import kotlinx.coroutines.withContext
 import kotlinx.coroutines.sync.withLock
+import kotlinx.serialization.ExperimentalSerializationApi
 import kotlinx.serialization.Serializable
 import kotlinx.serialization.json.Json
 import okhttp3.MediaType.Companion.toMediaType
@@ -57,11 +58,18 @@ import okhttp3.RequestBody
 import okio.BufferedSink
 import okio.source
 
+@OptIn(ExperimentalSerializationApi::class)
 @Singleton
 class MssApiClient @Inject constructor(
     private val preferences: MssPreferences,
 ) {
-    private val json = Json { ignoreUnknownKeys = true; isLenient = true; encodeDefaults = true }
+    private val json = Json {
+        ignoreUnknownKeys = true
+        isLenient = true
+        encodeDefaults = true
+        // null в JSON для optional-полей Zod читает как ошибку («expected number, received null»).
+        explicitNulls = false
+    }
     private val refreshMutex = Mutex()
 
     val http = HttpClient(OkHttp) {

@@ -68,6 +68,41 @@ function refreshLists(playlistId?: string): void {
   if (playlistId) void queryClient.invalidateQueries({ queryKey: ['playlist', playlistId] });
 }
 
+function watchUntilReady(itemId: string, trackId: string, playlistId?: string): void {
+  const deadline = Date.now() + 30 * 60_000;
+  const poll = async () => {
+    const current = useUploadsStore.getState().items.find((i) => i.id === itemId);
+    if (!current || current.status !== 'processing') return;
+    try {
+      const t = await apiFetch<LocalTrackDto>(`/tracks/${trackId}`);
+      if (t.status === 'ready') {
+        patch(itemId, { status: 'ready', title: `${t.artist} — ${t.title}` });
+        refreshLists(playlistId);
+        notifyIfDone();
+        return;
+      }
+      if (t.status === 'failed') {
+        patch(itemId, { status: 'failed', error: 'Не удалось обработать файл на сервере' });
+        refreshLists(playlistId);
+        notifyIfDone();
+        return;
+      }
+    } catch {
+      /* сеть — пробуем ещё */
+    }
+    if (Date.now() > deadline) {
+      patch(itemId, {
+        status: 'failed',
+        error: 'Конвертация на сервере слишком долгая. Проверьте логи воркера или вкладку «Мои треки».',
+      });
+      notifyIfDone();
+      return;
+    }
+    window.setTimeout(() => void poll(), 3000);
+  };
+  window.setTimeout(() => void poll(), 3000);
+}
+
 async function registerPath(item: UploadItem, filePath: string): Promise<void> {
   const api = window.electronAPI?.localTracks;
   if (!api) throw new Error('Регистрация локальных треков доступна только в приложении');
@@ -121,7 +156,8 @@ async function registerPath(item: UploadItem, filePath: string): Promise<void> {
   if (cloud.alreadyReady) {
     done = { ...track, ...cloud, id: track.id };
   } else {
-    patch(item.id, { status: 'processing', progress: 0.95 });
+    patch(item.id, { status: 'processing', progress: 0.95, trackId: track.id });
+    refreshLists(item.playlistId);
     done = await apiFetch<LocalTrackDto>(`/tracks/${track.id}/cloud-complete`, { method: 'POST' });
   }
   rememberCloudUrls(done.id, done);
@@ -148,11 +184,15 @@ async function registerPath(item: UploadItem, filePath: string): Promise<void> {
   }
 
   patch(item.id, {
-    status: done.status === 'ready' ? 'ready' : 'processing',
+    status: done.status === 'ready' ? 'ready' : done.status === 'failed' ? 'failed' : 'processing',
     progress: 1,
     trackId: done.id,
     title: `${done.artist} — ${done.title}`,
+    error: done.status === 'failed' ? 'Не удалось обработать файл на сервере' : undefined,
   });
+  if (done.status !== 'ready' && done.status !== 'failed') {
+    watchUntilReady(item.id, done.id, item.playlistId);
+  }
 }
 
 async function run(item: UploadItem): Promise<void> {
@@ -193,11 +233,12 @@ function notifyIfDone(): void {
         i.status === 'queued' ||
         i.status === 'hashing' ||
         i.status === 'registering' ||
-        i.status === 'uploading',
+        i.status === 'uploading' ||
+        i.status === 'processing',
     )
   )
     return;
-  const ok = items.filter((i) => i.status === 'ready' || i.status === 'processing').length;
+  const ok = items.filter((i) => i.status === 'ready').length;
   const failed = items.filter((i) => i.status === 'failed').length;
   if (failed) toast.error(`Добавлено ${ok} из ${ok + failed}`);
   else if (ok) toast.success(`Добавлено ${formatTrackCount(ok)}`);

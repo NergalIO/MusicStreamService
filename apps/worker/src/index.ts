@@ -2,9 +2,9 @@ import './env.js';
 import fs from 'node:fs/promises';
 import os from 'node:os';
 import path from 'node:path';
-import { Worker } from 'bullmq';
+import { Queue, Worker } from 'bullmq';
 import { measureLoudness } from './loudness.js';
-import { downloadObject, putObject } from './storage.js';
+import { downloadObject, putObject, putObjectFromFile } from './storage.js';
 import { runProcess } from './run-process.js';
 import pg from 'pg';
 import { parseFile } from 'music-metadata';
@@ -18,6 +18,9 @@ const pool = new pg.Pool({ connectionString: databaseUrl });
 
 const bucket = process.env.MINIO_BUCKET_TRACKS ?? 'tracks';
 const coversBucket = process.env.MINIO_BUCKET_COVERS ?? 'covers';
+const FFMPEG_TIMEOUT_MS = 20 * 60 * 1000;
+const LOCK_MS = 15 * 60 * 1000;
+const redisConnection = { url: redisUrl, maxRetriesPerRequest: null };
 
 interface TranscodeJob {
   trackId: string;
@@ -56,103 +59,190 @@ function lyricsFromMetadata(meta: { common?: { lyrics?: unknown } } | null): { f
   return null;
 }
 
+function logJob(trackId: string, step: string, started: number): void {
+  console.log(`[transcode ${trackId}] ${step} +${Date.now() - started}ms`);
+}
+
 async function processJob({ trackId, inputPath, originalKey, fallback }: TranscodeJob) {
+  const started = Date.now();
   const workRoot = await fs.mkdtemp(path.join(os.tmpdir(), 'mss-transcode-'));
   const sourcePath = originalKey ? path.join(workRoot, 'original') : inputPath;
-  if (!sourcePath) throw new Error('Нет исходного файла для транскода');
-  if (originalKey) await downloadObject(bucket, originalKey, sourcePath);
+  try {
+    if (!sourcePath) throw new Error('Нет исходного файла для транскода');
+    if (originalKey) {
+      logJob(trackId, `download ${originalKey}`, started);
+      await downloadObject(bucket, originalKey, sourcePath);
+      logJob(trackId, 'download done', started);
+    }
 
-  const outDir = path.join(workRoot, `out-${trackId}`);
-  await fs.mkdir(outDir, { recursive: true });
-  const masterPath = path.join(outDir, 'master.ogg');
+    const outDir = path.join(workRoot, `out-${trackId}`);
+    await fs.mkdir(outDir, { recursive: true });
+    const masterPath = path.join(outDir, 'master.ogg');
 
-  const meta = await parseFile(sourcePath).catch(() => null);
+    const meta = await parseFile(sourcePath).catch(() => null);
 
-  await runProcess(ffmpeg, [
-    '-y',
-    '-i',
-    sourcePath,
-    '-map',
-    '0:a:0',
-    '-vn',
-    '-c:a',
-    'libopus',
-    '-b:a',
-    `${bitrate}k`,
-    '-f',
-    'ogg',
-    masterPath,
-  ]);
+    logJob(trackId, 'ffmpeg', started);
+    await runProcess(
+      ffmpeg,
+      [
+        '-y',
+        '-i',
+        sourcePath,
+        '-map',
+        '0:a:0',
+        '-vn',
+        '-c:a',
+        'libopus',
+        '-b:a',
+        `${bitrate}k`,
+        '-f',
+        'ogg',
+        masterPath,
+      ],
+      { timeoutMs: FFMPEG_TIMEOUT_MS },
+    );
+    logJob(trackId, 'ffmpeg done', started);
 
-  const title = meta?.common.title?.trim() || fallback?.title || 'Без названия';
-  const artist =
-    meta?.common.artist?.trim() || meta?.common.artists?.join(', ') || fallback?.artist || 'Неизвестный исполнитель';
-  const album = meta?.common.album?.trim() || null;
-  const duration = meta?.format.duration ?? (await parseFile(masterPath)).format.duration;
-  const durationMs = duration ? Math.round(duration * 1000) : null;
+    const title = meta?.common.title?.trim() || fallback?.title || 'Без названия';
+    const artist =
+      meta?.common.artist?.trim() || meta?.common.artists?.join(', ') || fallback?.artist || 'Неизвестный исполнитель';
+    const album = meta?.common.album?.trim() || null;
+    const duration = meta?.format.duration ?? (await parseFile(masterPath)).format.duration;
+    const durationMs = duration ? Math.round(duration * 1000) : null;
 
-  const loudness = await measureLoudness(ffmpeg, masterPath).catch((e) => {
-    console.warn('Loudness measurement failed', trackId, e);
-    return null;
-  });
+    const loudness = await measureLoudness(ffmpeg, masterPath).catch((e) => {
+      console.warn('Loudness measurement failed', trackId, e);
+      return null;
+    });
 
-  const masterBuf = await fs.readFile(masterPath);
-  const storageKey = `tracks/${trackId}/master.ogg`;
-  await putObject(bucket, storageKey, masterBuf, 'audio/ogg');
+    const storageKey = `tracks/${trackId}/master.ogg`;
+    logJob(trackId, 'put master', started);
+    await putObjectFromFile(bucket, storageKey, masterPath, 'audio/ogg');
+    logJob(trackId, 'put master done', started);
 
-  let coverKey: string | null = null;
-  const picture = meta?.common.picture?.[0];
-  if (picture) {
-    coverKey = `covers/${trackId}.jpg`;
-    await putObject(coversBucket, coverKey, Buffer.from(picture.data), picture.format);
+    let coverKey: string | null = null;
+    const picture = meta?.common.picture?.[0];
+    if (picture) {
+      coverKey = `covers/${trackId}.jpg`;
+      try {
+        await putObject(coversBucket, coverKey, Buffer.from(picture.data), picture.format);
+      } catch (e) {
+        console.warn(`[transcode ${trackId}] cover upload skipped`, e instanceof Error ? e.message : e);
+        coverKey = null;
+      }
+    }
+
+    let lyricsKey: string | null = null;
+    const embedded = lyricsFromMetadata(meta);
+    if (embedded) {
+      lyricsKey = `tracks/${trackId}/lyrics.${embedded.format}`;
+      try {
+        await putObject(bucket, lyricsKey, Buffer.from(embedded.text, 'utf8'), 'text/plain; charset=utf-8');
+      } catch (e) {
+        console.warn(`[transcode ${trackId}] lyrics upload skipped`, e instanceof Error ? e.message : e);
+        lyricsKey = null;
+      }
+    }
+
+    await pool.query(
+      `UPDATE tracks SET
+        title = $1, artist = $2, album = $3, duration_ms = $4,
+        status = 'ready', codec = 'opus', bitrate_kbps = $5,
+        mime_type = 'audio/ogg', storage_key_master = $6,
+        cover_storage_key = COALESCE($7, cover_storage_key), loudness_lufs = $8,
+        cache_expires_at = NULL,
+        storage_key_lyrics = COALESCE(storage_key_lyrics, $10)
+      WHERE id = $9`,
+      [title, artist, album, durationMs, bitrate, storageKey, coverKey, loudness, trackId, lyricsKey],
+    );
+    logJob(trackId, 'ready', started);
+  } finally {
+    if (inputPath && !originalKey) await fs.unlink(inputPath).catch(() => {});
+    await fs.rm(workRoot, { recursive: true, force: true }).catch(() => {});
   }
-
-  let lyricsKey: string | null = null;
-  const embedded = lyricsFromMetadata(meta);
-  if (embedded) {
-    lyricsKey = `tracks/${trackId}/lyrics.${embedded.format}`;
-    await putObject(bucket, lyricsKey, Buffer.from(embedded.text, 'utf8'), 'text/plain; charset=utf-8');
-  }
-
-  await pool.query(
-    `UPDATE tracks SET
-      title = $1, artist = $2, album = $3, duration_ms = $4,
-      status = 'ready', codec = 'opus', bitrate_kbps = $5,
-      mime_type = 'audio/ogg', storage_key_master = $6,
-      cover_storage_key = COALESCE($7, cover_storage_key), loudness_lufs = $8,
-      cache_expires_at = NULL,
-      storage_key_lyrics = COALESCE(storage_key_lyrics, $10)
-    WHERE id = $9`,
-    [title, artist, album, durationMs, bitrate, storageKey, coverKey, loudness, trackId, lyricsKey],
-  );
-
-  if (inputPath && !originalKey) await fs.unlink(inputPath).catch(() => {});
-  await fs.rm(workRoot, { recursive: true, force: true }).catch(() => {});
 }
+
+const transcodeQueue = new Queue('track.transcode', { connection: redisConnection });
 
 const worker = new Worker(
   'track.transcode',
   async (job) => {
     await processJob(job.data as TranscodeJob);
   },
-  { connection: { url: redisUrl } },
+  {
+    connection: redisConnection,
+    lockDuration: LOCK_MS,
+    stalledInterval: 60_000,
+    maxStalledCount: 2,
+    concurrency: 1,
+  },
 );
 
 worker.on('failed', async (job, err) => {
-  console.error('Job failed', job?.id, err);
+  console.error('Job failed', job?.id, job?.attemptsMade, err);
+  const attempts = job?.opts.attempts ?? 1;
+  if (job && job.attemptsMade < attempts) return;
   const data = job?.data as Partial<TranscodeJob> | undefined;
   if (data?.trackId) {
-    await pool.query(`UPDATE tracks SET status = 'failed' WHERE id = $1`, [data.trackId]);
+    await pool.query(`UPDATE tracks SET status = 'failed' WHERE id = $1 AND status = 'processing'`, [data.trackId]);
   }
   if (data?.inputPath) await fs.unlink(data.inputPath).catch(() => {});
 });
+
+worker.on('error', (err) => {
+  console.error('Transcode worker error', err);
+});
+
+worker.on('stalled', (jobId) => {
+  console.warn('Job stalled', jobId);
+});
+
+worker.on('completed', (job) => {
+  console.log('Job completed', job.id, (job.data as TranscodeJob).trackId);
+});
+
+async function requeueStuck(): Promise<void> {
+  const { rows } = await pool.query<{
+    id: string;
+    storage_key_original: string;
+    title: string;
+    artist: string;
+  }>(
+    `SELECT id, storage_key_original, title, artist FROM tracks
+     WHERE storage_key_original IS NOT NULL AND storage_key_master IS NULL
+       AND status IN ('processing', 'failed')`,
+  );
+  if (!rows.length) return;
+    const inflight = await transcodeQueue.getJobs(['waiting', 'active', 'delayed']);
+  const busy = new Set(inflight.map((j) => (j.data as TranscodeJob).trackId));
+  for (const row of rows) {
+    if (busy.has(row.id)) {
+      console.log('Stuck transcode already queued', row.id);
+      continue;
+    }
+    const jobId = `transcode-${row.id}`;
+    const existing = await transcodeQueue.getJob(jobId);
+    if (existing) await existing.remove().catch(() => undefined);
+    await pool.query(`UPDATE tracks SET status = 'processing' WHERE id = $1 AND status = 'failed'`, [row.id]);
+    await transcodeQueue.add(
+      'transcode',
+      {
+        trackId: row.id,
+        originalKey: row.storage_key_original,
+        fallback: { title: row.title, artist: row.artist },
+      },
+      { jobId, attempts: 3, backoff: { type: 'exponential', delay: 8_000 } },
+    );
+    console.log('Requeued stuck transcode', row.id);
+  }
+}
 
 /** Досчитывает громкость треков, загруженных до появления нормализации. */
 async function backfillLoudness(): Promise<void> {
   const { rows } = await pool.query<{ id: string; storage_key_master: string }>(
     `SELECT id, storage_key_master FROM tracks
      WHERE status = 'ready' AND loudness_lufs IS NULL AND storage_key_master IS NOT NULL
-     ORDER BY created_at DESC LIMIT 1000`,
+     ORDER BY created_at DESC LIMIT 50`,
   );
   if (!rows.length) return;
   console.log(`Measuring loudness for ${rows.length} existing tracks`);
@@ -161,7 +251,7 @@ async function backfillLoudness(): Promise<void> {
   for (const row of rows) {
     const file = path.join(tmpDir, `${row.id}.ogg`);
     try {
-      await downloadObject(bucket, row.storage_key_master, file);
+      await downloadObject(bucket, row.storage_key_master, file, 120_000);
       const lufs = await measureLoudness(ffmpeg, file);
       // −99 помечает «измерить не удалось», чтобы не пытаться снова на каждом старте.
       await pool.query(`UPDATE tracks SET loudness_lufs = $1 WHERE id = $2`, [lufs ?? -99, row.id]);
@@ -177,5 +267,14 @@ async function backfillLoudness(): Promise<void> {
 }
 
 console.log('Transcode worker running');
-void backfillLoudness().catch((e) => console.warn('Loudness backfill stopped', e));
+void requeueStuck().catch((e) => console.warn('Requeue stuck transcodes failed', e));
+void (async () => {
+  await new Promise((r) => setTimeout(r, 15_000));
+  const counts = await transcodeQueue.getJobCounts('wait', 'active');
+  if ((counts.active ?? 0) + (counts.wait ?? 0) > 0) {
+    console.log('Loudness backfill deferred — transcode queue is busy');
+    return;
+  }
+  await backfillLoudness();
+})().catch((e) => console.warn('Loudness backfill stopped', e));
 startCacheExpireLoop();

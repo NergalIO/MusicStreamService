@@ -64,11 +64,13 @@ export function mapLocalTrack(
   if (ownsLocal && availability === 'unavailable' && (t.status === 'registered' || t.status === 'cached')) {
     availability = 'cached';
   }
+  const blocked = t.status === 'processing' || t.status === 'uploading' || t.status === 'failed';
   const playable =
-    ownsLocal ||
-    availability === 'cached' ||
-    availability === 'online' ||
-    t.status === 'ready';
+    !blocked &&
+    (ownsLocal ||
+      availability === 'cached' ||
+      availability === 'online' ||
+      t.status === 'ready');
   const unplayableReason =
     playable ? undefined : LOCAL_STATUS_REASON[t.status] ?? 'Нет активных источников';
   rememberCloudUrls(t.id, t);

@@ -62,6 +62,7 @@ class PlaybackService : MediaSessionService {
                 }
         }
         ensureForeground()
+        controller.notifyPlaybackServiceStarted()
     }
 
     private inner class SessionCallback : MediaSession.Callback {
@@ -123,6 +124,7 @@ class PlaybackService : MediaSessionService {
     override fun onGetSession(controllerInfo: MediaSession.ControllerInfo): MediaSession? = mediaSession
 
     override fun onDestroy() {
+        controller.notifyPlaybackServiceStopped()
         buttonsJob?.cancel()
         serviceJob.cancel()
         mediaSession?.let { session ->
