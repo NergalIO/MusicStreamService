@@ -77,7 +77,7 @@ class TrackHost(val vm: MssViewModel, val nav: NavHostController)
 
 val LocalTrackHost = staticCompositionLocalOf<TrackHost?> { null }
 
-fun canDownload(track: UnifiedTrack): Boolean = track.source != SourceId.SPOTIFY
+fun canDownload(track: UnifiedTrack): Boolean = track.playable
 
 fun mssTrackUrl(track: UnifiedTrack): String =
     "mss://track/${track.source.name.lowercase()}/${java.net.URLEncoder.encode(track.id, Charsets.UTF_8)}"

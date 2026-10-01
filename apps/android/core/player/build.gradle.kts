@@ -22,6 +22,7 @@ dependencies {
     implementation(project(":core:datastore"))
     implementation(project(":core:offline"))
     implementation(project(":core:localtracks"))
+    implementation(project(":core:downloads"))
     implementation(project(":core:network"))
     implementation(libs.media3.exoplayer)
     implementation(libs.media3.exoplayer.hls)

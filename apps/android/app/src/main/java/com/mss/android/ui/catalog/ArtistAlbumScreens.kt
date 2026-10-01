@@ -355,7 +355,7 @@ private fun AlbumActions(vm: MssViewModel, album: AlbumWithTracks, modifier: Mod
             Text("Слушать", Modifier.padding(start = 4.dp))
         }
         when {
-            album.source == SourceId.SPOTIFY || tracks.isEmpty() -> {}
+            tracks.isEmpty() -> {}
             running > 0 -> OutlinedButton(onClick = {}, enabled = false) {
                 CircularProgressIndicator(Modifier.size(16.dp), strokeWidth = 2.dp, color = DownloadedGreen)
                 Text("Скачано $done из ${tracks.size}", Modifier.padding(start = 8.dp))

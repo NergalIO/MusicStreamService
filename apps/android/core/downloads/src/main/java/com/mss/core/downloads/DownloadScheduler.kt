@@ -5,6 +5,10 @@ import androidx.work.OneTimeWorkRequestBuilder
 import androidx.work.WorkInfo
 import androidx.work.WorkManager
 import androidx.work.workDataOf
+import com.mss.core.connectors.AuthStatus
+import com.mss.core.connectors.ConnectorException
+import com.mss.core.connectors.SpotifyConnector
+import com.mss.core.connectors.VkConnector
 import com.mss.core.connectors.YandexConnector
 import com.mss.core.datastore.MssPreferences
 import com.mss.core.model.AlbumWithTracks
@@ -38,6 +42,8 @@ class DownloadScheduler @Inject constructor(
     private val preferences: MssPreferences,
     private val offline: OfflineStore,
     private val yandex: YandexConnector,
+    private val vk: VkConnector,
+    private val spotify: SpotifyConnector,
 ) {
     private val json = Json { ignoreUnknownKeys = true }
     private val scope = CoroutineScope(SupervisorJob() + Dispatchers.IO)
@@ -106,8 +112,33 @@ class DownloadScheduler @Inject constructor(
                 finish(key)
                 return@launch
             }
-            runWorker(key, url, "yandex_${track.id.substringBefore(':')}.mp3", "mp3", track)
+            runWorker(key, url, fileNameFor(track, "mp3"), "mp3", track)
         }
+    }
+
+    /**
+     * Spotify сам файл не отдаёт — ищем тот же трек в Яндексе или VK и качаем оттуда,
+     * в индексе остаётся ключ `spotify:…`.
+     */
+    suspend fun enqueueSpotify(track: UnifiedTrack) {
+        val key = keyOf(track)
+        if (key in _active.value || _records.value.any { it.key == key }) return
+        val copy = findDownloadableCopy(track)
+        val url = directPlaybackUrl(copy) ?: throw ConnectorException(
+            if (copy.source == SourceId.VK) {
+                "Этот трек VK отдаётся потоком — скачать его на телефоне нельзя"
+            } else {
+                "Не удалось получить файл для скачивания"
+            },
+        )
+        if (!begin(key)) return
+        val ext = "mp3"
+        scope.launch { runWorker(key, url, fileNameFor(track, ext), ext, track) }
+    }
+
+    fun fileFor(track: UnifiedTrack): File? {
+        val rec = _records.value.find { it.key == keyOf(track) } ?: return null
+        return File(rec.path).takeIf { it.exists() }
     }
 
     fun enqueue(url: String, fileName: String, track: UnifiedTrack) {
@@ -189,6 +220,7 @@ class DownloadScheduler @Inject constructor(
             when (track.source) {
                 SourceId.LOCAL -> api.trackLyrics(track.id)
                 SourceId.YANDEX -> yandex.lyrics(track.id)
+                SourceId.SPOTIFY -> spotify.lyrics(track.id)
                 else -> null
             }
         }.getOrNull()
@@ -218,6 +250,56 @@ class DownloadScheduler @Inject constructor(
         return runCatching { json.decodeFromString<List<DownloadRecord>>(indexFile.readText()) }
             .getOrDefault(emptyList())
             .map { it.copy(key = keyOf(it.track)) }
+    }
+
+    private suspend fun findDownloadableCopy(track: UnifiedTrack): UnifiedTrack {
+        val sources = buildList {
+            if (yandex.authStatus() == AuthStatus.CONNECTED) add(SourceId.YANDEX)
+            if (vk.authStatus() == AuthStatus.CONNECTED) add(SourceId.VK)
+        }
+        if (sources.isEmpty()) {
+            throw ConnectorException("Spotify не отдаёт файлы — подключите Яндекс Музыку или VK, и трек скачается оттуда")
+        }
+        val query = SpotifyDownloadMatch.searchQuery(track)
+        var sawCopy = false
+        for (id in sources) {
+            val found = runCatching {
+                when (id) {
+                    SourceId.YANDEX -> yandex.search(query, 10)
+                    SourceId.VK -> vk.search(query, 10)
+                    else -> emptyList()
+                }
+            }.getOrDefault(emptyList())
+            for (candidate in found.filter { SpotifyDownloadMatch.isCopy(track, it) }) {
+                sawCopy = true
+                if (runCatching { directPlaybackUrl(candidate) }.getOrNull() != null) return candidate
+            }
+        }
+        if (sawCopy) {
+            throw ConnectorException("Нашли трек, но файл недоступен (часто VK отдаёт только поток). Попробуйте Яндекс Музыку")
+        }
+        throw ConnectorException("Не нашли этот трек в Яндекс Музыке и VK — Spotify не отдаёт файлы для скачивания")
+    }
+
+    private suspend fun directPlaybackUrl(track: UnifiedTrack): String? {
+        val url = when (track.source) {
+            SourceId.YANDEX -> yandex.resolvePlaybackUrl(track)
+            SourceId.VK -> track.streamUrl?.takeIf { it.isNotBlank() } ?: vk.resolvePlaybackUrl(track)
+            else -> return null
+        }
+        return url.takeIf { SpotifyDownloadMatch.isDirectFileUrl(it) }
+    }
+
+    private fun fileNameFor(track: UnifiedTrack, ext: String): String {
+        val base = "${track.artist} - ${track.title}"
+            .replace(Regex("[<>:\"/\\\\|?*\\u0000-\\u001f]"), "_")
+            .replace(Regex("\\s+"), " ")
+            .trim()
+            .replace(Regex("[. ]+$"), "")
+            .take(150)
+            .ifBlank { "track" }
+        val idPart = track.id.take(16).replace(Regex("[^A-Za-z0-9_-]"), "_")
+        return "${base.take(80)}_$idPart.$ext"
     }
 
     companion object {

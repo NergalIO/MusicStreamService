@@ -705,7 +705,7 @@ class PlayerController @Inject constructor(
                     usingSpotify = false
                     restoreExoFocus()
                     val settings = preferences.loadPlaybackSettings()
-                    val fade = crossfade && settings.crossfadeMs > 0 && track.source != SourceId.SPOTIFY
+                    val fade = crossfade && settings.crossfadeMs > 0
                     playUrl(track, resolved.url, fade, settings.crossfadeMs)
                     exoStarting = false
                     awaitingStart = false
@@ -809,7 +809,7 @@ class PlayerController @Inject constructor(
     private fun preloadNext() {
         val nextIdx = index + 1
         val next = queue.getOrNull(nextIdx) ?: return
-        if (next.source == SourceId.SPOTIFY) return
+        if (next.source == SourceId.SPOTIFY && !resolver.hasDownloadedFile(next)) return
         scope.launch {
             delay(1_000)
             runCatching { resolver.resolve(next) }

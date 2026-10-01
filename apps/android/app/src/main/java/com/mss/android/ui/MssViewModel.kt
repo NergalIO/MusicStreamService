@@ -1139,8 +1139,7 @@ class MssViewModel @Inject constructor(
     }
 
     fun downloadAlbum(album: AlbumWithTracks) = launch {
-        if (album.source == SourceId.SPOTIFY) error("Альбомы Spotify нельзя скачать")
-        val tracks = album.tracks.filter { it.source != SourceId.SPOTIFY }
+        val tracks = album.tracks.filter { it.playable }
         if (tracks.isEmpty()) error("В альбоме нет треков для скачивания")
         downloads.saveAlbum(album)
         val have = downloadedKeys.value + activeDownloads.value
@@ -1183,7 +1182,7 @@ class MssViewModel @Inject constructor(
                 if (".m3u8" in url) error("Этот трек VK отдаётся потоком — скачать его на телефоне нельзя")
                 downloads.enqueue(url, "vk_${track.id.replace(Regex("[^A-Za-z0-9_-]"), "_")}.mp3", track)
             }
-            SourceId.SPOTIFY -> error("Треки Spotify нельзя скачать")
+            SourceId.SPOTIFY -> downloads.enqueueSpotify(track)
         }
     }
 

@@ -4,6 +4,7 @@ import android.net.Uri
 import com.mss.core.connectors.ConnectorRegistry
 import com.mss.core.connectors.SpotifyWebSession
 import com.mss.core.datastore.MssPreferences
+import com.mss.core.downloads.DownloadScheduler
 import com.mss.core.localtracks.CloudUrlStore
 import com.mss.core.localtracks.LocalTrackStore
 import com.mss.core.model.SourceId
@@ -26,8 +27,12 @@ class PlaybackResolver @Inject constructor(
     private val localTracks: LocalTrackStore,
     private val cloudUrls: CloudUrlStore,
     private val spotifyWeb: SpotifyWebSession,
+    private val downloads: DownloadScheduler,
 ) {
+    fun hasDownloadedFile(track: UnifiedTrack): Boolean = downloads.fileFor(track) != null
+
     suspend fun resolve(track: UnifiedTrack): ResolvedPlayback {
+        downloads.fileFor(track)?.let { return ResolvedPlayback.Url(Uri.fromFile(it).toString()) }
         when (track.source) {
             SourceId.SPOTIFY -> {
                 // Каталог уже работает через веб-плеер, когда есть сохранённая сессия: иначе сразу
