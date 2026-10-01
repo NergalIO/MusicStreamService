@@ -74,6 +74,13 @@ if (config.basePath) {
 
 try {
   await ensureBuckets();
+} catch (err) {
+  app.log.error(err);
+  if (config.storageBackend !== 's3') process.exit(1);
+  app.log.warn('S3 недоступен при старте — API слушаем, лайки/плейлисты/статистика из БД');
+}
+
+try {
   await app.listen({ port: config.port, host: '0.0.0.0' });
   const scheme = config.httpsEnabled ? 'https' : 'http';
   app.log.info(

@@ -27,6 +27,7 @@ function makeClient(accessKeyId: string, secretAccessKey: string): S3Client {
     region,
     endpoint: endpointUrl(),
     forcePathStyle: true,
+    maxAttempts: 2,
     credentials: { accessKeyId, secretAccessKey },
   });
 }

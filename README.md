@@ -108,6 +108,8 @@ MINIO_BUCKET_COVERS=covers
 
 Beget выдаёт Access/Secret **на бакет** — подставьте обе пары. Если заданы только `MINIO_ACCESS_KEY` / `MINIO_SECRET_KEY`, ими подписываются оба бакета (так у MinIO). Тексты песен лежат в бакете треков, отдельный ключ не нужен.
 
+`MINIO_BUCKET_*` — **точные** имена из панели Beget (часто не `tracks`/`covers`). В Docker endpoint берётся из `.env`, compose его больше не затирает хостом `minio`.
+
 Имена `MINIO_*` исторические: тот же клиент ходит и в MinIO, и в Beget.
 
 **В панели Beget** (API бакет не создаёт):
@@ -121,7 +123,7 @@ Beget выдаёт Access/Secret **на бакет** — подставьте о
 Образы MinIO с Docker Hub часто не тянутся. Если всё же нужен локальный S3:
 
 ```bash
-# в .env: STORAGE_BACKEND=s3
+# в .env: STORAGE_BACKEND=s3 и MINIO_ENDPOINT=minio (имя сервиса в сети compose)
 docker compose --profile s3 up -d
 ```
 

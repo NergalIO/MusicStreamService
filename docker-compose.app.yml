@@ -32,7 +32,7 @@ services:
     environment:
       DATABASE_URL: postgresql://${POSTGRES_USER:-mss}:${POSTGRES_PASSWORD:-mss}@postgres:5432/${POSTGRES_DB:-mss}
       REDIS_URL: redis://redis:6379
-      MINIO_ENDPOINT: minio
+      # MINIO_ENDPOINT из .env (Beget или minio). Не переопределять — иначе S3 бьёт в несуществующий хост minio.
     ports:
       - '${API_PORT:-3001}:3001'
     volumes:
@@ -54,7 +54,7 @@ services:
     environment:
       DATABASE_URL: postgresql://${POSTGRES_USER:-mss}:${POSTGRES_PASSWORD:-mss}@postgres:5432/${POSTGRES_DB:-mss}
       REDIS_URL: redis://redis:6379
-      MINIO_ENDPOINT: minio
+      # MINIO_ENDPOINT из .env (Beget или minio). Не переопределять — иначе S3 бьёт в несуществующий хост minio.
     volumes:
       - mss_object_store:/app/data/object-store
       - mss_uploads:/app/tmp/uploads

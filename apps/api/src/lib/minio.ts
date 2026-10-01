@@ -17,6 +17,7 @@ function makeClient(accessKeyId: string, secretAccessKey: string): S3Client {
     region: config.minio.region,
     endpoint,
     forcePathStyle: true,
+    maxAttempts: 2,
     credentials: { accessKeyId, secretAccessKey },
   });
 }
@@ -29,15 +30,21 @@ function clientFor(bucket: string): S3Client {
 }
 
 export async function ensureBuckets(): Promise<void> {
+  const failures: string[] = [];
   for (const bucket of [config.minio.bucketTracks, config.minio.bucketCovers]) {
     try {
-      await clientFor(bucket).send(new HeadBucketCommand({ Bucket: bucket }));
+      await clientFor(bucket).send(new HeadBucketCommand({ Bucket: bucket }), {
+        abortSignal: AbortSignal.timeout(10_000),
+      });
     } catch (err) {
       const message = err instanceof Error ? err.message : String(err);
-      throw new Error(
-        `S3-бакет «${bucket}» недоступен (${message}). Создайте его в панели Beget — CreateBucket через API не поддерживается.`,
-      );
+      failures.push(`«${bucket}»: ${message}`);
     }
+  }
+  if (failures.length) {
+    throw new Error(
+      `S3-бакет недоступен (${failures.join('; ')}). Создайте его в панели Beget — CreateBucket через API не поддерживается.`,
+    );
   }
 }
 
