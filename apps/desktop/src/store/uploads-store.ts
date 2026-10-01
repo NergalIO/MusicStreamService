@@ -61,6 +61,7 @@ type AlbumJob = {
   artist: string;
   year: number | null;
   coverJpeg?: Uint8Array;
+  coverUrl?: string;
   items: string[];
 };
 
@@ -73,7 +74,7 @@ export type PublishFile = { path: string; title: string; artist: string; album?:
 /** Ставит уже скачанные файлы в очередь загрузки на сервер MSS, с метаданными трека. */
 export function enqueuePublishFiles(
   files: PublishFile[],
-  album?: { title: string; artist: string; year?: number | null },
+  album?: { title: string; artist: string; year?: number | null; coverUrl?: string | null },
 ): void {
   if (!files.length) return;
   if (!currentAccessToken()) {
@@ -87,6 +88,7 @@ export function enqueuePublishFiles(
       title: album.title.trim() || 'Альбом',
       artist: album.artist.trim() || 'Неизвестный исполнитель',
       year: album.year && album.year >= 1000 ? album.year : null,
+      coverUrl: album.coverUrl || undefined,
       items: [],
     });
   }
@@ -343,8 +345,13 @@ async function finalizeReadyAlbums(): Promise<void> {
         year: job.year,
         trackIds,
       });
-      if (job.coverJpeg?.byteLength) {
-        await setAlbumCover(album.id, jpegBlob(job.coverJpeg)).catch(() => undefined);
+      if (!album.coverUrl) {
+        if (job.coverJpeg?.byteLength) {
+          await setAlbumCover(album.id, jpegBlob(job.coverJpeg)).catch(() => undefined);
+        } else {
+          const remote = await fetchCoverBlob(job.coverUrl);
+          if (remote) await setAlbumCover(album.id, remote).catch(() => undefined);
+        }
       }
       refreshLists(undefined, album.id);
       toast.success(`Альбом «${album.title}» сохранён`);
@@ -360,6 +367,25 @@ function jpegBlob(bytes: Uint8Array): Blob {
   const copy = new ArrayBuffer(bytes.byteLength);
   new Uint8Array(copy).set(bytes);
   return new Blob([copy], { type: 'image/jpeg' });
+}
+
+async function fetchCoverBlob(url?: string): Promise<Blob | null> {
+  if (!url) return null;
+  const candidates = [...new Set([url.replace(/\d+x\d+$/, '1000x1000'), url])];
+  for (const candidate of candidates) {
+    try {
+      const res = await fetch(candidate);
+      if (!res.ok) continue;
+      const blob = await res.blob();
+      if (blob.size < 64) continue;
+      const type = blob.type || 'image/jpeg';
+      if (type.startsWith('image/')) return blob.type ? blob : new Blob([blob], { type: 'image/jpeg' });
+      return new Blob([blob], { type: 'image/jpeg' });
+    } catch {
+      /* CDN обложки необязателен */
+    }
+  }
+  return null;
 }
 
 function mostCommon(values: (string | null | undefined)[]): string | null {

@@ -76,6 +76,6 @@ export async function publishAlbumToMssCollection(
   }
   const files = await collectFiles(tracks, album.title);
   if (!files.length) throw new Error('Нет файлов для отправки на сервер MSS');
-  enqueuePublishFiles(files, { title: album.title, artist: album.artist, year: album.year ?? null });
+  enqueuePublishFiles(files, { title: album.title, artist: album.artist, year: album.year ?? null, coverUrl: album.coverUrl });
   return { uploaded: files.length, createdAlbum: true };
 }

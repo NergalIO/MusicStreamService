@@ -43,6 +43,7 @@ import io.ktor.client.request.put
 import io.ktor.client.request.setBody
 import io.ktor.client.statement.HttpResponse
 import io.ktor.client.statement.bodyAsText
+import io.ktor.client.statement.readRawBytes
 import io.ktor.http.ContentType
 import io.ktor.http.Headers
 import io.ktor.http.HttpHeaders
@@ -353,6 +354,47 @@ class MssApiClient @Inject constructor(
             }
         }
         return res.body()
+    }
+
+    suspend fun putTrackCover(id: String, jpeg: ByteArray): TrackDto {
+        val res = withAuth { token ->
+            http.put("${apiBase()}/tracks/$id/cover") {
+                header(HttpHeaders.Authorization, "Bearer $token")
+                setBody(
+                    MultiPartFormDataContent(
+                        formData {
+                            append(
+                                "file",
+                                jpeg,
+                                Headers.build {
+                                    append(HttpHeaders.ContentType, "image/jpeg")
+                                    append(HttpHeaders.ContentDisposition, "filename=\"cover.jpg\"")
+                                },
+                            )
+                        },
+                    ),
+                )
+            }
+        }
+        return res.body()
+    }
+
+    suspend fun downloadBytes(url: String): ByteArray? {
+        val res = runCatching {
+            http.get(url) {
+                header(
+                    HttpHeaders.UserAgent,
+                    "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/144.0.0.0 Safari/537.36",
+                )
+                header(HttpHeaders.Accept, "image/avif,image/webp,image/*,*/*;q=0.8")
+                if (url.contains("scdn.co") || url.contains("spotifycdn.com") || url.contains("spotify.com")) {
+                    header(HttpHeaders.Referrer, "https://open.spotify.com/")
+                }
+            }
+        }.getOrNull() ?: return null
+        if (!res.status.isSuccess()) return null
+        val bytes = runCatching { res.readRawBytes() }.getOrNull() ?: return null
+        return bytes.takeIf { it.size in 64..(10 * 1024 * 1024) }
     }
 
     suspend fun registerTrack(

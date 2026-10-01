@@ -1,6 +1,7 @@
-import type { FeedBlock, FeedItem, HomeFeedItem, StatsTopArtist, StatsTopTrack, UnifiedTrack } from '@mss/shared';
+import type { FeedBlock, FeedItem, HomeFeedItem, StatsTopArtist, StatsTopTrack, UnifiedAlbum, UnifiedTrack } from '@mss/shared';
 import { useQuery, useQueryClient } from '@tanstack/react-query';
-import { Pause, Play, Radio } from 'lucide-react';
+import { Radio } from 'lucide-react';
+import { useMemo } from 'react';
 import { Link, useNavigate } from 'react-router-dom';
 import { CardRowSkeleton, TrackListSkeleton } from '@/components/media/CollectionHeader';
 import { Carousel, Shelf } from '@/components/media/Carousel';
@@ -11,25 +12,26 @@ import { Button } from '@/components/ui/button';
 import { ErrorState } from '@/components/ui/states';
 import { artistPath } from '@/lib/artists';
 import { connectSource, useSpotifyConnected, useVkConnected, useYandexConnected } from '@/lib/connectors';
-import { greeting } from '@/lib/format';
+import { formatTrackCount, greeting } from '@/lib/format';
 import { albumMenu, artistMenu, loadAlbumTracks, loadPlaylistTracks, playlistMenu } from '@/lib/card-menus';
 import { statsArtistGroup, statsTrackToUnified, useShelves } from '@/lib/stats';
 import { albumLink, playlistPath } from '@/lib/links';
-import { playCollection, startWave, togglePlay } from '@/lib/player-actions';
-import { libraryPath, MSS_HOME, MSS_UPLOADS, SPOTIFY_HOME, SPOTIFY_WEB, YANDEX_HOME } from '@/lib/service-routes';
+import { playCollection, startWave } from '@/lib/player-actions';
+import { libraryPath, MSS_PLAYLISTS, MSS_UPLOADS, SPOTIFY_HOME, SPOTIFY_WEB, YANDEX_HOME } from '@/lib/service-routes';
 import { ServiceNav } from '@/components/layout/ServiceNav';
 import { WavePanel } from '@/pages/WavePage';
 import {
+  mssPlaylistToUnified,
   useLocalTracks,
-  useMssListenNow,
+  useMssPlaylists,
+  useMyAlbums,
+  useMyUploads,
   useSpotifyPlaylists,
   useVkPlaylists,
   useYandexChart,
   useYandexFeed,
   useYandexPlaylists,
 } from '@/lib/queries';
-import type { QueueItem } from '@/store/player-store';
-import { usePlaybackStore } from '@/store/playback-store';
 import { usePlayerStore, type PlayContext } from '@/store/player-store';
 
 function ConnectYandexCard() {
@@ -149,6 +151,31 @@ function MixesShelf({ artists }: { artists: StatsTopArtist[] }) {
   );
 }
 
+function LocalArtistsShelf({ artists }: { artists: StatsTopArtist[] }) {
+  const items = artists.filter((a) => a.source === 'local').slice(0, 10);
+  if (items.length < 2) return null;
+  return (
+    <Shelf title="Исполнители" subtitle="Кого вы слушаете в MSS">
+      <Carousel itemClassName="w-[148px]">
+        {items.map((a) => {
+          const group = statsArtistGroup(a);
+          return (
+            <MediaCard
+              key={group.key}
+              shape="circle"
+              title={a.name}
+              subtitle="Исполнитель"
+              coverUrl={a.coverUrl ?? undefined}
+              to={artistPath(group.name, group.refs)}
+              menu={() => artistMenu(group)}
+            />
+          );
+        })}
+      </Carousel>
+    </Shelf>
+  );
+}
+
 function PersonalShelves({ yandex, onlySource }: { yandex: boolean; onlySource?: StatsTopTrack['source'] }) {
   const { data } = useShelves();
   if (!data) return null;
@@ -157,21 +184,81 @@ function PersonalShelves({ yandex, onlySource }: { yandex: boolean; onlySource?:
   return (
     <>
       <StatsTrackShelf title="Часто слушаете" subtitle="Ваши треки за последний месяц" items={frequent} />
-      {yandex && <MixesShelf artists={data.topArtists} />}
+      {yandex ? <MixesShelf artists={data.topArtists} /> : onlySource === 'local' ? <LocalArtistsShelf artists={data.topArtists} /> : null}
       <StatsTrackShelf title="Давно не слушали" subtitle="Любимое, что вы не включали больше полутора месяцев" items={forgotten} />
     </>
   );
 }
 
-function ChartGrid({ tracks, context }: { tracks: UnifiedTrack[]; context: PlayContext }) {
-  return <TrackList tracks={tracks.slice(0, 10)} context={context} showSource={false} />;
+function albumsFromLocalTracks(tracks: UnifiedTrack[]): UnifiedAlbum[] {
+  const map = new Map<string, UnifiedAlbum>();
+  for (const track of tracks) {
+    const id = track.albumId?.trim();
+    const title = track.album?.trim();
+    if (!id || !title) continue;
+    const cur = map.get(id);
+    if (cur) {
+      cur.trackCount = (cur.trackCount ?? 0) + 1;
+      if (!cur.coverUrl && track.coverUrl) cur.coverUrl = track.coverUrl;
+    } else {
+      map.set(id, {
+        source: 'local',
+        id,
+        title,
+        artist: track.artist,
+        artists: track.artists,
+        coverUrl: track.coverUrl,
+        trackCount: 1,
+      });
+    }
+  }
+  return [...map.values()];
+}
+
+function mergeLocalAlbums(owned: UnifiedAlbum[], fromTracks: UnifiedAlbum[]): UnifiedAlbum[] {
+  const seen = new Set(owned.map((a) => a.id));
+  return [...owned, ...fromTracks.filter((a) => !seen.has(a.id))];
+}
+
+function ChartGrid({ tracks, context, emptyText }: { tracks: UnifiedTrack[]; context: PlayContext; emptyText?: string }) {
+  return <TrackList tracks={tracks.slice(0, 10)} context={context} showSource={false} emptyText={emptyText} />;
+}
+
+function AlbumCarousel({ albums }: { albums: UnifiedAlbum[] }) {
+  return (
+    <Carousel>
+      {albums.map((album) => (
+        <MediaCard
+          key={album.id}
+          title={album.title}
+          subtitle={[album.artist, album.year, album.trackCount ? formatTrackCount(album.trackCount) : null]
+            .filter(Boolean)
+            .join(' · ')}
+          coverUrl={album.coverUrl}
+          to={albumLink(album)}
+          menu={() => albumMenu(album)}
+          onPlay={async () => {
+            const tracks = await loadAlbumTracks(album.id, 'local');
+            playCollection(tracks, { type: 'album', title: album.title, path: albumLink(album) });
+          }}
+        />
+      ))}
+    </Carousel>
+  );
 }
 
 export function MssHomePage() {
-  const listenNow = useMssListenNow(30);
   const local = useLocalTracks(20);
+  const playlists = useMssPlaylists();
+  const ownedAlbums = useMyAlbums();
+  const uploads = useMyUploads();
+  const albums = useMemo(
+    () => mergeLocalAlbums(ownedAlbums.data ?? [], albumsFromLocalTracks(uploads.data ?? [])),
+    [ownedAlbums.data, uploads.data],
+  );
+  const playlistCards = useMemo(() => (playlists.data ?? []).map(mssPlaylistToUnified), [playlists.data]);
   const localContext: PlayContext = { type: 'library', title: 'Новое в MSS', path: MSS_UPLOADS };
-  const listenContext: PlayContext = { type: 'other', title: 'Слушать сейчас', path: MSS_HOME };
+  const albumsLoading = (ownedAlbums.isLoading || uploads.isLoading) && !albums.length;
 
   return (
     <div>
@@ -179,52 +266,56 @@ export function MssHomePage() {
       <div className="space-y-10">
       <h1 className="text-3xl font-bold tracking-tight">{greeting()}</h1>
 
-      {listenNow.isError && (
-        <ErrorState
-          className="py-8"
-          title="Не удалось загрузить подборку"
-          error={listenNow.error}
-          onRetry={() => listenNow.refetch()}
-        />
-      )}
-
-      {!listenNow.isError && (
-        <>
-          {listenNow.isLoading ? (
-            <div className="h-32 animate-pulse rounded-2xl bg-foreground/[0.06]" />
-          ) : (
-            <ListenNowHero
-              tracks={listenNow.tracks}
-              homePath={MSS_HOME}
-              idleSubtitle="То, что вы чаще слушаете из загруженных в MSS"
-              trackInMix={(current) =>
-                !!current && listenNow.tracks.some((t) => t.source === current.source && t.id === current.id)
-              }
-            />
-          )}
-          <Shelf title="Слушать сейчас" subtitle="Из треков, загруженных в MSS">
-            {listenNow.isLoading ? (
-              <TrackListSkeleton rows={8} />
-            ) : (
-              <TrackList
-                tracks={listenNow.tracks}
-                context={listenContext}
-                showSource={false}
-                emptyText="Загрузите треки в MSS — подборка соберётся из ваших прослушиваний"
-              />
-            )}
-          </Shelf>
-        </>
-      )}
-
       <PersonalShelves yandex={false} onlySource="local" />
+
+      {(playlists.isLoading || playlistCards.length > 0) && (
+        <Shelf title="Ваши плейлисты" moreTo={MSS_PLAYLISTS}>
+          {playlists.isLoading && !playlistCards.length ? (
+            <CardRowSkeleton />
+          ) : (
+            <Carousel>
+              {playlistCards.map((p) => (
+                <MediaCard
+                  key={p.id}
+                  title={p.title}
+                  subtitle={p.trackCount !== undefined ? formatTrackCount(p.trackCount) : p.owner}
+                  coverUrl={p.coverUrl}
+                  to={playlistPath(p)}
+                  menu={() => playlistMenu(p)}
+                  onPlay={async () => {
+                    playCollection(await loadPlaylistTracks(p), { type: 'playlist', title: p.title, path: playlistPath(p) });
+                  }}
+                />
+              ))}
+            </Carousel>
+          )}
+        </Shelf>
+      )}
+
+      {(albumsLoading || albums.length > 0 || ownedAlbums.isError) && (
+        <Shelf title="Альбомы" moreTo={MSS_UPLOADS}>
+          {ownedAlbums.isError && !albums.length ? (
+            <ErrorState
+              className="py-8"
+              title="Не удалось загрузить альбомы"
+              error={ownedAlbums.error}
+              onRetry={() => void ownedAlbums.refetch()}
+            />
+          ) : albumsLoading ? (
+            <CardRowSkeleton />
+          ) : (
+            <AlbumCarousel albums={albums} />
+          )}
+        </Shelf>
+      )}
+
       <Shelf title="Новое в MSS" subtitle="Последние загрузки во внутреннюю библиотеку">
         {local.isError ? (
           <ErrorState className="py-8" title="Сервер MSS недоступен" error={local.error} onRetry={() => void local.refetch()} />
         ) : local.isLoading ? (
           <TrackListSkeleton rows={5} />
         ) : (
-          <TrackList tracks={local.data ?? []} context={localContext} showSource={false} emptyText="В библиотеке пока нет треков" />
+          <ChartGrid tracks={local.data ?? []} context={localContext} emptyText="В библиотеке пока нет треков" />
         )}
       </Shelf>
       </div>
@@ -292,50 +383,6 @@ export function YandexHomePage() {
           )}
         </Shelf>
       )}
-      </div>
-    </div>
-  );
-}
-
-function ListenNowHero({
-  tracks,
-  homePath,
-  idleSubtitle,
-  trackInMix,
-}: {
-  tracks: UnifiedTrack[];
-  homePath: string;
-  idleSubtitle: string;
-  trackInMix: (current: QueueItem | null) => boolean;
-}) {
-  const current = usePlayerStore((s) => s.current);
-  const playing = usePlaybackStore((s) => s.playing);
-  const context: PlayContext = { type: 'other', title: 'Слушать сейчас', path: homePath };
-  const active = trackInMix(current);
-
-  return (
-    <div className="relative overflow-hidden rounded-2xl border border-foreground/[0.06] bg-gradient-to-br from-primary/40 via-primary/15 to-card p-7">
-      <div className="pointer-events-none absolute -right-16 -top-24 h-72 w-72 rounded-full bg-primary/40 blur-3xl motion-reduce:blur-none" />
-      <div className="relative flex items-center gap-6">
-        <button
-          type="button"
-          onClick={() => (active ? togglePlay() : tracks.length && playCollection(tracks, context, false))}
-          disabled={!tracks.length}
-          className="flex h-16 w-16 shrink-0 items-center justify-center rounded-full bg-foreground text-background shadow-xl transition-transform hover:scale-105 disabled:opacity-40"
-          aria-label="Слушать сейчас"
-        >
-          {active && playing ? <Pause size={26} fill="currentColor" /> : <Play size={26} fill="currentColor" className="ml-1" />}
-        </button>
-        <div className="min-w-0 flex-1">
-          <div className="text-xs font-semibold uppercase tracking-wider text-foreground/70">Слушать сейчас</div>
-          <div className="mt-1 truncate text-2xl font-bold tracking-tight">
-            {active && current
-              ? `${current.title} — ${current.artist}`
-              : tracks.length
-                ? idleSubtitle
-                : 'Загружаем подборку…'}
-          </div>
-        </div>
       </div>
     </div>
   );

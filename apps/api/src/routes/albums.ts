@@ -13,7 +13,7 @@ import {
 import { config } from '../config.js';
 import { db } from '../db/client.js';
 import { albumTracks, albums, albumLikes, tracks } from '../db/schema.js';
-import { albumCoverPublicUrl, appendTracksToAlbum, findOwnAlbum } from '../lib/albums.js';
+import { albumCoverPublicUrl, appendTracksToAlbum, collapseOwnAlbumDuplicates, findOwnAlbum, resolvePublishedAlbum } from '../lib/albums.js';
 import { computeAvailability } from '../lib/track-availability.js';
 import { deleteObject, getObjectFull, putObject } from '../lib/storage.js';
 import { heldTrackIdsForUser, toTrackDto } from './tracks.js';
@@ -74,6 +74,7 @@ async function albumTracksDto(albumId: string, userId: string, album: AlbumDto):
 export async function albumRoutes(app: FastifyInstance) {
   app.get('/albums', async (req) => {
     await app.authenticate(req);
+    await collapseOwnAlbumDuplicates(req.userId!);
     const query = req.query as { query?: string };
     const q = (query.query ?? '').trim();
     const rows = await db
@@ -95,30 +96,19 @@ export async function albumRoutes(app: FastifyInstance) {
   app.post('/albums', async (req, reply) => {
     await app.authenticate(req);
     const body = createAlbumSchema.parse(req.body);
-    const [row] = await db
-      .insert(albums)
-      .values({
-        userId: req.userId!,
-        title: body.title,
-        artist: body.artist,
-        year: body.year ?? null,
-        type: body.type ?? 'album',
-      })
-      .returning();
-
     const requested = body.trackIds ?? [];
-    if (requested.length) {
-      const valid = new Set(
-        (await db.select({ id: tracks.id }).from(tracks).where(inArray(tracks.id, requested))).map((r) => r.id),
-      );
-      await appendTracksToAlbum(
-        row.id,
-        requested.filter((id) => valid.has(id)),
-      );
-    }
-
-    const dto = toAlbumDto(row, await countTracks(row.id));
-    return reply.code(201).send(await albumTracksDto(row.id, req.userId!, dto));
+    const valid = requested.length
+      ? new Set((await db.select({ id: tracks.id }).from(tracks).where(inArray(tracks.id, requested))).map((r) => r.id))
+      : new Set<string>();
+    const { album, created } = await resolvePublishedAlbum(req.userId!, {
+      title: body.title,
+      artist: body.artist,
+      year: body.year ?? null,
+      type: body.type,
+      trackIds: requested.filter((id) => valid.has(id)),
+    });
+    const dto = toAlbumDto(album, await countTracks(album.id));
+    return reply.code(created ? 201 : 200).send(await albumTracksDto(album.id, req.userId!, dto));
   });
 
   app.get('/albums/:id', async (req, reply) => {

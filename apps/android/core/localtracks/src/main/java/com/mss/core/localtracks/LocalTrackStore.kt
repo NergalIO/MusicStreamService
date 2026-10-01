@@ -171,4 +171,17 @@ class LocalTrackStore @Inject constructor(
     fun readBytes(uri: Uri): ByteArray =
         context.contentResolver.openInputStream(uri)?.use { it.readBytes() }
             ?: throw IllegalStateException("Не удалось прочитать файл")
+
+    /** Встроенная обложка из ID3/MP4/FLAC, если она есть в файле. */
+    fun embeddedPicture(uri: Uri): ByteArray? {
+        val retriever = android.media.MediaMetadataRetriever()
+        return try {
+            retriever.setDataSource(context, uri)
+            retriever.embeddedPicture
+        } catch (_: Exception) {
+            null
+        } finally {
+            runCatching { retriever.release() }
+        }
+    }
 }

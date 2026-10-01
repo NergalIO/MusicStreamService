@@ -1,5 +1,7 @@
 package com.mss.android.data
 
+import android.graphics.Bitmap
+import android.graphics.BitmapFactory
 import android.net.Uri
 import com.mss.core.connectors.AuthStatus
 import com.mss.core.connectors.ConnectorRegistry
@@ -195,11 +197,13 @@ class MssRepository @Inject constructor(
                 track.title.ifBlank { "Трек" },
                 track.artist.ifBlank { "Неизвестный исполнитель" },
                 album.title,
+                track.coverUrl,
             )
             trackIds += created.id
             uploaded += 1
         }
         val (albumId, created) = ensureAlbumOnServer(album, trackIds.distinct())
+        runCatching { uploadAlbumCover(album, albumId, extraFiles) }
         if (uploaded == 0 && !created && !isUuid(album.id) && trackIds.isEmpty()) {
             error("Нет файлов для отправки на сервер MSS")
         }
@@ -224,6 +228,7 @@ class MssRepository @Inject constructor(
                 track.title.ifBlank { "Трек" },
                 track.artist.ifBlank { "Неизвестный исполнитель" },
                 track.album,
+                track.coverUrl,
             )
             uploaded += 1
         }
@@ -239,7 +244,13 @@ class MssRepository @Inject constructor(
 
     suspend fun artistTracks(name: String): List<UnifiedTrack> = api.artistTracks(name).map { unify(it) }
 
-    suspend fun registerLocalFile(uri: Uri, title: String, artist: String, album: String? = null): UnifiedTrack {
+    suspend fun registerLocalFile(
+        uri: Uri,
+        title: String,
+        artist: String,
+        album: String? = null,
+        coverUrl: String? = null,
+    ): UnifiedTrack {
         localTracks.persistUri(uri)
         val (hash, size) = localTracks.hashUri(uri)
         val name = localTracks.displayName(uri)
@@ -267,6 +278,9 @@ class MssRepository @Inject constructor(
         localTracks.sidecarLyrics(uri)?.let { (format, text) ->
             runCatching { api.putTrackLyrics(done.id, format, text) }
         }
+        if (done.coverUrl.isNullOrBlank()) {
+            runCatching { uploadTrackCover(done.id, coverUrl, uri) }.getOrNull()?.let { return unify(it) }
+        }
         return unify(done)
     }
 
@@ -281,7 +295,7 @@ class MssRepository @Inject constructor(
                 registerLocalFile(uri, localTracks.displayName(uri).substringBeforeLast('.').ifBlank { title }, artist, title)
             }
         val created = api.createAlbum(title, artist, tracks.map { it.id })
-        if (cover != null) {
+        if (cover != null && created.coverUrl.isNullOrBlank()) {
             return api.putAlbumCover(created.id, cover.second, cover.first).toUnifiedAlbum()
         }
         return created.toUnifiedAlbum()
@@ -364,6 +378,63 @@ class MssRepository @Inject constructor(
             album.year,
         )
         return created.id to true
+    }
+
+    private suspend fun uploadAlbumCover(album: AlbumWithTracks, albumId: String, extraFiles: Map<String, Uri>) {
+        val existing = runCatching { api.getAlbum(albumId) }.getOrNull()
+        if (!existing?.coverUrl.isNullOrBlank()) return
+        val fromUrl = fetchCover(album.coverUrl)
+            ?: album.tracks.firstNotNullOfOrNull { fetchCover(it.coverUrl) }
+        val fromFile = album.tracks.firstNotNullOfOrNull { track ->
+            val uri = extraFiles[track.id]
+                ?: extraFiles["${track.source}:${track.id}"]
+                ?: localTracks.get(track.id)?.uri?.let(Uri::parse)
+            uri?.let { localTracks.embeddedPicture(it) }
+        }
+        val bytes = fromUrl ?: fromFile ?: return
+        val mime = sniffImageMime(bytes)
+        val (payload, type) = if (mime in ALBUM_COVER_TYPES) {
+            bytes to mime
+        } else {
+            (toJpeg(bytes) ?: return) to "image/jpeg"
+        }
+        api.putAlbumCover(albumId, payload, type)
+    }
+
+    private suspend fun uploadTrackCover(trackId: String, coverUrl: String?, audioUri: Uri?): TrackDto? {
+        val raw = fetchCover(coverUrl) ?: audioUri?.let { localTracks.embeddedPicture(it) } ?: return null
+        val jpeg = toJpeg(raw) ?: return null
+        return api.putTrackCover(trackId, jpeg)
+    }
+
+    private suspend fun fetchCover(url: String?): ByteArray? {
+        if (url.isNullOrBlank()) return null
+        val candidates = linkedSetOf(largerCoverUrl(url), url)
+        for (candidate in candidates) {
+            val bytes = api.downloadBytes(candidate) ?: continue
+            if (sniffImageMime(bytes) != "application/octet-stream" || toJpeg(bytes) != null) return bytes
+        }
+        return null
+    }
+
+    private fun largerCoverUrl(url: String): String =
+        url.replace(Regex("""/\d+x\d+([?#].*)?$"""), "/1000x1000$1").replace("%%", "1000x1000")
+
+    private fun sniffImageMime(bytes: ByteArray): String {
+        if (bytes.size >= 3 && bytes[0] == 0xFF.toByte() && bytes[1] == 0xD8.toByte()) return "image/jpeg"
+        if (bytes.size >= 8 && bytes[0] == 0x89.toByte() && bytes[1] == 0x50.toByte() && bytes[2] == 0x4E.toByte()) {
+            return "image/png"
+        }
+        if (bytes.size >= 12 && bytes.copyOfRange(8, 12).decodeToString() == "WEBP") return "image/webp"
+        return "application/octet-stream"
+    }
+
+    private fun toJpeg(bytes: ByteArray): ByteArray? {
+        if (sniffImageMime(bytes) == "image/jpeg") return bytes
+        val bitmap = BitmapFactory.decodeByteArray(bytes, 0, bytes.size) ?: return null
+        val out = java.io.ByteArrayOutputStream()
+        if (!bitmap.compress(Bitmap.CompressFormat.JPEG, 90, out)) return null
+        return out.toByteArray()
     }
 
     private fun isUuid(id: String) = UUID_RE.matches(id)
