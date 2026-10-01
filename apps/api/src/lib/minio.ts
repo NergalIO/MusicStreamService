@@ -12,20 +12,26 @@ import { s3EndpointUrl } from './s3-endpoint.js';
 
 const endpoint = s3EndpointUrl(config.minio.endpoint, config.minio.port, config.minio.useSsl);
 
-export const s3 = new S3Client({
-  region: config.minio.region,
-  endpoint,
-  forcePathStyle: true,
-  credentials: {
-    accessKeyId: config.minio.accessKey,
-    secretAccessKey: config.minio.secretKey,
-  },
-});
+function makeClient(accessKeyId: string, secretAccessKey: string): S3Client {
+  return new S3Client({
+    region: config.minio.region,
+    endpoint,
+    forcePathStyle: true,
+    credentials: { accessKeyId, secretAccessKey },
+  });
+}
+
+const s3Tracks = makeClient(config.minio.accessKeyTracks, config.minio.secretKeyTracks);
+const s3Covers = makeClient(config.minio.accessKeyCovers, config.minio.secretKeyCovers);
+
+function clientFor(bucket: string): S3Client {
+  return bucket === config.minio.bucketCovers ? s3Covers : s3Tracks;
+}
 
 export async function ensureBuckets(): Promise<void> {
   for (const bucket of [config.minio.bucketTracks, config.minio.bucketCovers]) {
     try {
-      await s3.send(new HeadBucketCommand({ Bucket: bucket }));
+      await clientFor(bucket).send(new HeadBucketCommand({ Bucket: bucket }));
     } catch (err) {
       const message = err instanceof Error ? err.message : String(err);
       throw new Error(
@@ -36,7 +42,7 @@ export async function ensureBuckets(): Promise<void> {
 }
 
 export async function putObject(bucket: string, key: string, body: Buffer, contentType?: string) {
-  await s3.send(
+  await clientFor(bucket).send(
     new PutObjectCommand({
       Bucket: bucket,
       Key: key,
@@ -47,11 +53,11 @@ export async function putObject(bucket: string, key: string, body: Buffer, conte
 }
 
 export async function deleteObject(bucket: string, key: string): Promise<void> {
-  await s3.send(new DeleteObjectCommand({ Bucket: bucket, Key: key }));
+  await clientFor(bucket).send(new DeleteObjectCommand({ Bucket: bucket, Key: key }));
 }
 
 export async function headObject(bucket: string, key: string): Promise<{ size: number; contentType?: string }> {
-  const res = await s3.send(new HeadObjectCommand({ Bucket: bucket, Key: key }));
+  const res = await clientFor(bucket).send(new HeadObjectCommand({ Bucket: bucket, Key: key }));
   return { size: res.ContentLength ?? 0, contentType: res.ContentType };
 }
 
@@ -61,7 +67,7 @@ export async function getObjectRange(
   start: number,
   end: number,
 ): Promise<{ body: AsyncIterable<Uint8Array>; contentLength: number; totalSize: number; contentType?: string }> {
-  const res = await s3.send(
+  const res = await clientFor(bucket).send(
     new GetObjectCommand({
       Bucket: bucket,
       Key: key,
@@ -79,7 +85,7 @@ export async function getObjectRange(
 }
 
 export async function getObjectFull(bucket: string, key: string): Promise<Buffer> {
-  const res = await s3.send(new GetObjectCommand({ Bucket: bucket, Key: key }));
+  const res = await clientFor(bucket).send(new GetObjectCommand({ Bucket: bucket, Key: key }));
   const chunks: Buffer[] = [];
   for await (const chunk of res.Body as AsyncIterable<Uint8Array>) {
     chunks.push(Buffer.from(chunk));
@@ -94,7 +100,7 @@ export async function presignPut(
   contentType?: string,
 ): Promise<string> {
   return getSignedUrl(
-    s3,
+    clientFor(bucket),
     new PutObjectCommand({ Bucket: bucket, Key: key, ContentType: contentType }),
     { expiresIn },
   );
@@ -107,7 +113,7 @@ export async function presignGet(
   opts?: { contentDisposition?: string; contentType?: string },
 ): Promise<string> {
   return getSignedUrl(
-    s3,
+    clientFor(bucket),
     new GetObjectCommand({
       Bucket: bucket,
       Key: key,

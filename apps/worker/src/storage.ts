@@ -9,6 +9,12 @@ const useSsl = process.env.MINIO_USE_SSL === 'true';
 const host = process.env.MINIO_ENDPOINT ?? 'localhost';
 const port = Number(process.env.MINIO_PORT ?? 9000);
 const region = process.env.MINIO_REGION ?? 'us-east-1';
+const coversBucket = process.env.MINIO_BUCKET_COVERS ?? 'covers';
+
+function envTrim(name: string): string | undefined {
+  const v = process.env[name]?.trim();
+  return v || undefined;
+}
 
 function endpointUrl(): string {
   const scheme = useSsl ? 'https' : 'http';
@@ -16,18 +22,32 @@ function endpointUrl(): string {
   return `${scheme}://${host}:${port}`;
 }
 
-const s3 =
+function makeClient(accessKeyId: string, secretAccessKey: string): S3Client {
+  return new S3Client({
+    region,
+    endpoint: endpointUrl(),
+    forcePathStyle: true,
+    credentials: { accessKeyId, secretAccessKey },
+  });
+}
+
+const sharedAccess = envTrim('MINIO_ACCESS_KEY') ?? 'minio';
+const sharedSecret = envTrim('MINIO_SECRET_KEY') ?? 'minio12345';
+
+const s3Tracks =
   backend === 's3'
-    ? new S3Client({
-        region,
-        endpoint: endpointUrl(),
-        forcePathStyle: true,
-        credentials: {
-          accessKeyId: process.env.MINIO_ACCESS_KEY ?? 'minio',
-          secretAccessKey: process.env.MINIO_SECRET_KEY ?? 'minio12345',
-        },
-      })
+    ? makeClient(envTrim('MINIO_ACCESS_KEY_TRACKS') ?? sharedAccess, envTrim('MINIO_SECRET_KEY_TRACKS') ?? sharedSecret)
     : null;
+const s3Covers =
+  backend === 's3'
+    ? makeClient(envTrim('MINIO_ACCESS_KEY_COVERS') ?? sharedAccess, envTrim('MINIO_SECRET_KEY_COVERS') ?? sharedSecret)
+    : null;
+
+function clientFor(bucket: string): S3Client {
+  const client = bucket === coversBucket ? s3Covers : s3Tracks;
+  if (!client) throw new Error('S3 client not configured');
+  return client;
+}
 
 /** Копирует объект хранилища во временный файл, чтобы отдать его ffmpeg. */
 export async function downloadObject(bucket: string, key: string, target: string): Promise<void> {
@@ -35,7 +55,7 @@ export async function downloadObject(bucket: string, key: string, target: string
     await fs.copyFile(path.join(localRoot, bucket, key), target);
     return;
   }
-  const res = await s3!.send(new GetObjectCommand({ Bucket: bucket, Key: key }));
+  const res = await clientFor(bucket).send(new GetObjectCommand({ Bucket: bucket, Key: key }));
   const bytes = await res.Body!.transformToByteArray();
   await fs.writeFile(target, bytes);
 }
@@ -52,7 +72,7 @@ export async function putObject(
     await fs.writeFile(file, body);
     return;
   }
-  await s3!.send(
+  await clientFor(bucket).send(
     new PutObjectCommand({
       Bucket: bucket,
       Key: key,
@@ -67,5 +87,5 @@ export async function deleteObject(bucket: string, key: string): Promise<void> {
     await fs.rm(path.join(localRoot, bucket, key), { force: true });
     return;
   }
-  await s3!.send(new DeleteObjectCommand({ Bucket: bucket, Key: key }));
+  await clientFor(bucket).send(new DeleteObjectCommand({ Bucket: bucket, Key: key }));
 }

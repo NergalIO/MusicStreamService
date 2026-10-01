@@ -98,17 +98,21 @@ MINIO_ENDPOINT=s3.ru1.storage.beget.cloud
 MINIO_PORT=443
 MINIO_USE_SSL=true
 MINIO_REGION=ru1
-MINIO_ACCESS_KEY=
-MINIO_SECRET_KEY=
+MINIO_ACCESS_KEY_TRACKS=
+MINIO_SECRET_KEY_TRACKS=
+MINIO_ACCESS_KEY_COVERS=
+MINIO_SECRET_KEY_COVERS=
 MINIO_BUCKET_TRACKS=tracks
 MINIO_BUCKET_COVERS=covers
 ```
+
+Beget выдаёт Access/Secret **на бакет** — подставьте обе пары. Если заданы только `MINIO_ACCESS_KEY` / `MINIO_SECRET_KEY`, ими подписываются оба бакета (так у MinIO). Тексты песен лежат в бакете треков, отдельный ключ не нужен.
 
 Имена `MINIO_*` исторические: тот же клиент ходит и в MinIO, и в Beget.
 
 **В панели Beget** (API бакет не создаёт):
 
-1. Создайте приватные бакеты `tracks` и `covers` (или как в `MINIO_BUCKET_*`).
+1. Создайте приватные бакеты `tracks` и `covers` (или как в `MINIO_BUCKET_*`) и впишите ключи каждого в `.env`.
 2. CORS на бакете треков — только если ПК стримит **напрямую** с Beget: методы `GET`, `HEAD`; заголовок `Range`; origin Electron в dev (`http://localhost:…`). Android (ExoPlayer) CORS не использует. PUT оригинала идёт из Electron main / Android, без CORS. Тексты песен API пишет сам, отдельный CORS не нужен.
 3. Перезапустите API и worker после правки `.env`. Миграции (`pnpm db:migrate`) добавляют `storage_key_original` и `storage_key_lyrics`.
 

@@ -9,6 +9,11 @@ dotenv.config({ path: path.join(ROOT, '.env') });
 
 const fromRoot = (p: string) => path.resolve(ROOT, p);
 
+function envTrim(name: string): string | undefined {
+  const v = process.env[name]?.trim();
+  return v || undefined;
+}
+
 export function normalizeBasePath(raw: string | undefined): string {
   const trimmed = (raw ?? '').trim();
   if (!trimmed || trimmed === '/') return '';
@@ -45,6 +50,9 @@ function readAppVersion(): string {
   }
 }
 
+const minioAccessKey = envTrim('MINIO_ACCESS_KEY') ?? 'minio';
+const minioSecretKey = envTrim('MINIO_SECRET_KEY') ?? 'minio12345';
+
 export const config = {
   root: ROOT,
   appVersion: readAppVersion(),
@@ -76,8 +84,12 @@ export const config = {
     port: Number(process.env.MINIO_PORT ?? 9000),
     useSsl: process.env.MINIO_USE_SSL === 'true',
     region: process.env.MINIO_REGION ?? 'us-east-1',
-    accessKey: process.env.MINIO_ACCESS_KEY ?? 'minio',
-    secretKey: process.env.MINIO_SECRET_KEY ?? 'minio12345',
+    accessKey: minioAccessKey,
+    secretKey: minioSecretKey,
+    accessKeyTracks: envTrim('MINIO_ACCESS_KEY_TRACKS') ?? minioAccessKey,
+    secretKeyTracks: envTrim('MINIO_SECRET_KEY_TRACKS') ?? minioSecretKey,
+    accessKeyCovers: envTrim('MINIO_ACCESS_KEY_COVERS') ?? minioAccessKey,
+    secretKeyCovers: envTrim('MINIO_SECRET_KEY_COVERS') ?? minioSecretKey,
     bucketTracks: process.env.MINIO_BUCKET_TRACKS ?? 'tracks',
     bucketCovers: process.env.MINIO_BUCKET_COVERS ?? 'covers',
   },
