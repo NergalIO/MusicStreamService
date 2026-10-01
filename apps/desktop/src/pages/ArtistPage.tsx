@@ -49,9 +49,9 @@ function AlbumShelf({ title, albums }: { title: string; albums: UnifiedAlbum[] }
             to={albumLink(a)}
             menu={() => albumMenu(a)}
             onPlay={
-              a.source === 'yandex' || a.source === 'spotify'
+              a.source === 'yandex' || a.source === 'spotify' || a.source === 'local'
                 ? async () => {
-                    const tracks = await loadAlbumTracks(a.id, a.source as 'yandex' | 'spotify');
+                    const tracks = await loadAlbumTracks(a.id, a.source as 'yandex' | 'spotify' | 'local');
                     playCollection(tracks, { type: 'album', title: a.title, path: albumLink(a) });
                   }
                 : undefined

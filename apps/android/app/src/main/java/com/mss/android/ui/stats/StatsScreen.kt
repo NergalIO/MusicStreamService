@@ -45,6 +45,7 @@ import com.mss.android.ui.components.EmptyState
 import com.mss.android.ui.components.MssChip
 import com.mss.android.ui.components.sourceLabel
 import com.mss.android.ui.navigation.Routes
+import com.mss.android.ui.navigation.openRoute
 import com.mss.android.ui.theme.ChipFlow
 import com.mss.core.model.ListeningStats
 import com.mss.core.model.SourceId
@@ -305,7 +306,7 @@ private fun TopArtists(items: List<StatsTopArtist>, nav: NavHostController) {
                     .fillMaxWidth()
                     .clip(RoundedCornerShape(12.dp))
                     .clickable {
-                        nav.navigate(Routes.artist(artist.name, artist.source.name.lowercase(), artist.id?.ifBlank { "-" } ?: "-"))
+                        nav.openRoute(Routes.artist(artist.name, artist.source.name.lowercase(), artist.id?.ifBlank { "-" } ?: "-"))
                     }
                     .padding(vertical = 6.dp, horizontal = 4.dp),
                 verticalAlignment = Alignment.CenterVertically,

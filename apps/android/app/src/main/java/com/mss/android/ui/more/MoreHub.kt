@@ -24,6 +24,7 @@ import com.mss.android.ui.components.HubRow
 import com.mss.android.ui.components.ScreenTitle
 import com.mss.android.ui.components.SectionTitle
 import com.mss.android.ui.navigation.Routes
+import com.mss.android.ui.navigation.openRoute
 import com.mss.core.connectors.AuthStatus
 import com.mss.core.model.SourceId
 
@@ -32,13 +33,13 @@ fun MoreHub(vm: MssViewModel, nav: NavHostController) {
     val sources by vm.sources.collectAsState()
     Column(Modifier.fillMaxSize().verticalScroll(rememberScrollState()).padding(bottom = 16.dp)) {
         ScreenTitle("Ещё")
-        HubRow("Настройки", "Качество, оформление, сервер", Icons.Default.Settings) { nav.navigate(Routes.SETTINGS) }
-        HubRow("Статистика", "Что вы слушали", Icons.Default.BarChart) { nav.navigate(Routes.STATS) }
-        HubRow("Итоги года", "Wrapped", Icons.Default.Star) { nav.navigate(Routes.WRAPPED) }
-        HubRow("Подписка", "План и промокод", Icons.Default.CardMembership) { nav.navigate(Routes.SUBSCRIPTION) }
+        HubRow("Настройки", "Качество, оформление, сервер", Icons.Default.Settings) { nav.openRoute(Routes.SETTINGS) }
+        HubRow("Статистика", "Что вы слушали", Icons.Default.BarChart) { nav.openRoute(Routes.STATS) }
+        HubRow("Итоги года", "Wrapped", Icons.Default.Star) { nav.openRoute(Routes.WRAPPED) }
+        HubRow("Подписка", "План и промокод", Icons.Default.CardMembership) { nav.openRoute(Routes.SUBSCRIPTION) }
         SectionTitle("Слушать")
-        HubRow("Моя волна", "Радио по настроению", Icons.Default.Radio) { nav.navigate(Routes.WAVE) }
-        HubRow("Лобби", "Слушать вместе", Icons.Default.Groups) { nav.navigate(Routes.LOBBY) }
+        HubRow("Моя волна", "Радио по настроению", Icons.Default.Radio) { nav.openRoute(Routes.WAVE) }
+        HubRow("Лобби", "Слушать вместе", Icons.Default.Groups) { nav.openRoute(Routes.LOBBY) }
         SectionTitle("Источники")
         SourceCard("Яндекс Музыка", sources.yandex, Icons.Default.Radio, connectedHint = "Подключено") {
             if (sources.yandex == AuthStatus.CONNECTED) vm.disconnectSource(SourceId.YANDEX) else vm.connectYandex()

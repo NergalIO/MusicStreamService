@@ -898,23 +898,25 @@ class PlayerController @Inject constructor(
             } else {
                 context.startService(intent)
             }
-        } catch (e: IllegalStateException) {
+        } catch (e: Exception) {
+            if (e is CancellationException) throw e
             if (isBackgroundStartBlocked(e)) {
                 session("warn", "player", "сервис воспроизведения не стартовал из фона")
                 return
             }
-            throw e
+            session("error", "player", e.message ?: e.javaClass.simpleName)
         }
     }
 
-    private fun isBackgroundStartBlocked(error: IllegalStateException): Boolean {
+    private fun isBackgroundStartBlocked(error: Throwable): Boolean {
         if (Build.VERSION.SDK_INT < Build.VERSION_CODES.S) return false
         return isForegroundStartNotAllowed(error)
     }
 
     @SuppressLint("NewApi")
-    private fun isForegroundStartNotAllowed(error: IllegalStateException): Boolean =
-        error is android.app.ForegroundServiceStartNotAllowedException
+    private fun isForegroundStartNotAllowed(error: Throwable): Boolean =
+        error is android.app.ForegroundServiceStartNotAllowedException ||
+            error.javaClass.simpleName == "ForegroundServiceStartNotAllowedException"
 
     /** Сбой тика не должен ронять процесс: автопереход идёт из коллектора на главном потоке. */
     private fun safeTick() {

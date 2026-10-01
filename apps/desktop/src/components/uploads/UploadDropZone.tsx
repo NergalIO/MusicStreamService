@@ -16,6 +16,11 @@ export function UploadDropZone() {
 
   const playlistId = matchPath('/playlists/:id', location.pathname)?.params.id;
   const playlistName = playlists?.find((p) => p.id === playlistId)?.name;
+  const albumMatch = matchPath('/album/:source/:id', location.pathname);
+  const albumId =
+    albumMatch?.params.source === 'local' && albumMatch.params.id
+      ? decodeURIComponent(albumMatch.params.id)
+      : undefined;
 
   useEffect(() => {
     const onEnter = (e: DragEvent) => {
@@ -37,7 +42,7 @@ export function UploadDropZone() {
       e.preventDefault();
       depth.current = 0;
       setActive(false);
-      if (e.dataTransfer?.files.length) upload(e.dataTransfer.files, { playlistId });
+      if (e.dataTransfer?.files.length) upload(e.dataTransfer.files, { playlistId, albumId });
     };
     window.addEventListener('dragenter', onEnter);
     window.addEventListener('dragover', onOver);
@@ -49,7 +54,7 @@ export function UploadDropZone() {
       window.removeEventListener('dragleave', onLeave);
       window.removeEventListener('drop', onDrop);
     };
-  }, [upload, playlistId]);
+  }, [upload, playlistId, albumId]);
 
   if (!active) return null;
   return (
@@ -58,7 +63,11 @@ export function UploadDropZone() {
         <Upload size={48} className="text-primary" />
         <div className="text-2xl font-semibold">Отпустите, чтобы загрузить</div>
         <div className="text-sm text-muted">
-          {playlistName ? `Треки добавятся в плейлист «${playlistName}»` : 'Треки появятся в разделе «Мои треки»'}
+          {playlistName
+            ? `Треки добавятся в плейлист «${playlistName}»`
+            : albumId
+              ? 'Треки добавятся в этот альбом'
+              : 'Файлы появятся в «Мои треки», папка — как альбом'}
         </div>
       </div>
     </div>

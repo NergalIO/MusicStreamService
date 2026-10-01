@@ -30,6 +30,7 @@ export interface LocalTrackDto {
   title: string;
   artist: string;
   album?: string | null;
+  albumId?: string | null;
   durationMs?: number | null;
   loudnessLufs?: number | null;
   status: string;
@@ -83,6 +84,7 @@ export function mapLocalTrack(
     title: t.title,
     artist: t.artist,
     album: t.album ?? undefined,
+    albumId: t.albumId ?? undefined,
     durationMs: t.durationMs ?? undefined,
     loudnessLufs: t.loudnessLufs ?? undefined,
     coverUrl: t.coverUrl
@@ -91,9 +93,9 @@ export function mapLocalTrack(
     playable,
     unplayableReason,
     streamUrl: t.streamUrl ?? apiMediaUrl(`/stream/${t.id}`),
-    cloudPlayUrl: t.cloudPlayUrl ?? cached?.cloudPlayUrl,
-    cloudDownloadUrl: t.cloudDownloadUrl ?? cached?.cloudDownloadUrl,
-    cloudUrlExpiresAt: t.cloudUrlExpiresAt ?? cached?.cloudUrlExpiresAt,
+    cloudPlayUrl: t.cloudPlayUrl ?? cached?.cloudPlayUrl ?? undefined,
+    cloudDownloadUrl: t.cloudDownloadUrl ?? cached?.cloudDownloadUrl ?? undefined,
+    cloudUrlExpiresAt: t.cloudUrlExpiresAt ?? cached?.cloudUrlExpiresAt ?? undefined,
   };
 }
 

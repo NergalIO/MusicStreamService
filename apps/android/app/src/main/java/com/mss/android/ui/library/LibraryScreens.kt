@@ -23,6 +23,7 @@ import androidx.compose.foundation.lazy.itemsIndexed
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.Add
 import androidx.compose.material.icons.filled.Delete
+import androidx.compose.material.icons.filled.Favorite
 import androidx.compose.material.icons.filled.PlayArrow
 import androidx.compose.material.icons.filled.Refresh
 import androidx.compose.material3.AlertDialog
@@ -31,6 +32,7 @@ import androidx.compose.material3.CircularProgressIndicator
 import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
 import androidx.compose.material3.MaterialTheme
+import androidx.compose.material3.OutlinedButton
 import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
 import androidx.compose.runtime.Composable
@@ -61,8 +63,10 @@ import com.mss.android.ui.components.ScreenTitle
 import com.mss.android.ui.components.TrackList
 import com.mss.android.ui.components.sourceLabel
 import com.mss.android.ui.navigation.Routes
+import com.mss.android.ui.navigation.openRoute
 import com.mss.core.model.DownloadRecord
 import com.mss.core.model.SourceId
+import com.mss.core.model.UnifiedAlbum
 import com.mss.core.model.UnifiedPlaylist
 import com.mss.core.model.UnifiedTrack
 import com.mss.core.model.WaveSettings
@@ -183,7 +187,7 @@ private fun TrackColumn(
         onPlay = { list, i -> vm.play(list, i) },
         onLike = { vm.toggleLike(it) },
         onDownload = { vm.download(it) },
-        onSimilar = { nav.navigate(Routes.similar(it.source.name.lowercase(), it.id)) },
+        onSimilar = { nav.openRoute(Routes.similar(it.source.name.lowercase(), it.id)) },
         onQueue = { vm.player.enqueue(it) },
         onWave = { if (it.source == SourceId.YANDEX) vm.startWave(WaveSettings(seed = "track:${it.id}", seedTitle = it.title)) },
         onSuggest = if (canSuggest) ({ vm.suggestToLobby(it) }) else null,
@@ -247,7 +251,7 @@ private fun PlaylistsTab(vm: MssViewModel, nav: NavHostController, library: Libr
                 subtitle = listOfNotNull(sourceLabel(p.source), p.trackCount?.let(::tracksWord), p.owner?.takeIf { it.isNotBlank() }).joinToString(" · "),
                 cover = p.coverUrl,
                 onClick = {
-                    nav.navigate(
+                    nav.openRoute(
                         if (p.source == SourceId.LOCAL) Routes.mssPlaylist(p.id)
                         else Routes.playlist(p.source.name.lowercase(), p.id),
                     )
@@ -310,7 +314,7 @@ private fun ArtistsTab(nav: NavHostController, library: LibraryUi, source: Sourc
     ) {
         LazyColumn(Modifier.fillMaxSize(), contentPadding = PaddingValues(bottom = 16.dp)) {
             items(artists, key = { it.name.lowercase() }) { a ->
-                EntityRow(a.name, "${tracksWord(a.count)} в лайках", a.cover, { nav.navigate(Routes.artist(a.sample)) })
+                EntityRow(a.name, "${tracksWord(a.count)} в лайках", a.cover, { nav.openRoute(Routes.artist(a.sample)) })
             }
         }
     }
@@ -324,11 +328,16 @@ private fun AlbumsTab(vm: MssViewModel, nav: NavHostController, library: Library
     val downloadedKeys by vm.downloadedKeys.collectAsState()
     val saved = savedAll.filter { source == null || it.source == source }
     val savedKeys = saved.map { "${it.source}:${it.id}" }.toSet()
-    val albums = remember(library.likes, source, savedKeys) {
+    val liked = library.likedAlbums.filter { source == null || it.source == source }
+    val likedKeys = liked.map { "${it.source}:${it.id}" }.toSet()
+    val mine = (if (source == null || source == SourceId.LOCAL) library.albums else emptyList())
+        .filter { "local:${it.id}" !in likedKeys }
+    var deleting by remember { mutableStateOf<UnifiedAlbum?>(null) }
+    val albums = remember(library.likes, source, savedKeys, likedKeys) {
         library.likedTracks(source)
             .filter { !it.album.isNullOrBlank() || !it.albumId.isNullOrBlank() }
             .groupBy { "${it.source}:${it.albumId?.takeIf { id -> id.isNotBlank() } ?: it.album!!.lowercase()}" }
-            .filterKeys { it !in savedKeys }
+            .filterKeys { it !in savedKeys && it !in likedKeys }
             .map { (key, list) ->
                 val first = list.first()
                 AlbumEntry(key, first.album?.ifBlank { null } ?: "Альбом", first.artist, list.size, first.coverUrl, first)
@@ -336,12 +345,44 @@ private fun AlbumsTab(vm: MssViewModel, nav: NavHostController, library: Library
             .sortedWith(compareByDescending<AlbumEntry> { it.count }.thenBy { it.title.lowercase() })
     }
     LoadingOr(
-        loading = saved.isEmpty() && (library.loading || !library.loaded),
-        empty = albums.isEmpty() && saved.isEmpty(),
+        loading = saved.isEmpty() && mine.isEmpty() && liked.isEmpty() && (library.loading || !library.loaded),
+        empty = albums.isEmpty() && saved.isEmpty() && mine.isEmpty() && liked.isEmpty(),
         title = "Нет альбомов",
-        subtitle = "Здесь появятся скачанные альбомы и альбомы понравившихся треков.",
+        subtitle = "Загрузите альбом в «Мои файлы» или поставьте лайк альбому — он появится здесь.",
     ) {
         LazyColumn(Modifier.fillMaxSize(), contentPadding = PaddingValues(bottom = 16.dp)) {
+            if (liked.isNotEmpty()) {
+                item(key = "liked-albums-label") { AlbumSection("Понравившиеся") }
+                items(liked, key = { "liked:${it.source}:${it.id}" }) { a ->
+                    EntityRow(
+                        a.title,
+                        listOf(a.artist, sourceLabel(a.source), a.year?.toString(), a.trackCount?.let { tracksWord(it) }).filterNotNull().joinToString(" · "),
+                        a.coverUrl,
+                        { nav.openRoute(Routes.album(a.source.name.lowercase(), a.id)) },
+                        trailing = {
+                            IconButton({ vm.toggleAlbumLike(a) }) {
+                                Icon(Icons.Default.Favorite, "Убрать из «Мне нравится»", tint = MaterialTheme.colorScheme.primary)
+                            }
+                        },
+                    )
+                }
+            }
+            if (mine.isNotEmpty()) {
+                item(key = "mine-label") { AlbumSection("Мои альбомы") }
+                items(mine, key = { "mine:${it.id}" }) { a ->
+                    EntityRow(
+                        a.title,
+                        listOf(a.artist, a.year?.toString(), a.trackCount?.let { tracksWord(it) }).filterNotNull().joinToString(" · "),
+                        a.coverUrl,
+                        { nav.openRoute(Routes.album("local", a.id)) },
+                        trailing = {
+                            IconButton({ deleting = a }) {
+                                Icon(Icons.Default.Delete, "Удалить", tint = MaterialTheme.colorScheme.onSurfaceVariant)
+                            }
+                        },
+                    )
+                }
+            }
             if (saved.isNotEmpty()) {
                 item(key = "saved-label") { AlbumSection("Скачанные") }
                 items(saved, key = { "saved:${it.source}:${it.id}" }) { a ->
@@ -350,7 +391,7 @@ private fun AlbumsTab(vm: MssViewModel, nav: NavHostController, library: Library
                         a.title,
                         listOf(a.artist, sourceLabel(a.source), "$done из ${a.tracks.size} скачано").filter { it.isNotBlank() }.joinToString(" · "),
                         a.coverUrl,
-                        { nav.navigate(Routes.album(a.source.name.lowercase(), a.id)) },
+                        { nav.openRoute(Routes.album(a.source.name.lowercase(), a.id)) },
                         trailing = {
                             Icon(
                                 Icons.Filled.DownloadForOffline,
@@ -363,17 +404,30 @@ private fun AlbumsTab(vm: MssViewModel, nav: NavHostController, library: Library
                 }
             }
             if (albums.isNotEmpty()) {
-                if (saved.isNotEmpty()) item(key = "liked-label") { AlbumSection("Из понравившихся") }
+                if (liked.isNotEmpty() || saved.isNotEmpty() || mine.isNotEmpty()) {
+                    item(key = "from-likes-label") { AlbumSection("Из понравившихся треков") }
+                }
                 items(albums, key = { it.key }) { a ->
                     EntityRow(
                         a.title,
                         listOf(a.artist, sourceLabel(a.sample.source), "${tracksWord(a.count)} в лайках").filter { it.isNotBlank() }.joinToString(" · "),
                         a.cover,
-                        { nav.navigate(Routes.album(a.sample)) },
+                        { nav.openRoute(Routes.album(a.sample)) },
                     )
                 }
             }
         }
+    }
+    deleting?.let { a ->
+        AlertDialog(
+            onDismissRequest = { deleting = null },
+            title = { Text("Удалить альбом?") },
+            text = { Text("«${a.title}» будет удалён из библиотеки. Треки останутся в «Мои файлы».") },
+            confirmButton = {
+                TextButton({ vm.deleteAlbum(a.id); deleting = null }) { Text("Удалить", color = MaterialTheme.colorScheme.error) }
+            },
+            dismissButton = { TextButton({ deleting = null }) { Text("Отмена") } },
+        )
     }
 }
 
@@ -430,9 +484,13 @@ private fun DownloadsTab(vm: MssViewModel, source: SourceId?) {
 private fun UploadsTab(vm: MssViewModel, nav: NavHostController, library: LibraryUi) {
     val context = LocalContext.current
     val need by vm.needFile.collectAsState()
+    var albumUris by remember { mutableStateOf<List<Uri>?>(null) }
     val launcher = rememberLauncherForActivityResult(ActivityResultContracts.OpenMultipleDocuments()) { uris ->
         uris.forEach { uri -> vm.registerUpload(uri, uploadTitle(context, uri), "Unknown") }
         if (uris.isNotEmpty()) vm.clearNeedFile()
+    }
+    val albumLauncher = rememberLauncherForActivityResult(ActivityResultContracts.OpenMultipleDocuments()) { uris ->
+        if (uris.isNotEmpty()) albumUris = uris
     }
     val tracks = library.uploads
     TrackColumn(vm, nav, tracks, onDeleteMany = { vm.deleteUploads(it) }) {
@@ -449,9 +507,12 @@ private fun UploadsTab(vm: MssViewModel, nav: NavHostController, library: Librar
                     Icon(Icons.Default.Add, null, Modifier.size(18.dp))
                     Text("Добавить файлы с устройства", Modifier.padding(start = 6.dp))
                 }
+                OutlinedButton({ albumLauncher.launch(arrayOf("audio/*")) }, Modifier.fillMaxWidth()) {
+                    Text("Загрузить альбом")
+                }
                 if (tracks.isEmpty() && library.loaded) {
                     Text(
-                        "Здесь будут треки, которые вы загрузили в MSS со своего устройства.",
+                        "Треки загружаются в облако по одному. Альбом — обложка и список ссылок на эти треки.",
                         style = MaterialTheme.typography.bodySmall,
                         color = MaterialTheme.colorScheme.onSurfaceVariant,
                     )
@@ -459,6 +520,50 @@ private fun UploadsTab(vm: MssViewModel, nav: NavHostController, library: Librar
             }
         }
     }
+    albumUris?.let { uris ->
+        AlbumUploadDialog(
+            defaultTitle = uploadTitle(context, uris.first()),
+            onDismiss = { albumUris = null },
+            onConfirm = { title: String, artist: String, cover: Uri? ->
+                vm.registerUploadAlbum(uris, title, artist, cover)
+                albumUris = null
+            },
+        )
+    }
+}
+
+@Composable
+private fun AlbumUploadDialog(
+    defaultTitle: String,
+    onDismiss: () -> Unit,
+    onConfirm: (String, String, Uri?) -> Unit,
+) {
+    var title by remember { mutableStateOf(defaultTitle.ifBlank { "Альбом" }) }
+    var artist by remember { mutableStateOf("") }
+    var coverUri by remember { mutableStateOf<Uri?>(null) }
+    val coverLauncher = rememberLauncherForActivityResult(ActivityResultContracts.GetContent()) { uri ->
+        if (uri != null) coverUri = uri
+    }
+    AlertDialog(
+        onDismissRequest = onDismiss,
+        title = { Text("Новый альбом") },
+        text = {
+            Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
+                MssField(title, { title = it }, placeholder = "Название", modifier = Modifier.fillMaxWidth())
+                MssField(artist, { artist = it }, placeholder = "Исполнитель", modifier = Modifier.fillMaxWidth())
+                TextButton({ coverLauncher.launch("image/*") }) {
+                    Text(if (coverUri != null) "Обложка выбрана" else "Выбрать обложку")
+                }
+            }
+        },
+        confirmButton = {
+            TextButton(
+                { onConfirm(title.trim().ifBlank { "Альбом" }, artist.trim().ifBlank { "Неизвестный исполнитель" }, coverUri) },
+                enabled = title.isNotBlank(),
+            ) { Text("Загрузить") }
+        },
+        dismissButton = { TextButton(onDismiss) { Text("Отмена") } },
+    )
 }
 
 @Composable

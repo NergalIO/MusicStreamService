@@ -318,6 +318,12 @@ class YandexConnector @Inject constructor(
         apiPostForm("/users/$uid/likes/tracks/$action", mapOf("track-ids" to trackKey(track)))
     }
 
+    suspend fun setAlbumLike(albumId: String, liked: Boolean) {
+        val uid = userId()
+        val action = if (liked) "add-multiple" else "remove"
+        apiPostForm("/users/$uid/likes/albums/$action", mapOf("album-ids" to albumId))
+    }
+
     suspend fun dislike(track: UnifiedTrack) {
         val uid = userId()
         apiPostForm("/users/$uid/dislikes/tracks/add-multiple", mapOf("track-ids" to trackKey(track)))

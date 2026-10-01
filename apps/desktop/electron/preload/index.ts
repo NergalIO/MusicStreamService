@@ -227,6 +227,23 @@ const api = {
   },
   localTracks: {
     pickFiles: () => ipcRenderer.invoke('localTracks:pickFiles') as Promise<string[]>,
+    pickFolder: () => ipcRenderer.invoke('localTracks:pickFolder') as Promise<string | null>,
+    expandSources: (paths: string[]) =>
+      ipcRenderer.invoke('localTracks:expandSources', paths) as Promise<{
+        files: string[];
+        albums: { title: string; files: string[]; coverPath: string | null }[];
+      }>,
+    readTags: (filePath: string) =>
+      ipcRenderer.invoke('localTracks:readTags', filePath) as Promise<{
+        title: string;
+        artist: string;
+        album: string | null;
+        albumArtist: string | null;
+        year: number | null;
+        trackNo: number | null;
+        discNo: number | null;
+      }>,
+    readCoverJpeg: (filePath: string) => ipcRenderer.invoke('localTracks:readCoverJpeg', filePath) as Promise<Uint8Array | null>,
     prepare: (filePath: string) =>
       ipcRenderer.invoke('localTracks:prepare', filePath) as Promise<{
         path: string;
@@ -234,6 +251,10 @@ const api = {
         title: string;
         artist: string;
         album: string | null;
+        albumArtist: string | null;
+        year: number | null;
+        trackNo: number | null;
+        discNo: number | null;
         durationMs: number | null;
         sizeBytes: number;
         originalFilename: string;
@@ -344,6 +365,8 @@ const api = {
     likedTrackIds: () => yandexCall<string[]>('likedTrackIds'),
     likedTracks: (limit?: number) => yandexCall<UnifiedTrack[]>('likedTracks', limit),
     setLike: (track: TrackRef, liked: boolean) => yandexCall<void>('setLike', track, liked),
+    likedAlbums: (limit?: number) => yandexCall<UnifiedAlbum[]>('likedAlbums', limit),
+    setAlbumLike: (albumId: string, liked: boolean) => yandexCall<void>('setAlbumLike', albumId, liked),
     dislike: (track: TrackRef) => yandexCall<void>('dislike', track),
     playlists: () => yandexCall<UnifiedPlaylist[]>('playlists'),
     playlist: (id: string) => yandexCall<PlaylistWithTracks>('playlist', id),

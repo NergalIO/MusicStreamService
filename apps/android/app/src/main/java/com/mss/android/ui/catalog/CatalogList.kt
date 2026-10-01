@@ -15,6 +15,7 @@ import com.mss.android.ui.MssViewModel
 import com.mss.android.ui.components.EmptyState
 import com.mss.android.ui.components.TrackList
 import com.mss.android.ui.navigation.Routes
+import com.mss.android.ui.navigation.openRoute
 import com.mss.core.model.WaveSettings
 
 @Composable
@@ -37,7 +38,7 @@ fun CatalogList(vm: MssViewModel, nav: NavHostController, modifier: Modifier = M
                 onPlay = { list, i -> vm.play(list, i) },
                 onLike = { vm.toggleLike(it) },
                 onDownload = { vm.download(it) },
-                onSimilar = { nav.navigate(Routes.similar(it.source.name.lowercase(), it.id)) },
+                onSimilar = { nav.openRoute(Routes.similar(it.source.name.lowercase(), it.id)) },
                 onQueue = { vm.player.enqueue(it) },
                 onWave = { vm.startWave(WaveSettings(seed = "track:${it.id}", seedTitle = it.title)) },
                 onSuggest = if (canSuggest) ({ vm.suggestToLobby(it) }) else null,

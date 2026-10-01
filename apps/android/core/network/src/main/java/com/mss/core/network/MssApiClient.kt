@@ -1,6 +1,8 @@
 package com.mss.core.network
 
 import com.mss.core.datastore.MssPreferences
+import com.mss.core.model.AlbumDto
+import com.mss.core.model.AlbumsResponse
 import com.mss.core.model.AuthSession
 import com.mss.core.model.HomeShelves
 import com.mss.core.model.ListeningHistory
@@ -21,6 +23,9 @@ import com.mss.core.model.TrackDto
 import com.mss.core.model.TrackLyrics
 import com.mss.core.model.TracksResponse
 import com.mss.core.model.CatalogArtistDto
+import com.mss.core.model.SourceId
+import com.mss.core.model.ArtistRef
+import com.mss.core.model.UnifiedAlbum
 import com.mss.core.model.UnifiedTrack
 import com.mss.core.model.UserSubscriptionDto
 import io.ktor.client.HttpClient
@@ -269,9 +274,85 @@ class MssApiClient @Inject constructor(
         }
     }
 
+    suspend fun likedAlbums(): List<UnifiedAlbum> {
+        val res = authorizedGet("${apiBase()}/me/liked-albums")
+        return res.body<LikedAlbumsResponse>().items
+    }
+
+    suspend fun likeAlbum(album: UnifiedAlbum) {
+        authorizedPost(
+            "${apiBase()}/likes/albums",
+            AlbumLikeBody(
+                source = album.source,
+                id = album.id,
+                title = album.title.ifBlank { "Альбом" },
+                artist = album.artist.ifBlank { "Неизвестный исполнитель" },
+                year = album.year?.takeIf { it in 1000..2100 },
+                type = album.type,
+                coverUrl = album.coverUrl,
+                trackCount = album.trackCount,
+                genre = album.genre,
+                artists = album.artists,
+            ),
+        )
+    }
+
+    suspend fun unlikeAlbum(source: SourceId, id: String) {
+        withAuth { token ->
+            http.delete("${apiBase()}/likes/albums/${source.name.lowercase()}/${encode(id)}") {
+                header(HttpHeaders.Authorization, "Bearer $token")
+            }
+        }
+    }
+
     suspend fun myUploads(): List<TrackDto> {
         val res = authorizedGet("${apiBase()}/me/uploads")
         return res.body<TracksResponse>().items
+    }
+
+    suspend fun listAlbums(query: String = ""): List<AlbumDto> {
+        val q = if (query.isBlank()) "" else "?query=${encode(query)}"
+        val res = authorizedGet("${apiBase()}/albums$q")
+        return res.body<AlbumsResponse>().items
+    }
+
+    suspend fun getAlbum(id: String): AlbumDto {
+        val res = authorizedGet("${apiBase()}/albums/$id")
+        return res.body()
+    }
+
+    suspend fun createAlbum(title: String, artist: String, trackIds: List<String>, year: Int? = null): AlbumDto {
+        val res = authorizedPost("${apiBase()}/albums", CreateAlbumBody(title, artist, year, trackIds))
+        return res.body()
+    }
+
+    suspend fun deleteAlbum(id: String) {
+        withAuth { token ->
+            http.delete("${apiBase()}/albums/$id") { header(HttpHeaders.Authorization, "Bearer $token") }
+        }
+    }
+
+    suspend fun putAlbumCover(id: String, bytes: ByteArray, mime: String): AlbumDto {
+        val res = withAuth { token ->
+            http.put("${apiBase()}/albums/$id/cover") {
+                header(HttpHeaders.Authorization, "Bearer $token")
+                setBody(
+                    MultiPartFormDataContent(
+                        formData {
+                            append(
+                                "file",
+                                bytes,
+                                Headers.build {
+                                    append(HttpHeaders.ContentType, mime)
+                                    append(HttpHeaders.ContentDisposition, "filename=\"cover.jpg\"")
+                                },
+                            )
+                        },
+                    ),
+                )
+            }
+        }
+        return res.body()
     }
 
     suspend fun registerTrack(
@@ -282,9 +363,11 @@ class MssApiClient @Inject constructor(
         durationMs: Long?,
         sizeBytes: Long,
         originalFilename: String,
+        albumId: String? = null,
     ): TrackDto {
+        val qs = albumId?.let { "?albumId=$it" }.orEmpty()
         val res = authorizedPost(
-            "${apiBase()}/tracks/register",
+            "${apiBase()}/tracks/register$qs",
             RegisterTrackBody(contentHash, title, artist, album, durationMs, sizeBytes, originalFilename),
         )
         return res.body()
@@ -322,8 +405,12 @@ class MssApiClient @Inject constructor(
         }
     }
 
-    suspend fun searchArtists(query: String): List<CatalogArtistDto> {
-        val res = authorizedGet("${apiBase()}/artists?query=${encode(query)}")
+    suspend fun searchArtists(query: String, limit: Int = 40): List<CatalogArtistDto> {
+        val q = buildString {
+            append("?limit=$limit")
+            if (query.isNotBlank()) append("&query=${encode(query)}")
+        }
+        val res = authorizedGet("${apiBase()}/artists$q")
         return res.body<ArtistsResponse>().items
     }
 
@@ -540,6 +627,25 @@ class MssApiClient @Inject constructor(
     @Serializable private data class RefreshBody(val refreshToken: String)
     @Serializable private data class RegisterDeviceBody(val deviceId: String, val name: String)
     @Serializable private data class CreatePlaylistBody(val name: String, val description: String? = null)
+    @Serializable private data class CreateAlbumBody(
+        val title: String,
+        val artist: String,
+        val year: Int? = null,
+        val trackIds: List<String> = emptyList(),
+    )
+    @Serializable private data class AlbumLikeBody(
+        val source: SourceId,
+        val id: String,
+        val title: String,
+        val artist: String,
+        val year: Int? = null,
+        val type: String? = null,
+        val coverUrl: String? = null,
+        val trackCount: Int? = null,
+        val genre: String? = null,
+        val artists: List<ArtistRef>? = null,
+    )
+    @Serializable private data class LikedAlbumsResponse(val items: List<UnifiedAlbum> = emptyList())
     @Serializable private data class UpdatePlaylistBody(val name: String? = null, val description: String? = null, val author: String? = null)
     @Serializable private data class AddTrackBody(val trackId: String)
     @Serializable private data class AddExternalBody(val items: List<ExternalItem>)

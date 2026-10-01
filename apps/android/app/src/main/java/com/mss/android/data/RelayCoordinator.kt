@@ -38,10 +38,12 @@ class RelayCoordinator @Inject constructor(
                 }
                 val session = prefs.loadSession() ?: return@collect
                 val intent = Intent(context, RelayUploadService::class.java)
-                if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
-                    context.startForegroundService(intent)
-                } else {
-                    context.startService(intent)
+                runCatching {
+                    if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
+                        context.startForegroundService(intent)
+                    } else {
+                        context.startService(intent)
+                    }
                 }
                 runCatching {
                     val bytes = local.readBytes(Uri.parse(holding.uri))

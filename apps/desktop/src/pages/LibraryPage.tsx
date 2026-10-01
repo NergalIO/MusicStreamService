@@ -15,19 +15,21 @@ import { Input } from '@/components/ui/input';
 import { EmptyState, ErrorState } from '@/components/ui/states';
 import { UploadButton } from '@/components/uploads/UploadButton';
 import { normalizeSearch, useTrackSort } from '@/hooks/useTrackSort';
-import { loadPlaylistTracks, playlistMenu } from '@/lib/card-menus';
+import { albumMenu, loadAlbumTracks, loadPlaylistTracks, playlistMenu } from '@/lib/card-menus';
 import { favoriteArtistGroups, favoriteArtistSubtitle } from '@/lib/favorite-artists';
 import { useSpotifyConnected, useVkConnected, useYandexConnected } from '@/lib/connectors';
 import { formatBytes, formatTrackCount } from '@/lib/format';
-import { playlistPath } from '@/lib/links';
+import { albumLink, playlistPath } from '@/lib/links';
 import { createPlaylist, deleteUploadedTrack } from '@/lib/mss-library';
 import { playCollection } from '@/lib/player-actions';
+import { SOURCE_LABEL } from '@/lib/sources';
 import { syncListeningHistory } from '@/lib/listening';
 import { clearHistoryWithUndo, undoableToast } from '@/lib/undo';
 import {
   mssPlaylistToUnified,
   useLocalLikedTracks,
   useMssPlaylists,
+  useMyAlbums,
   useMyUploads,
   useSpotifyPlaylists,
   useSpotifySavedTracks,
@@ -41,6 +43,7 @@ import { matchesFilter, type SourceFilterId } from '@/lib/sources';
 import { cn } from '@/lib/utils';
 import { useDownloadsStore } from '@/store/downloads-store';
 import { useLikesStore } from '@/store/likes-store';
+import { useAlbumLikesStore } from '@/store/album-likes-store';
 import { libraryPath, SPOTIFY_WEB, type ServiceScope } from '@/lib/service-routes';
 import { usePlayerStore, type PlayContext } from '@/store/player-store';
 
@@ -73,6 +76,7 @@ const MEDIA_TABS = [
   { id: 'artists', label: 'Исполнители' },
   { id: 'history', label: 'Недавно играли' },
   { id: 'playlists', label: 'Плейлисты' },
+  { id: 'albums', label: 'Мои альбомы' },
   { id: 'uploads', label: 'Мои треки' },
   { id: 'downloads', label: 'Скачанные' },
 ] as const;
@@ -416,11 +420,12 @@ function UploadsTab() {
         <p className="text-sm text-muted">
           {uploads.length
             ? [formatTrackCount(ready.length), processing ? `ещё ${processing} в обработке` : null].filter(Boolean).join(' · ')
-            : 'Загрузите свои аудиофайлы — они появятся в библиотеке MSS и их можно добавлять в плейлисты'}
+            : 'Загрузите свои аудиофайлы — они появятся в библиотеке MSS. Папку альбома можно добавить кнопкой «Загрузить альбом»'}
         </p>
         <div className="flex items-center gap-2">
           {uploads.length > 0 && <TrackFilterInput value={filter} onChange={setFilter} />}
           <UploadButton />
+          <UploadButton album variant="secondary" label="Загрузить альбом" />
           <PlayButtons tracks={ready} context={context} />
         </div>
       </div>
@@ -439,7 +444,7 @@ function UploadsTab() {
           onRemove={(t) => setPendingDelete([t])}
           onRemoveMany={(tracks) => setPendingDelete(tracks)}
           removeLabel="Удалить трек"
-          emptyText="Перетащите файлы в окно или нажмите «Загрузить треки»"
+          emptyText="Перетащите файлы в окно или нажмите «Добавить треки»"
         />
       )}
       <Dialog open={!!pendingDelete?.length} onClose={() => setPendingDelete(null)} title={pendingDelete?.length === 1 ? 'Удалить трек?' : 'Удалить треки?'}>
@@ -760,7 +765,110 @@ function PlaylistsTab({ scope }: { scope: ServiceScope }) {
   );
 }
 
-const MEDIA_ONLY_TABS = new Set(['history', 'uploads', 'downloads']);
+function AlbumsTab() {
+  const { data: albums = [], isLoading, isError, error, refetch } = useMyAlbums();
+  const liked = useAlbumLikesStore((s) => s.items);
+  const [filter, setFilter] = useState('');
+  const q = normalizeSearch(filter);
+  const likedView = useMemo(() => {
+    if (!q) return liked;
+    return liked.filter((a) => normalizeSearch(`${a.title} ${a.artist}`).includes(q));
+  }, [liked, q]);
+  const likedKeys = useMemo(() => new Set(liked.map((a) => `${a.source}:${a.id}`)), [liked]);
+  const mineView = useMemo(() => {
+    const rest = albums.filter((a) => !likedKeys.has(`local:${a.id}`));
+    if (!q) return rest;
+    return rest.filter((a) => normalizeSearch(`${a.title} ${a.artist}`).includes(q));
+  }, [albums, likedKeys, q]);
+  const grid = 'grid grid-cols-2 gap-5 sm:grid-cols-3 lg:grid-cols-4 xl:grid-cols-6';
+  const empty = !likedView.length && !mineView.length;
+
+  return (
+    <>
+      <div className="mb-4 flex flex-wrap items-center justify-between gap-3">
+        <p className="text-sm text-muted">
+          {liked.length || albums.length
+            ? 'Сердце на странице альбома сохраняет его здесь. Загруженные альбомы — обложка и ссылки на треки.'
+            : 'Загрузите папку альбома или отметьте альбом сердцем — он появится здесь'}
+        </p>
+        <div className="flex items-center gap-2">
+          {(liked.length > 0 || albums.length > 0) && <TrackFilterInput value={filter} onChange={setFilter} />}
+          <UploadButton album label="Загрузить альбом" />
+        </div>
+      </div>
+      {isError ? (
+        <ErrorState title="Не удалось загрузить альбомы" error={error} onRetry={() => void refetch()} />
+      ) : isLoading && !liked.length ? (
+        <CardRowSkeleton />
+      ) : empty ? (
+        <EmptyState
+          icon={ListMusic}
+          title={filter ? 'Ничего не найдено' : 'Альбомов пока нет'}
+          description={filter ? undefined : 'Выберите папку с треками или поставьте лайк альбому'}
+          className="py-16"
+          action={!filter ? <UploadButton album label="Загрузить альбом" /> : undefined}
+        />
+      ) : (
+        <>
+          {likedView.length > 0 && (
+            <section className="mb-8">
+              <h2 className="mb-4 text-lg font-semibold">Понравившиеся</h2>
+              <div className={grid}>
+                {likedView.map((a) => (
+                  <MediaCard
+                    key={`liked:${a.source}:${a.id}`}
+                    title={a.title}
+                    subtitle={[a.artist, a.source !== 'local' ? SOURCE_LABEL[a.source] : null, a.year, a.trackCount ? formatTrackCount(a.trackCount) : null]
+                      .filter(Boolean)
+                      .join(' · ')}
+                    coverUrl={a.coverUrl}
+                    to={albumLink(a)}
+                    menu={() => albumMenu(a)}
+                    onPlay={
+                      a.trackCount
+                        ? async () => {
+                            const tracks = await loadAlbumTracks(a.id, a.source === 'spotify' || a.source === 'local' ? a.source : 'yandex');
+                            playCollection(tracks, { type: 'album', title: a.title, path: albumLink(a) });
+                          }
+                        : undefined
+                    }
+                  />
+                ))}
+              </div>
+            </section>
+          )}
+          {mineView.length > 0 && (
+            <section>
+              {likedView.length > 0 && <h2 className="mb-4 text-lg font-semibold">Мои альбомы</h2>}
+              <div className={grid}>
+                {mineView.map((a) => (
+                  <MediaCard
+                    key={a.id}
+                    title={a.title}
+                    subtitle={[a.artist, a.year, a.trackCount ? formatTrackCount(a.trackCount) : null].filter(Boolean).join(' · ')}
+                    coverUrl={a.coverUrl}
+                    to={albumLink(a)}
+                    menu={() => albumMenu(a)}
+                    onPlay={
+                      a.trackCount
+                        ? async () => {
+                            const tracks = await loadAlbumTracks(a.id, 'local');
+                            playCollection(tracks, { type: 'album', title: a.title, path: albumLink(a) });
+                          }
+                        : undefined
+                    }
+                  />
+                ))}
+              </div>
+            </section>
+          )}
+        </>
+      )}
+    </>
+  );
+}
+
+const MEDIA_ONLY_TABS = new Set(['history', 'uploads', 'downloads', 'albums']);
 
 export function LibraryPage({ scope }: { scope: ServiceScope }) {
   const { tab } = useParams();
@@ -788,6 +896,7 @@ export function LibraryPage({ scope }: { scope: ServiceScope }) {
       {id === 'artists' && <ArtistsTab scope={scope} />}
       {id === 'history' && scope === 'media' && <HistoryTab scope={scope} />}
       {id === 'playlists' && <PlaylistsTab scope={scope} />}
+      {id === 'albums' && scope === 'media' && <AlbumsTab />}
       {id === 'uploads' && scope === 'media' && <UploadsTab />}
       {id === 'downloads' && scope === 'media' && <DownloadsTab />}
     </div>

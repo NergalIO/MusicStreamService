@@ -25,6 +25,7 @@ import com.mss.core.model.HomeShelves
 import com.mss.core.model.ListeningStats
 import com.mss.core.model.PlaybackSettings
 import com.mss.core.model.AlbumWithTracks
+import com.mss.core.model.CatalogArtistDto
 import com.mss.core.model.PlaylistWithTracks
 import com.mss.core.model.SourceId
 import com.mss.core.model.TrackLyrics
@@ -123,8 +124,12 @@ class MssViewModel @Inject constructor(
     val lyrics: StateFlow<LyricsUi> = _lyrics
     private val _yandexPrompt = MutableStateFlow<DeviceCodePrompt?>(null)
     val yandexPrompt: StateFlow<DeviceCodePrompt?> = _yandexPrompt
-    private val _homeSource = MutableStateFlow(SourceId.LOCAL)
-    val homeSource: StateFlow<SourceId> = _homeSource
+    private val _homeSource = MutableStateFlow<SourceId?>(null)
+    val homeSource: StateFlow<SourceId?> = _homeSource
+    private val _homeArtists = MutableStateFlow<List<UnifiedArtist>>(emptyList())
+    val homeArtists: StateFlow<List<UnifiedArtist>> = _homeArtists
+    private val _homeAlbums = MutableStateFlow<List<UnifiedAlbum>>(emptyList())
+    val homeAlbums: StateFlow<List<UnifiedAlbum>> = _homeAlbums
     private val _detailTitle = MutableStateFlow("")
     val detailTitle: StateFlow<String> = _detailTitle
     private val _artistPage = MutableStateFlow(ArtistPageUi())
@@ -133,6 +138,8 @@ class MssViewModel @Inject constructor(
     val albumPage: StateFlow<AlbumPageUi> = _albumPage
     private val _likedIds = MutableStateFlow<Set<String>>(emptySet())
     val likedIds: StateFlow<Set<String>> = _likedIds
+    private val _likedAlbums = MutableStateFlow<List<UnifiedAlbum>>(emptyList())
+    val likedAlbums: StateFlow<List<UnifiedAlbum>> = _likedAlbums
     private val _albums = MutableStateFlow<List<UnifiedAlbum>>(emptyList())
     val albums: StateFlow<List<UnifiedAlbum>> = _albums
     private val _searchPlaylists = MutableStateFlow<List<UnifiedPlaylist>>(emptyList())
@@ -197,6 +204,9 @@ class MssViewModel @Inject constructor(
                 if (userId != null && !token.isNullOrBlank() && token != "preview") {
                     runCatching { playReporter.flush() }
                     runCatching { syncPlayHistory() }
+                    loadLikesIds()
+                } else {
+                    _likedAlbums.value = emptyList()
                 }
             }
         }
@@ -234,7 +244,7 @@ class MssViewModel @Inject constructor(
         )
     }
 
-    fun setHomeSource(source: SourceId) {
+    fun setHomeSource(source: SourceId?) {
         _homeSource.value = source
         loadHome()
     }
@@ -284,21 +294,29 @@ class MssViewModel @Inject constructor(
 
     fun loadHome() = launch {
         when (_homeSource.value) {
-            SourceId.LOCAL -> {
-                _shelves.value = runCatching { repo.shelves() }.getOrNull()
-                _tracks.value = repo.mssTracks(limit = 30)
-                _playlists.value = repo.mssPlaylists()
-            }
+            null -> loadHomeAll()
+            SourceId.LOCAL -> loadHomeMss()
             SourceId.YANDEX -> {
+                _shelves.value = null
+                _homeArtists.value = emptyList()
+                _homeAlbums.value = emptyList()
+                _playlists.value = emptyList()
                 _feed.value = yandex.feed()
                 _tracks.value = yandex.chart()
             }
             SourceId.SPOTIFY -> {
+                _shelves.value = null
+                _homeArtists.value = emptyList()
+                _homeAlbums.value = emptyList()
                 _feed.value = runCatching { spotify.homeFeed() }.getOrDefault(emptyList())
                 _playlists.value = spotify.listPlaylists()
                 _tracks.value = spotify.savedTracks(40)
             }
             SourceId.VK -> {
+                _shelves.value = null
+                _homeArtists.value = emptyList()
+                _homeAlbums.value = emptyList()
+                _feed.value = emptyList()
                 val tracks = runCatching { vk.savedTracks(40) }
                 val playlists = runCatching { vk.listPlaylists() }
                 _tracks.value = tracks.getOrDefault(emptyList())
@@ -306,6 +324,59 @@ class MssViewModel @Inject constructor(
                 (tracks.exceptionOrNull() ?: playlists.exceptionOrNull())?.let { throw it }
             }
         }
+    }
+
+    private suspend fun loadHomeAll() = coroutineScope {
+        val shelvesD = async { runCatching { repo.shelves() }.getOrNull() }
+        val mssTracksD = async { runCatching { repo.mssTracks(limit = 30) }.getOrDefault(emptyList()) }
+        val mssPlaylistsD = async { runCatching { repo.mssPlaylists() }.getOrDefault(emptyList()) }
+        val yandexOn = sourceConnected(SourceId.YANDEX)
+        val spotifyOn = sourceConnected(SourceId.SPOTIFY)
+        val vkOn = sourceConnected(SourceId.VK)
+        val yandexFeedD = async { if (yandexOn) runCatching { yandex.feed() }.getOrDefault(emptyList()) else emptyList() }
+        val yandexChartD = async { if (yandexOn) runCatching { yandex.chart() }.getOrDefault(emptyList()) else emptyList() }
+        val spotifyFeedD = async { if (spotifyOn) runCatching { spotify.homeFeed() }.getOrDefault(emptyList()) else emptyList() }
+        val spotifyPlaylistsD = async { if (spotifyOn) runCatching { spotify.listPlaylists() }.getOrDefault(emptyList()) else emptyList() }
+        val spotifySavedD = async { if (spotifyOn) runCatching { spotify.savedTracks(20) }.getOrDefault(emptyList()) else emptyList() }
+        val vkTracksD = async { if (vkOn) runCatching { vk.savedTracks(20) }.getOrDefault(emptyList()) else emptyList() }
+        val vkPlaylistsD = async { if (vkOn) runCatching { vk.listPlaylists() }.getOrDefault(emptyList()) else emptyList() }
+        val yandexFeed = yandexFeedD.await()
+        val spotifyFeed = spotifyFeedD.await()
+        _shelves.value = shelvesD.await()
+        _homeArtists.value = emptyList()
+        _homeAlbums.value = emptyList()
+        _feed.value = when {
+            yandexFeed.isNotEmpty() && spotifyFeed.isNotEmpty() ->
+                yandexFeed.map { it.copy(title = "Яндекс · ${it.title}") } +
+                    spotifyFeed.map { it.copy(title = "Spotify · ${it.title}") }
+            else -> yandexFeed + spotifyFeed
+        }
+        _playlists.value = mergeHomePlaylists(
+            mssPlaylistsD.await(),
+            spotifyPlaylistsD.await(),
+            vkPlaylistsD.await(),
+        )
+        _tracks.value = mergeHomeTracks(
+            mssTracksD.await(),
+            yandexChartD.await(),
+            spotifySavedD.await(),
+            vkTracksD.await(),
+        )
+    }
+
+    private suspend fun loadHomeMss() = coroutineScope {
+        val shelvesD = async { runCatching { repo.shelves() }.getOrNull()?.onlyLocal() }
+        val tracksD = async { runCatching { repo.mssTracks(limit = 50) }.getOrDefault(emptyList()) }
+        val playlistsD = async { runCatching { repo.mssPlaylists() }.getOrDefault(emptyList()) }
+        val artistsD = async { runCatching { repo.artists(limit = 40) }.getOrDefault(emptyList()) }
+        val albumsD = async { runCatching { repo.albums() }.getOrDefault(emptyList()) }
+        val tracks = tracksD.await()
+        _shelves.value = shelvesD.await()
+        _feed.value = emptyList()
+        _tracks.value = tracks
+        _playlists.value = playlistsD.await()
+        _homeArtists.value = mssCatalogArtists(artistsD.await(), tracks)
+        _homeAlbums.value = mergeMssAlbums(albumsD.await(), tracks)
     }
 
     fun search(query: String, source: SourceId?, kind: String = "tracks") = launch {
@@ -348,21 +419,28 @@ class MssViewModel @Inject constructor(
         _library.value = current.copy(loading = true)
         viewModelScope.launch {
             val connected = LIBRARY_SOURCES.filter { sourceConnected(it) }
-            val (perSource, uploads) = coroutineScope {
-                val uploads = async { runCatching { repo.uploads() } }
-                val perSource = connected.map { src ->
+            val uploadsD = async { runCatching { repo.uploads() } }
+            val albumsD = async { runCatching { repo.albums() } }
+            val likedD = async { runCatching { repo.likedAlbums() } }
+            val perSource = coroutineScope {
+                connected.map { src ->
                     async { Triple(src, runCatching { libraryLikes(src) }, runCatching { libraryPlaylists(src) }) }
                 }.awaitAll()
-                perSource to uploads.await()
             }
+            val uploads = uploadsD.await()
+            val albums = albumsD.await()
+            val likedAlbums = likedD.await()
             val errors = perSource.mapNotNull { (src, likes, playlists) ->
                 (likes.exceptionOrNull() ?: playlists.exceptionOrNull())?.let { src to (it.message ?: "Не удалось загрузить") }
             }.toMap()
             val likes = perSource.associate { (src, result, _) -> src to result.getOrDefault(emptyList()) }
+            _likedAlbums.value = likedAlbums.getOrDefault(_likedAlbums.value)
             _library.value = LibraryUi(
                 likes = likes,
                 playlists = perSource.associate { (src, _, result) -> src to result.getOrDefault(emptyList()) },
                 uploads = uploads.getOrDefault(_library.value.uploads),
+                albums = albums.getOrDefault(_library.value.albums),
+                likedAlbums = likedAlbums.getOrDefault(_library.value.likedAlbums),
                 connected = connected,
                 errors = errors,
                 loading = false,
@@ -387,10 +465,15 @@ class MssViewModel @Inject constructor(
         SourceId.VK -> vk.listPlaylists()
     }
 
-    private fun reloadLibraryUploads() = launch {
+    private suspend fun refreshLibraryUploads() {
         val uploads = repo.uploads()
-        _library.value = _library.value.copy(uploads = uploads)
+        val albums = runCatching { repo.albums() }.getOrDefault(_library.value.albums)
+        val likedAlbums = runCatching { repo.likedAlbums() }.getOrDefault(_likedAlbums.value)
+        _likedAlbums.value = likedAlbums
+        _library.value = _library.value.copy(uploads = uploads, albums = albums, likedAlbums = likedAlbums)
     }
+
+    private fun reloadLibraryUploads() = launch { refreshLibraryUploads() }
 
     private fun reloadLibraryMssPlaylists() = launch {
         val playlists = repo.mssPlaylists()
@@ -425,6 +508,7 @@ class MssViewModel @Inject constructor(
         albumAlternatives = emptyMap()
         _albumPage.value = AlbumPageUi(loading = true)
         viewModelScope.launch {
+            runCatching { repo.likedAlbums() }.getOrNull()?.let { _likedAlbums.value = it }
             val src = sourceFrom(source)
             val saved = downloads.albums.value.firstOrNull { it.source == src && it.id == decoded }
             val savedFinal = saved?.takeIf { src == SourceId.LOCAL || src == SourceId.VK }
@@ -551,7 +635,7 @@ class MssViewModel @Inject constructor(
         val decodedId = java.net.URLDecoder.decode(id, Charsets.UTF_8).takeIf { it.isNotBlank() && it != "-" }
         val preferred = sourceFrom(source)
         _detailTitle.value = decodedName
-        _artistPage.value = ArtistPageUi(name = decodedName, loading = true)
+        _artistPage.value = ArtistPageUi(name = decodedName, loading = true, preferred = preferred)
         viewModelScope.launch {
             val page = loadArtistPage(decodedName, preferred, decodedId)
             if (_artistPage.value.name != decodedName) return@launch
@@ -596,12 +680,12 @@ class MssViewModel @Inject constructor(
     }
 
     private suspend fun loadArtistPage(name: String, preferred: SourceId, preferredId: String?): ArtistPageUi = coroutineScope {
-        val local = async { runCatching { repo.artistTracks(name) }.getOrDefault(emptyList()) }
+        val local = async { runCatching { loadMssArtist(name) }.getOrDefault(ArtistBundle()) }
         val yandex = async { runCatching { if (sourceConnected(SourceId.YANDEX)) loadYandexArtist(name, preferredId.takeIf { preferred == SourceId.YANDEX }) else null }.getOrNull() }
         val spotify = async { runCatching { if (sourceConnected(SourceId.SPOTIFY)) loadSpotifyArtist(name, preferredId.takeIf { preferred == SourceId.SPOTIFY }) else null }.getOrNull() }
         val vk = async { runCatching { if (sourceConnected(SourceId.VK)) loadVkArtist(name, preferredId.takeIf { preferred == SourceId.VK }) else null }.getOrNull() }
         val bundles = listOf(
-            SourceId.LOCAL to ArtistBundle(tracks = local.await()),
+            SourceId.LOCAL to local.await(),
             SourceId.YANDEX to (yandex.await() ?: ArtistBundle()),
             SourceId.SPOTIFY to (spotify.await() ?: ArtistBundle()),
             SourceId.VK to (vk.await() ?: ArtistBundle()),
@@ -612,7 +696,6 @@ class MssViewModel @Inject constructor(
         val description = artists.firstNotNullOfOrNull { it.description?.takeIf { text -> text.isNotBlank() } }
         val genres = artists.flatMap { it.genres.orEmpty() }.distinct()
         val popularBySource = bundles
-            .filter { it.first != SourceId.LOCAL }
             .associate { (src, bundle) -> src to bundle.popular.ifEmpty { bundle.tracks }.take(10) }
             .filterValues { it.isNotEmpty() }
         val albumsBySource = bundles.associate { (src, bundle) -> src to bundle.albums }.filterValues { it.isNotEmpty() }
@@ -621,10 +704,11 @@ class MssViewModel @Inject constructor(
             imageUrl = image,
             description = description,
             genres = genres,
+            preferred = preferred,
             platforms = bundles.map { (src, bundle) ->
                 ArtistPlatformUi(
                     source = src,
-                    present = bundle.artist != null || bundle.tracks.isNotEmpty(),
+                    present = bundle.artist != null || bundle.tracks.isNotEmpty() || bundle.albums.isNotEmpty(),
                     followers = bundle.artist?.followers,
                     monthlyListeners = bundle.artist?.monthlyListeners,
                     trackCount = bundle.artist?.trackCount?.takeIf { it > bundle.tracks.size } ?: bundle.tracks.size,
@@ -637,6 +721,25 @@ class MssViewModel @Inject constructor(
             albumsBySource = albumsBySource,
             loading = false,
         )
+    }
+
+    private suspend fun loadMssArtist(name: String): ArtistBundle {
+        val tracks = runCatching { repo.artistTracks(name) }.getOrDefault(emptyList())
+        val owned = runCatching { repo.albums(name) }.getOrDefault(emptyList())
+            .filter { album ->
+                album.artist.contains(name, ignoreCase = true) ||
+                    splitArtistNames(album.artist).any { it.equals(name, ignoreCase = true) }
+            }
+        val albums = mergeMssAlbums(owned, tracks)
+        if (tracks.isEmpty() && albums.isEmpty()) return ArtistBundle()
+        val artist = UnifiedArtist(
+            SourceId.LOCAL,
+            name,
+            name,
+            imageUrl = tracks.firstNotNullOfOrNull { it.coverUrl } ?: albums.firstNotNullOfOrNull { it.coverUrl },
+            trackCount = tracks.size,
+        )
+        return ArtistBundle(artist, tracks, tracks.take(10), albums)
     }
 
     private suspend fun loadYandexArtist(name: String, id: String?): ArtistBundle {
@@ -717,14 +820,37 @@ class MssViewModel @Inject constructor(
     }
 
     private suspend fun loadAlbum(source: SourceId, idOrTitle: String): AlbumWithTracks? {
-        if (source != SourceId.LOCAL) {
+        if (source == SourceId.LOCAL) {
+            loadMssAlbum(idOrTitle)?.let { return it }
+        } else {
             albumById(source, idOrTitle)?.takeIf { it.tracks.isNotEmpty() }?.let { return it }
         }
         return findAlbumEverywhere(idOrTitle)
     }
 
+    private suspend fun loadMssAlbum(idOrTitle: String): AlbumWithTracks? {
+        runCatching { repo.album(idOrTitle) }.getOrNull()?.takeIf { it.tracks.isNotEmpty() || it.id == idOrTitle }?.let { return it }
+        val matches: (UnifiedTrack) -> Boolean = {
+            it.albumId == idOrTitle || it.album.equals(idOrTitle, ignoreCase = true)
+        }
+        val tracks = runCatching { repo.mssTracks(idOrTitle, 100) }.getOrDefault(emptyList()).filter(matches)
+            .ifEmpty { runCatching { repo.mssTracks("", 100) }.getOrDefault(emptyList()).filter(matches) }
+        if (tracks.isEmpty()) return null
+        val seed = tracks.first()
+        return AlbumWithTracks(
+            source = SourceId.LOCAL,
+            id = seed.albumId ?: idOrTitle,
+            title = seed.album ?: idOrTitle,
+            artist = seed.artist,
+            coverUrl = seed.coverUrl,
+            trackCount = tracks.size,
+            tracks = tracks,
+        )
+    }
+
     /** Из сети с сохранением в кеш; без сети — сохранённая копия. */
     private suspend fun albumById(source: SourceId, id: String): AlbumWithTracks? {
+        if (source == SourceId.LOCAL) return runCatching { repo.album(id) }.getOrNull()
         if (source != SourceId.YANDEX && source != SourceId.SPOTIFY) return null
         val fresh = runCatching {
             if (source == SourceId.YANDEX) yandex.album(id) else spotify.album(id)
@@ -798,14 +924,7 @@ class MssViewModel @Inject constructor(
             out += runCatching { vk.searchAlbums(query, 20) }.getOrDefault(emptyList())
         }
         if (source == null || source == SourceId.LOCAL) {
-            val tracks = runCatching { repo.mssTracks(query, 30) }.getOrDefault(emptyList())
-            val seen = linkedMapOf<String, UnifiedAlbum>()
-            tracks.forEach { t ->
-                val title = t.album ?: return@forEach
-                val id = t.albumId ?: title
-                if (id !in seen) seen[id] = UnifiedAlbum(SourceId.LOCAL, id, title, t.artist, coverUrl = t.coverUrl)
-            }
-            out += seen.values
+            out += runCatching { repo.albums(query) }.getOrDefault(emptyList())
         }
         return out
     }
@@ -813,8 +932,13 @@ class MssViewModel @Inject constructor(
     private suspend fun searchArtists(query: String, source: SourceId?): List<UnifiedArtist> {
         val out = mutableListOf<UnifiedArtist>()
         if (source == null || source == SourceId.LOCAL) {
-            out += runCatching { repo.artists(query).map { UnifiedArtist(SourceId.LOCAL, it.name, it.name) } }
-                .getOrDefault(emptyList())
+            out += runCatching {
+                repo.artists(query).flatMap { dto ->
+                    splitArtistNames(dto.name).map {
+                        UnifiedArtist(SourceId.LOCAL, it, it, trackCount = dto.trackCount)
+                    }
+                }.distinctBy { it.name.lowercase() }
+            }.getOrDefault(emptyList())
         }
         if ((source == null || source == SourceId.SPOTIFY) && sourceConnected(SourceId.SPOTIFY)) {
             out += runCatching { spotify.searchArtists(query, 20) }.getOrDefault(emptyList())
@@ -887,6 +1011,21 @@ class MssViewModel @Inject constructor(
             _library.value = lib.copy(likes = lib.likes + (track.source to next))
         }
         if (track.source == SourceId.YANDEX && liked) yandex.dislike(track)
+    }
+
+    fun toggleAlbumLike(album: AlbumWithTracks) = toggleAlbumLike(album.toUnifiedAlbum())
+
+    fun toggleAlbumLike(album: UnifiedAlbum) = launch {
+        val liked = _likedAlbums.value.any { it.source == album.source && it.id == album.id }
+        repo.toggleAlbumLike(album, !liked)
+        _likedAlbums.value = if (liked) {
+            _likedAlbums.value.filterNot { it.source == album.source && it.id == album.id }
+        } else {
+            listOf(album) + _likedAlbums.value.filterNot { it.source == album.source && it.id == album.id }
+        }
+        if (_library.value.loaded) {
+            _library.value = _library.value.copy(likedAlbums = _likedAlbums.value)
+        }
     }
 
     private var yandexLoginJob: Job? = null
@@ -1202,8 +1341,7 @@ class MssViewModel @Inject constructor(
         val ids = tracks.map { it.id }
         var failed = 0
         ids.forEach { id -> runCatching { repo.deleteTrack(id) }.onFailure { failed++ } }
-        val gone = ids.toSet()
-        _library.value = _library.value.copy(uploads = _library.value.uploads.filterNot { it.id in gone })
+        refreshLibraryUploads()
         _notice.value = when {
             failed == ids.size -> "Не удалось удалить"
             failed > 0 -> "Удалено ${ids.size - failed} из ${ids.size}"
@@ -1235,6 +1373,31 @@ class MssViewModel @Inject constructor(
     fun registerUpload(uri: Uri, title: String, artist: String) = launch {
         repo.registerLocalFile(uri, title, artist)
         reloadLibraryUploads()
+    }
+
+    fun registerUploadAlbum(uris: List<Uri>, title: String, artist: String, coverUri: Uri? = null) = launch {
+        repo.registerLocalAlbum(uris, title, artist, coverUri)
+        refreshLibraryUploads()
+        _notice.value = "Альбом «$title» сохранён"
+    }
+
+    fun deleteAlbum(id: String) = launch {
+        repo.deleteAlbum(id)
+        _likedAlbums.value = _likedAlbums.value.filterNot { it.source == SourceId.LOCAL && it.id == id }
+        refreshLibraryUploads()
+        if (_albumPage.value.album?.source == SourceId.LOCAL && _albumPage.value.album?.id == id) {
+            _albumPage.value = AlbumPageUi(loading = false, error = "Альбом удалён")
+        }
+        _notice.value = "Альбом удалён"
+    }
+
+    fun setAlbumCover(id: String, uri: Uri) = launch {
+        repo.setAlbumCover(id, uri)
+        refreshLibraryUploads()
+        if (_albumPage.value.album?.id == id) {
+            runCatching { repo.album(id) }.getOrNull()?.let { showAlbum(it) }
+        }
+        _notice.value = "Обложка обновлена"
     }
 
     fun createLobby(title: String, pub: Boolean) = launch { lobby.create(title, pub) }
@@ -1323,6 +1486,12 @@ class MssViewModel @Inject constructor(
     private fun loadLikesIds() {
         viewModelScope.launch {
             runCatching { _likedIds.value = repo.mssLikes().map { it.id }.toSet() }
+            runCatching { repo.likedAlbums() }.getOrNull()?.let {
+                _likedAlbums.value = it
+                if (_library.value.loaded) {
+                    _library.value = _library.value.copy(likedAlbums = it)
+                }
+            }
         }
     }
 
@@ -1372,6 +1541,8 @@ data class LibraryUi(
     val likes: Map<SourceId, List<UnifiedTrack>> = emptyMap(),
     val playlists: Map<SourceId, List<UnifiedPlaylist>> = emptyMap(),
     val uploads: List<UnifiedTrack> = emptyList(),
+    val albums: List<UnifiedAlbum> = emptyList(),
+    val likedAlbums: List<UnifiedAlbum> = emptyList(),
     val connected: List<SourceId> = listOf(SourceId.LOCAL),
     val errors: Map<SourceId, String> = emptyMap(),
     val loading: Boolean = false,
@@ -1408,6 +1579,7 @@ data class ArtistPageUi(
     val imageUrl: String? = null,
     val description: String? = null,
     val genres: List<String> = emptyList(),
+    val preferred: SourceId = SourceId.LOCAL,
     val platforms: List<ArtistPlatformUi> = emptyList(),
     val popularBySource: Map<SourceId, List<UnifiedTrack>> = emptyMap(),
     val tracksBySource: Map<SourceId, List<UnifiedTrack>> = emptyMap(),
@@ -1454,6 +1626,102 @@ internal fun sameAlbum(title: String, artist: String, targetTitle: String, targe
     val b = normName(targetArtist)
     if (a.isEmpty() || b.isEmpty()) return true
     return a.contains(b) || b.contains(a)
+}
+
+private fun mergeHomeTracks(vararg lists: List<UnifiedTrack>): List<UnifiedTrack> {
+    val seen = linkedSetOf<String>()
+    val out = mutableListOf<UnifiedTrack>()
+    lists.forEach { list ->
+        list.forEach { track ->
+            if (seen.add("${track.source}:${track.id}")) out += track
+        }
+    }
+    return out.take(60)
+}
+
+private fun mergeHomePlaylists(vararg lists: List<UnifiedPlaylist>): List<UnifiedPlaylist> {
+    val seen = linkedSetOf<String>()
+    val out = mutableListOf<UnifiedPlaylist>()
+    lists.forEach { list ->
+        list.forEach { playlist ->
+            if (seen.add("${playlist.source}:${playlist.id}")) out += playlist
+        }
+    }
+    return out.take(24)
+}
+
+private fun HomeShelves.onlyLocal() = copy(
+    frequent = frequent.filter { it.source == SourceId.LOCAL },
+    forgotten = forgotten.filter { it.source == SourceId.LOCAL },
+    topArtists = topArtists.filter { it.source == SourceId.LOCAL },
+)
+
+private fun splitArtistNames(raw: String): List<String> {
+    val parts = raw.split(Regex("""\s*(?:,|&|\sfeat\.?\s|\sft\.?\s)\s*""", RegexOption.IGNORE_CASE))
+        .map { it.trim() }
+        .filter { it.isNotBlank() }
+    return parts.ifEmpty { listOfNotNull(raw.trim().takeIf { it.isNotBlank() }) }
+}
+
+private fun mssCatalogArtists(dtos: List<CatalogArtistDto>, tracks: List<UnifiedTrack>): List<UnifiedArtist> {
+    data class Acc(var name: String, var count: Int, var cover: String?)
+    val map = linkedMapOf<String, Acc>()
+    fun add(name: String, count: Int, cover: String?) {
+        val key = name.lowercase()
+        val cur = map[key]
+        if (cur == null) map[key] = Acc(name, count, cover)
+        else {
+            if (count > cur.count) cur.count = count
+            if (cur.cover == null) cur.cover = cover
+        }
+    }
+    if (dtos.isNotEmpty()) {
+        dtos.forEach { dto -> splitArtistNames(dto.name).forEach { add(it, dto.trackCount, null) } }
+        tracks.forEach { t -> splitArtistNames(t.artist).forEach { add(it, 0, t.coverUrl) } }
+    } else {
+        tracks.forEach { t ->
+            splitArtistNames(t.artist).forEach { name ->
+                val key = name.lowercase()
+                val cur = map[key]
+                if (cur == null) map[key] = Acc(name, 1, t.coverUrl)
+                else {
+                    cur.count += 1
+                    if (cur.cover == null) cur.cover = t.coverUrl
+                }
+            }
+        }
+    }
+    return map.values
+        .sortedByDescending { it.count }
+        .map { UnifiedArtist(SourceId.LOCAL, it.name, it.name, imageUrl = it.cover, trackCount = it.count.takeIf { n -> n > 0 }) }
+}
+
+private fun albumsFromTracks(tracks: List<UnifiedTrack>): List<UnifiedAlbum> {
+    val seen = linkedMapOf<String, UnifiedAlbum>()
+    tracks.forEach { t ->
+        val title = t.album?.trim()?.takeIf { it.isNotBlank() } ?: return@forEach
+        val id = t.albumId?.takeIf { it.isNotBlank() } ?: title
+        val key = t.albumId?.takeIf { it.isNotBlank() } ?: "${t.artist.lowercase()}::$title".lowercase()
+        val cur = seen[key]
+        if (cur == null) {
+            seen[key] = UnifiedAlbum(SourceId.LOCAL, id, title, t.artist, coverUrl = t.coverUrl, trackCount = 1)
+        } else {
+            seen[key] = cur.copy(
+                trackCount = (cur.trackCount ?: 1) + 1,
+                coverUrl = cur.coverUrl ?: t.coverUrl,
+            )
+        }
+    }
+    return seen.values.toList()
+}
+
+private fun mergeMssAlbums(owned: List<UnifiedAlbum>, tracks: List<UnifiedTrack>): List<UnifiedAlbum> {
+    val extra = albumsFromTracks(tracks)
+    val ownedIds = owned.map { it.id }.toSet()
+    val ownedKeys = owned.map { "${it.artist.lowercase()}::${it.title.lowercase()}" }.toSet()
+    return owned + extra.filter { album ->
+        album.id !in ownedIds && "${album.artist.lowercase()}::${album.title.lowercase()}" !in ownedKeys
+    }
 }
 
 data class SourceStatuses(

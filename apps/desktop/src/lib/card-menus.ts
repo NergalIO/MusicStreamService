@@ -1,5 +1,5 @@
-import type { AlbumWithTracks, PlaylistEntryDto, UnifiedAlbum, UnifiedPlaylist, UnifiedTrack } from '@mss/shared';
-import { Copy, Download, FileDown, Link2, ListEnd, ListPlus, ListStart, MicVocal, Pin, PinOff, Play, Radio, Shuffle } from 'lucide-react';
+import type { AlbumDetailDto, AlbumWithTracks, PlaylistEntryDto, UnifiedAlbum, UnifiedPlaylist, UnifiedTrack } from '@mss/shared';
+import { Copy, Download, FileDown, Heart, Link2, ListEnd, ListPlus, ListStart, MicVocal, Pin, PinOff, Play, Radio, Shuffle } from 'lucide-react';
 import { toast } from 'sonner';
 import { openPlaylistPicker } from '@/components/tracks/PlaylistPicker';
 import type { MenuItem, MenuSpec } from '@/components/ui/context-menu';
@@ -11,17 +11,22 @@ import { albumLink, mssAlbumUrl, mssPlaylistUrl, playlistPath } from '@/lib/link
 import { playCollection, startWave } from '@/lib/player-actions';
 import { exportM3u8, importToMss } from '@/lib/playlist-io';
 import { queryClient } from '@/lib/query-client';
+import { mapLocalAlbumDetail } from '@/lib/queries';
 import { mapPlaylistEntry } from '@/lib/sources';
 import { canDownload, downloadKey, useDownloadsStore } from '@/store/downloads-store';
+import { useAlbumLikesStore } from '@/store/album-likes-store';
 import { usePlayerStore, type PlayContext } from '@/store/player-store';
 import { useSidebarStore } from '@/store/sidebar-store';
 
-export function loadAlbum(source: 'yandex' | 'spotify', id: string): Promise<AlbumWithTracks> {
+export function loadAlbum(source: 'yandex' | 'spotify' | 'local', id: string): Promise<AlbumWithTracks> {
+  if (source === 'local') {
+    return apiFetch<AlbumDetailDto>(`/albums/${id}`).then(mapLocalAlbumDetail);
+  }
   return source === 'spotify' ? window.electronAPI.connectors.album('spotify', id) : window.electronAPI.yandex.album(id);
 }
 
 /** Те же ключи, что у страниц альбома и плейлиста: повторный переход откроется из кэша. */
-export function loadAlbumTracks(id: string, source: 'yandex' | 'spotify' = 'yandex'): Promise<UnifiedTrack[]> {
+export function loadAlbumTracks(id: string, source: 'yandex' | 'spotify' | 'local' = 'yandex'): Promise<UnifiedTrack[]> {
   return queryClient
     .fetchQuery({ queryKey: ['album', source, id], queryFn: () => loadAlbum(source, id), staleTime: 30 * 60_000 })
     .then((a) => a.tracks);
@@ -101,14 +106,27 @@ function downloadAllItem(load: () => Promise<UnifiedTrack[]>): MenuItem {
 }
 
 export function albumMenu(album: UnifiedAlbum): MenuSpec {
-  const load = () => loadAlbumTracks(album.id, album.source === 'spotify' ? 'spotify' : 'yandex');
+  const source = album.source === 'local' || album.source === 'spotify' ? album.source : 'yandex';
+  const load = () => loadAlbumTracks(album.id, source);
   const context: PlayContext = { type: 'album', title: album.title, path: albumLink(album) };
   const artist = album.artists?.[0];
+  const liked = useAlbumLikesStore.getState().isLiked(album);
+  const externalUrl =
+    album.source === 'spotify'
+      ? `https://open.spotify.com/album/${album.id}`
+      : album.source === 'yandex'
+        ? `https://music.yandex.ru/album/${album.id}`
+        : null;
   return {
     title: `${album.title} · ${album.artist}`,
     groups: [
       ...collectionItems(load, context),
       [
+        {
+          icon: Heart,
+          label: liked ? 'Убрать из «Мне нравится»' : 'Мне нравится',
+          action: () => void useAlbumLikesStore.getState().toggle(album),
+        },
         ...(album.source === 'yandex'
           ? [
               {
@@ -128,17 +146,15 @@ export function albumMenu(album: UnifiedAlbum): MenuSpec {
             ]
           : []),
         downloadAllItem(load),
-        {
-          icon: Copy,
-          label: 'Скопировать ссылку',
-          action: () =>
-            copyTextWithToast(
-              album.source === 'spotify'
-                ? `https://open.spotify.com/album/${album.id}`
-                : `https://music.yandex.ru/album/${album.id}`,
-              'Ссылка скопирована',
-            ),
-        },
+        ...(externalUrl
+          ? [
+              {
+                icon: Copy,
+                label: 'Скопировать ссылку',
+                action: () => copyTextWithToast(externalUrl, 'Ссылка скопирована'),
+              } as MenuItem,
+            ]
+          : []),
         {
           icon: Link2,
           label: 'Скопировать ссылку MSS',

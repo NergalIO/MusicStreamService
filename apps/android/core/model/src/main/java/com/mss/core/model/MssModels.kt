@@ -52,6 +52,7 @@ data class TrackDto(
     val title: String,
     val artist: String,
     val album: String? = null,
+    val albumId: String? = null,
     val durationMs: Long? = null,
     val status: String? = null,
     val codec: String? = null,
@@ -81,6 +82,21 @@ data class PlaylistDto(
 
 @Serializable
 data class PlaylistsResponse(val items: List<PlaylistDto> = emptyList())
+
+@Serializable
+data class AlbumDto(
+    val id: String,
+    val title: String,
+    val artist: String,
+    val year: Int? = null,
+    val type: String? = null,
+    val coverUrl: String? = null,
+    val trackCount: Int = 0,
+    val tracks: List<TrackDto> = emptyList(),
+)
+
+@Serializable
+data class AlbumsResponse(val items: List<AlbumDto> = emptyList())
 
 @Serializable
 data class ArtistRef(val id: String, val name: String)
@@ -519,6 +535,7 @@ fun TrackDto.toUnifiedTrack(apiBase: String): UnifiedTrack {
         title = title,
         artist = artist,
         album = album,
+        albumId = albumId,
         durationMs = durationMs,
         coverUrl = coverUrl,
         playable = when (status) {
@@ -566,6 +583,7 @@ fun PlaylistEntryDto.toUnifiedTrack(apiBase: String): UnifiedTrack? {
         title = title ?: return null,
         artist = artist ?: "",
         album = album,
+        albumId = null,
         durationMs = durationMs,
         status = status,
         codec = codec,
@@ -589,6 +607,53 @@ fun PlaylistDto.toUnifiedPlaylist(): UnifiedPlaylist = UnifiedPlaylist(
     description = description,
     coverUrl = coverUrl,
     trackCount = trackCount,
+)
+
+fun AlbumDto.toUnifiedAlbum(): UnifiedAlbum = UnifiedAlbum(
+    source = SourceId.LOCAL,
+    id = id,
+    title = title,
+    artist = artist,
+    year = year,
+    coverUrl = coverUrl,
+    trackCount = trackCount,
+    type = type,
+)
+
+fun AlbumDto.toAlbumWithTracks(apiBase: String): AlbumWithTracks {
+    val mapped = tracks.map { dto ->
+        val unified = dto.toUnifiedTrack(apiBase)
+        unified.copy(
+            albumId = dto.albumId ?: id,
+            album = dto.album ?: title,
+            coverUrl = unified.coverUrl ?: coverUrl,
+        )
+    }
+    return AlbumWithTracks(
+        source = SourceId.LOCAL,
+        id = id,
+        title = title,
+        artist = artist,
+        year = year,
+        coverUrl = coverUrl,
+        trackCount = trackCount.takeIf { it > 0 } ?: mapped.size,
+        type = type,
+        tracks = mapped,
+        durationMs = mapped.mapNotNull { it.durationMs }.sum().takeIf { it > 0 },
+    )
+}
+
+fun AlbumWithTracks.toUnifiedAlbum(): UnifiedAlbum = UnifiedAlbum(
+    source = source,
+    id = id,
+    title = title,
+    artist = artist,
+    artists = artists,
+    year = year,
+    coverUrl = coverUrl,
+    trackCount = trackCount,
+    type = type,
+    genre = genre,
 )
 
 fun ListeningHistoryItem.toUnifiedTrack(): UnifiedTrack = UnifiedTrack(

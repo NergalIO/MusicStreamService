@@ -85,6 +85,52 @@ export const updateTrackSchema = z.object({
   album: optionalText(500),
 });
 
+const optionalYear = z.preprocess(
+  (value) => (value === null || value === '' ? undefined : value),
+  z.number().int().min(1000).max(2100).optional(),
+);
+
+export const albumTypeSchema = z.enum(['album', 'single', 'ep', 'compilation']);
+
+export const createAlbumSchema = z.object({
+  title: z.string().trim().min(1).max(500),
+  artist: z.string().trim().min(1).max(500),
+  year: optionalYear,
+  type: albumTypeSchema.optional(),
+  trackIds: z.array(z.string().uuid()).max(500).optional(),
+});
+
+export const updateAlbumSchema = z.object({
+  title: z.string().trim().min(1).max(500).optional(),
+  artist: z.string().trim().min(1).max(500).optional(),
+  year: z.preprocess(
+    (value) => (value === null || value === '' ? null : value),
+    z.number().int().min(1000).max(2100).nullable().optional(),
+  ),
+  type: albumTypeSchema.optional(),
+});
+
+export const addAlbumTracksSchema = z.object({
+  trackIds: z.array(z.string().uuid()).min(1).max(500),
+});
+
+export const reorderAlbumSchema = z.object({
+  trackIds: z.array(z.string().uuid()).max(500),
+});
+
+export const albumLikeSchema = z.object({
+  source: z.enum(['local', 'yandex', 'spotify', 'vk']),
+  id: z.string().trim().min(1).max(100),
+  title: z.string().trim().min(1).max(500),
+  artist: z.string().trim().min(1).max(500),
+  year: optionalYear,
+  type: z.string().trim().max(40).optional(),
+  coverUrl: z.string().trim().max(2000).optional(),
+  trackCount: z.number().int().min(0).max(5000).optional(),
+  genre: z.string().trim().max(200).optional(),
+  artists: z.array(artistRefSchema).max(20).optional(),
+});
+
 export const registerTrackSchema = z.object({
   contentHash: z.string().regex(/^[a-f0-9]{64}$/i, 'contentHash must be SHA-256 hex'),
   title: z.string().trim().min(1).max(500),

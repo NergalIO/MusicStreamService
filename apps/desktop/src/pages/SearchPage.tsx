@@ -1,4 +1,4 @@
-import type { UnifiedPlaylist, UnifiedTrack } from '@mss/shared';
+import type { AlbumDto, UnifiedPlaylist, UnifiedTrack } from '@mss/shared';
 import { useQuery } from '@tanstack/react-query';
 import { Clock, Disc3, ListMusic, Search, X } from 'lucide-react';
 import { useEffect, useRef, useState } from 'react';
@@ -13,12 +13,12 @@ import { Segmented } from '@/components/ui/controls';
 import { EmptyState, ErrorState } from '@/components/ui/states';
 import { apiFetch } from '@/lib/api';
 import { searchArtistsEverywhere } from '@/lib/artists';
-import { albumMenu, loadPlaylistTracks, playlistMenu } from '@/lib/card-menus';
+import { albumMenu, loadAlbumTracks, loadPlaylistTracks, playlistMenu } from '@/lib/card-menus';
 import { useYandexConnected } from '@/lib/connectors';
 import { formatTrackCount } from '@/lib/format';
 import { albumLink, playlistPath } from '@/lib/links';
 import { playCollection } from '@/lib/player-actions';
-import { mssPlaylistToUnified, useMssPlaylists } from '@/lib/queries';
+import { mapLocalAlbum, mssPlaylistToUnified, useMssPlaylists } from '@/lib/queries';
 import { EXTERNAL_SOURCES, mapLocalTrack, matchesFilter, type LocalTrackDto, type SourceFilterId } from '@/lib/sources';
 import { cn } from '@/lib/utils';
 import { normalizeSearch } from '@/hooks/useTrackSort';
@@ -270,32 +270,50 @@ function PlaylistResults({
   );
 }
 
-function AlbumResults({ q, kind }: { q: string; kind: SearchKind }) {
+function AlbumResults({ q, kind, filter, scope }: { q: string; kind: SearchKind; filter: SourceFilterId; scope: ServiceScope }) {
   const yandex = useYandexConnected();
-  const albums = useQuery({
-    queryKey: ['search', 'albums', q],
+  const wantLocal = matchesFilter(filter, 'local') && (scope === 'mss' || scope === 'media');
+  const wantYandex = yandex && matchesFilter(filter, 'yandex') && (scope === 'yandex' || scope === 'media');
+  const local = useQuery({
+    queryKey: ['search', 'albums', 'local', q],
+    queryFn: async () =>
+      (await apiFetch<{ items: AlbumDto[] }>(`/albums?query=${encodeURIComponent(q)}`)).items.map(mapLocalAlbum),
+    enabled: wantLocal && !!q,
+    staleTime: 30_000,
+  });
+  const remote = useQuery({
+    queryKey: ['search', 'albums', 'yandex', q],
     queryFn: () => window.electronAPI.yandex.searchAlbums(q, kind === 'albums' ? 36 : 12),
-    enabled: yandex && !!q,
+    enabled: wantYandex && !!q,
     staleTime: 5 * 60_000,
   });
-  if (!yandex) return <p className="text-sm text-muted">Поиск альбомов работает через Яндекс Музыку — подключите её в настройках</p>;
-  if (albums.isError) return <ErrorState className="py-8" error={albums.error} onRetry={() => void albums.refetch()} />;
-  if (albums.isLoading) return <CardRowSkeleton />;
-  const items = albums.data ?? [];
-  if (!items.length) return <EmptyState icon={Disc3} title="Альбомы не найдены" className="py-10" />;
+  const items = [...(local.data ?? []), ...(remote.data ?? [])];
+  if (wantLocal && local.isError && !items.length) {
+    return <ErrorState className="py-8" error={local.error} onRetry={() => void local.refetch()} />;
+  }
+  if (wantYandex && remote.isError && !items.length) {
+    return <ErrorState className="py-8" error={remote.error} onRetry={() => void remote.refetch()} />;
+  }
+  if (((wantLocal && local.isLoading) || (wantYandex && remote.isLoading)) && !items.length) return <CardRowSkeleton />;
+  if (!items.length) {
+    if (!wantLocal && !wantYandex) {
+      return <p className="text-sm text-muted">Поиск альбомов — в MSS и Яндекс Музыке</p>;
+    }
+    return <EmptyState icon={Disc3} title="Альбомы не найдены" className="py-10" />;
+  }
   return (
     <div className={GRID}>
-      {items.slice(0, kind === 'all' ? 6 : undefined).map((a) => (
+      {items.slice(0, kind === 'all' ? 8 : undefined).map((a) => (
         <MediaCard
-          key={a.id}
+          key={`${a.source}:${a.id}`}
           title={a.title}
-          subtitle={[a.artist, a.year].filter(Boolean).join(' · ')}
+          subtitle={[a.source === 'local' ? 'MSS' : a.artist, a.year].filter(Boolean).join(' · ')}
           coverUrl={a.coverUrl}
           to={albumLink(a)}
           menu={() => albumMenu(a)}
           onPlay={async () => {
-            const album = await window.electronAPI.yandex.album(a.id);
-            playCollection(album.tracks, { type: 'album', title: album.title, path: albumLink(a) });
+            const tracks = await loadAlbumTracks(a.id, a.source === 'local' ? 'local' : 'yandex');
+            playCollection(tracks, { type: 'album', title: a.title, path: albumLink(a) });
           }}
         />
       ))}
@@ -303,7 +321,7 @@ function AlbumResults({ q, kind }: { q: string; kind: SearchKind }) {
   );
 }
 
-const MSS_KINDS = KINDS.filter((k) => k.value !== 'albums');
+const SPOTIFY_KINDS = KINDS.filter((k) => k.value !== 'albums');
 
 export function SearchPage({ scope }: { scope: ServiceScope }) {
   const [params, setParams] = useSearchParams();
@@ -313,9 +331,9 @@ export function SearchPage({ scope }: { scope: ServiceScope }) {
   );
   const [kind, setKind] = useState<SearchKind>('all');
   const addHistory = useSearchHistory((s) => s.add);
-  const kindOptions = scope === 'mss' || scope === 'spotify' ? MSS_KINDS : KINDS;
+  const kindOptions = scope === 'spotify' ? SPOTIFY_KINDS : KINDS;
   const searchContextPath = searchPath(scope, q);
-  const showAlbums = (scope === 'yandex' || scope === 'media') && matchesFilter(filter, 'yandex');
+  const showAlbums = scope !== 'spotify' && (filter === 'all' || filter === 'local' || filter === 'yandex');
   const showSourceFilter = scope === 'media';
 
   useEffect(() => {
@@ -340,7 +358,7 @@ export function SearchPage({ scope }: { scope: ServiceScope }) {
 
   const emptyDescription =
     scope === 'mss'
-      ? 'Ищите треки, исполнителей и плейлисты во внутренней библиотеке MSS.'
+      ? 'Ищите треки, альбомы, исполнителей и плейлисты во внутренней библиотеке MSS.'
       : scope === 'yandex'
         ? 'Ищите в каталоге Яндекс Музыки: треки, альбомы, плейлисты и исполнители.'
         : scope === 'spotify'
@@ -402,7 +420,7 @@ export function SearchPage({ scope }: { scope: ServiceScope }) {
           )}
           {showAlbums && show('albums') && (
             <Shelf title={kind === 'all' ? 'Альбомы' : `Альбомы по запросу «${q}»`}>
-              <AlbumResults q={q} kind={kind} />
+              <AlbumResults q={q} kind={kind} filter={filter} scope={scope} />
             </Shelf>
           )}
           {show('playlists') && (

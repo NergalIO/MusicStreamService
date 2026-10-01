@@ -10,6 +10,8 @@ const YANDEX_METHODS = [
   'likedTrackIds',
   'likedTracks',
   'setLike',
+  'likedAlbums',
+  'setAlbumLike',
   'dislike',
   'playlists',
   'playlist',

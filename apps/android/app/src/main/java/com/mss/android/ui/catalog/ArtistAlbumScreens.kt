@@ -1,5 +1,7 @@
 package com.mss.android.ui.catalog
 
+import androidx.activity.compose.rememberLauncherForActivityResult
+import androidx.activity.result.contract.ActivityResultContracts
 import androidx.compose.animation.animateContentSize
 import androidx.compose.foundation.background
 import androidx.compose.foundation.clickable
@@ -46,12 +48,17 @@ import com.mss.android.ui.components.DownloadedGreen
 import com.mss.android.ui.components.canDownload
 import com.mss.core.downloads.DownloadScheduler
 import androidx.compose.material.icons.Icons
+import androidx.compose.material.icons.filled.Delete
 import androidx.compose.material.icons.filled.DownloadForOffline
+import androidx.compose.material.icons.filled.Favorite
+import androidx.compose.material.icons.filled.FavoriteBorder
 import androidx.compose.material.icons.filled.PlayArrow
 import androidx.compose.material.icons.outlined.DownloadForOffline
+import androidx.compose.material.icons.outlined.Image
 import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.Button
 import androidx.compose.material3.Icon
+import androidx.compose.material3.IconButton
 import androidx.compose.material3.OutlinedButton
 import androidx.compose.material3.TextButton
 import androidx.compose.runtime.remember
@@ -62,6 +69,7 @@ import com.mss.android.ui.components.SourceTag
 import com.mss.android.ui.components.TrackRow
 import com.mss.android.ui.components.sourceLabel
 import com.mss.android.ui.navigation.Routes
+import com.mss.android.ui.navigation.openRoute
 import com.mss.core.model.SourceId
 import com.mss.core.model.UnifiedTrack
 import com.mss.core.model.WaveSettings
@@ -81,7 +89,7 @@ fun ArtistScreen(vm: MssViewModel, nav: NavHostController) {
     val missing = page.platforms.filter { !it.present && it.source != SourceId.LOCAL }
     var picked by rememberSaveable(page.name) { mutableStateOf<SourceId?>(null) }
     val selected = picked?.takeIf { p -> present.any { it.source == p } }
-        ?: present.firstOrNull { it.source != SourceId.LOCAL }?.source
+        ?: present.firstOrNull { it.source == page.preferred }?.source
         ?: present.firstOrNull()?.source
     var aboutOpen by rememberSaveable(page.name) { mutableStateOf(false) }
     LazyColumn(Modifier.fillMaxSize(), contentPadding = PaddingValues(bottom = 24.dp)) {
@@ -188,7 +196,7 @@ fun ArtistScreen(vm: MssViewModel, nav: NavHostController) {
                                 subtitle = listOfNotNull(album.year?.toString(), albumKind(album.type)).joinToString(" · ").ifBlank { null },
                                 cover = album.coverUrl,
                                 size = 132.dp,
-                                onClick = { nav.navigate(Routes.album(album.source.name.lowercase(), album.id)) },
+                                onClick = { nav.openRoute(Routes.album(album.source.name.lowercase(), album.id)) },
                             )
                         }
                     }
@@ -252,7 +260,7 @@ fun AlbumScreen(vm: MssViewModel, nav: NavHostController) {
                                     style = MaterialTheme.typography.titleSmall,
                                     color = scheme.primary,
                                     modifier = Modifier.clickable {
-                                        nav.navigate(Routes.artist(ref.name, a.source.name.lowercase(), ref.id.ifBlank { "-" }))
+                                        nav.openRoute(Routes.artist(ref.name, a.source.name.lowercase(), ref.id.ifBlank { "-" }))
                                     },
                                 )
                             }
@@ -263,11 +271,11 @@ fun AlbumScreen(vm: MssViewModel, nav: NavHostController) {
                             style = MaterialTheme.typography.titleSmall,
                             color = scheme.primary,
                             textAlign = TextAlign.Center,
-                            modifier = Modifier.clickable { nav.navigate(Routes.artist(a.artist, a.source.name.lowercase(), "-")) },
+                            modifier = Modifier.clickable { nav.openRoute(Routes.artist(a.artist, a.source.name.lowercase(), "-")) },
                         )
                     }
                     AlbumTags(a, Modifier.padding(top = 6.dp))
-                    AlbumActions(vm, a, Modifier.padding(top = 10.dp))
+                    AlbumActions(vm, nav, a, Modifier.padding(top = 10.dp))
                 }
             }
         }
@@ -337,39 +345,66 @@ fun AlbumScreen(vm: MssViewModel, nav: NavHostController) {
 }
 
 @Composable
-private fun AlbumActions(vm: MssViewModel, album: AlbumWithTracks, modifier: Modifier = Modifier) {
+private fun AlbumActions(vm: MssViewModel, nav: NavHostController, album: AlbumWithTracks, modifier: Modifier = Modifier) {
     val downloadedKeys by vm.downloadedKeys.collectAsState()
     val active by vm.activeDownloads.collectAsState()
     val savedAlbums by vm.downloadedAlbums.collectAsState()
+    val likedAlbums by vm.likedAlbums.collectAsState()
     var confirm by remember { mutableStateOf(false) }
+    var confirmCloud by remember { mutableStateOf(false) }
     val scheme = MaterialTheme.colorScheme
+    val isLiked = likedAlbums.any { it.source == album.source && it.id == album.id }
     val tracks = album.tracks.filter { canDownload(it) }
     val keys = tracks.map { DownloadScheduler.keyOf(it) }
     val done = keys.count { it in downloadedKeys }
     val running = keys.count { it in active }
     val saved = savedAlbums.any { it.source == album.source && it.id == album.id }
     val complete = tracks.isNotEmpty() && done == tracks.size
-    Row(modifier, horizontalArrangement = Arrangement.spacedBy(8.dp), verticalAlignment = Alignment.CenterVertically) {
-        Button(onClick = { vm.play(album.tracks, 0) }, enabled = album.tracks.isNotEmpty()) {
-            Icon(Icons.Default.PlayArrow, null, Modifier.size(18.dp))
-            Text("Слушать", Modifier.padding(start = 4.dp))
-        }
-        when {
-            tracks.isEmpty() -> {}
-            running > 0 -> OutlinedButton(onClick = {}, enabled = false) {
-                CircularProgressIndicator(Modifier.size(16.dp), strokeWidth = 2.dp, color = DownloadedGreen)
-                Text("Скачано $done из ${tracks.size}", Modifier.padding(start = 8.dp))
+    val coverLauncher = rememberLauncherForActivityResult(ActivityResultContracts.GetContent()) { uri ->
+        uri?.let { vm.setAlbumCover(album.id, it) }
+    }
+    Column(modifier, verticalArrangement = Arrangement.spacedBy(8.dp), horizontalAlignment = Alignment.CenterHorizontally) {
+        Row(horizontalArrangement = Arrangement.spacedBy(8.dp), verticalAlignment = Alignment.CenterVertically) {
+            Button(onClick = { vm.play(album.tracks, 0) }, enabled = album.tracks.isNotEmpty()) {
+                Icon(Icons.Default.PlayArrow, null, Modifier.size(18.dp))
+                Text("Слушать", Modifier.padding(start = 4.dp))
             }
-            complete && saved -> OutlinedButton(onClick = { confirm = true }) {
-                Icon(Icons.Filled.DownloadForOffline, null, Modifier.size(18.dp), tint = DownloadedGreen)
-                Text("Скачано", Modifier.padding(start = 6.dp), color = DownloadedGreen)
-            }
-            else -> OutlinedButton(onClick = { vm.downloadAlbum(album) }) {
-                Icon(Icons.Outlined.DownloadForOffline, null, Modifier.size(18.dp))
-                Text(
-                    if (done > 0) "Докачать (${tracks.size - done})" else "Скачать альбом",
-                    Modifier.padding(start = 6.dp),
+            IconButton({ vm.toggleAlbumLike(album) }) {
+                Icon(
+                    if (isLiked) Icons.Default.Favorite else Icons.Default.FavoriteBorder,
+                    contentDescription = if (isLiked) "Убрать из «Мне нравится»" else "Мне нравится",
+                    tint = if (isLiked) scheme.primary else scheme.onSurfaceVariant,
                 )
+            }
+            when {
+                tracks.isEmpty() -> {}
+                running > 0 -> OutlinedButton(onClick = {}, enabled = false) {
+                    CircularProgressIndicator(Modifier.size(16.dp), strokeWidth = 2.dp, color = DownloadedGreen)
+                    Text("Скачано $done из ${tracks.size}", Modifier.padding(start = 8.dp))
+                }
+                complete && saved -> OutlinedButton(onClick = { confirm = true }) {
+                    Icon(Icons.Filled.DownloadForOffline, null, Modifier.size(18.dp), tint = DownloadedGreen)
+                    Text("Скачано", Modifier.padding(start = 6.dp), color = DownloadedGreen)
+                }
+                else -> OutlinedButton(onClick = { vm.downloadAlbum(album) }) {
+                    Icon(Icons.Outlined.DownloadForOffline, null, Modifier.size(18.dp))
+                    Text(
+                        if (done > 0) "Докачать (${tracks.size - done})" else "Скачать альбом",
+                        Modifier.padding(start = 6.dp),
+                    )
+                }
+            }
+        }
+        if (album.source == SourceId.LOCAL) {
+            Row(horizontalArrangement = Arrangement.spacedBy(8.dp), verticalAlignment = Alignment.CenterVertically) {
+                OutlinedButton(onClick = { coverLauncher.launch("image/*") }) {
+                    Icon(Icons.Outlined.Image, null, Modifier.size(18.dp))
+                    Text("Обложка", Modifier.padding(start = 6.dp))
+                }
+                OutlinedButton(onClick = { confirmCloud = true }) {
+                    Icon(Icons.Default.Delete, null, Modifier.size(18.dp), tint = scheme.error)
+                    Text("Удалить", Modifier.padding(start = 6.dp), color = scheme.error)
+                }
             }
         }
     }
@@ -382,6 +417,21 @@ private fun AlbumActions(vm: MssViewModel, album: AlbumWithTracks, modifier: Mod
                 TextButton({ vm.removeAlbumDownload(album); confirm = false }) { Text("Удалить", color = scheme.error) }
             },
             dismissButton = { TextButton({ confirm = false }) { Text("Отмена") } },
+        )
+    }
+    if (confirmCloud) {
+        AlertDialog(
+            onDismissRequest = { confirmCloud = false },
+            title = { Text("Удалить альбом?") },
+            text = { Text("«${album.title}» будет удалён из библиотеки. Треки останутся в «Мои файлы».") },
+            confirmButton = {
+                TextButton({
+                    vm.deleteAlbum(album.id)
+                    confirmCloud = false
+                    nav.popBackStack()
+                }) { Text("Удалить", color = scheme.error) }
+            },
+            dismissButton = { TextButton({ confirmCloud = false }) { Text("Отмена") } },
         )
     }
 }
@@ -448,7 +498,7 @@ private fun trackRow(
         onPlay = { vm.play(list, index) },
         onLike = { vm.toggleLike(track) },
         onDownload = { vm.download(track) },
-        onSimilar = { nav.navigate(Routes.similar(track.source.name.lowercase(), track.id)) },
+        onSimilar = { nav.openRoute(Routes.similar(track.source.name.lowercase(), track.id)) },
         onQueue = { vm.player.enqueue(track) },
         onWave = { vm.startWave(WaveSettings(seed = "track:${track.id}", seedTitle = track.title)) },
         onSuggest = if (canSuggest) ({ vm.suggestToLobby(track) }) else null,

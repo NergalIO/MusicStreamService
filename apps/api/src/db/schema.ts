@@ -81,6 +81,59 @@ export const trackHoldings = pgTable(
   (t) => [primaryKey({ columns: [t.userId, t.trackId] })],
 );
 
+/** Альбом пользователя: хуки на треки каталога + обложка. Сами файлы живут в `tracks`. */
+export const albums = pgTable('albums', {
+  id: uuid('id').primaryKey().defaultRandom(),
+  userId: uuid('user_id')
+    .notNull()
+    .references(() => users.id, { onDelete: 'cascade' }),
+  title: varchar('title', { length: 500 }).notNull(),
+  artist: varchar('artist', { length: 500 }).notNull(),
+  year: integer('year'),
+  type: varchar('type', { length: 20 }).notNull().default('album'),
+  coverStorageKey: text('cover_storage_key'),
+  createdAt: timestamp('created_at').defaultNow().notNull(),
+});
+
+export const albumTracks = pgTable(
+  'album_tracks',
+  {
+    albumId: uuid('album_id')
+      .notNull()
+      .references(() => albums.id, { onDelete: 'cascade' }),
+    trackId: uuid('track_id')
+      .notNull()
+      .references(() => tracks.id, { onDelete: 'cascade' }),
+    position: integer('position').notNull().default(0),
+  },
+  (t) => [primaryKey({ columns: [t.albumId, t.trackId] })],
+);
+
+export interface AlbumLikeSnapshot {
+  title: string;
+  artist: string;
+  artists?: { id: string; name: string }[];
+  year?: number | null;
+  coverUrl?: string | null;
+  type?: string | null;
+  trackCount?: number;
+  genre?: string | null;
+}
+
+export const albumLikes = pgTable(
+  'album_likes',
+  {
+    userId: uuid('user_id')
+      .notNull()
+      .references(() => users.id, { onDelete: 'cascade' }),
+    source: varchar('source', { length: 20 }).notNull(),
+    albumId: varchar('album_id', { length: 100 }).notNull(),
+    snapshot: jsonb('snapshot').$type<AlbumLikeSnapshot>(),
+    createdAt: timestamp('created_at').defaultNow().notNull(),
+  },
+  (t) => [primaryKey({ columns: [t.userId, t.source, t.albumId] })],
+);
+
 export const playlists = pgTable('playlists', {
   id: uuid('id').primaryKey().defaultRandom(),
   userId: uuid('user_id')

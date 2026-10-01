@@ -38,6 +38,8 @@ export interface TrackDto {
   title: string;
   artist: string;
   album: string | null;
+  /** Альбом MSS текущего пользователя, если трек в него входит. */
+  albumId?: string | null;
   durationMs: number | null;
   status: TrackStatus;
   codec: string | null;
@@ -61,6 +63,35 @@ export interface PlaylistDto {
   author: string | null;
   coverUrl: string | null;
   trackCount: number;
+}
+
+/** Альбом MSS: метаданные и обложка. Треки — отдельные объекты каталога, сюда только хуки. */
+export interface AlbumDto {
+  id: string;
+  title: string;
+  artist: string;
+  year: number | null;
+  type: string | null;
+  coverUrl: string | null;
+  trackCount: number;
+}
+
+export interface AlbumDetailDto extends AlbumDto {
+  tracks: TrackDto[];
+}
+
+/** Лайк альбома: MSS хранит снимок, чтобы список не зависел от Яндекса/Spotify. */
+export interface LikedAlbumDto {
+  source: SourceId;
+  id: string;
+  title: string;
+  artist: string;
+  artists?: ArtistRef[];
+  year?: number | null;
+  coverUrl?: string | null;
+  trackCount?: number;
+  type?: string | null;
+  genre?: string | null;
 }
 
 export interface ExternalTrackSnapshot {

@@ -1,8 +1,9 @@
-import type { ExternalTrackSnapshot, UnifiedTrack } from '@mss/shared';
+import type { AlbumDetailDto, AlbumDto, ExternalTrackSnapshot, UnifiedTrack } from '@mss/shared';
 import { toast } from 'sonner';
 import { apiFetch } from '@/lib/api';
 import { formatTrackCount } from '@/lib/format';
 import { queryClient } from '@/lib/query-client';
+import { useAlbumLikesStore } from '@/store/album-likes-store';
 import type { MssPlaylist } from '@/lib/queries';
 
 const json = (body: unknown): RequestInit => ({
@@ -147,7 +148,7 @@ export interface TrackPatch {
 }
 
 function refreshTrackLists(): void {
-  for (const key of [['my-uploads'], ['tracks'], ['playlist'], ['mss-likes']]) {
+  for (const key of [['my-uploads'], ['tracks'], ['playlist'], ['mss-likes'], ['my-albums'], ['album']]) {
     void queryClient.invalidateQueries({ queryKey: key });
   }
 }
@@ -166,7 +167,74 @@ export async function setTrackCover(id: string, image: Blob): Promise<void> {
 
 export async function deleteUploadedTrack(trackId: string): Promise<void> {
   await apiFetch(`/tracks/${trackId}`, { method: 'DELETE' });
-  for (const key of [['my-uploads'], ['tracks'], ['playlists'], ['playlist'], ['mss-likes']]) {
+  for (const key of [['my-uploads'], ['tracks'], ['playlists'], ['playlist'], ['mss-likes'], ['my-albums'], ['album']]) {
     void queryClient.invalidateQueries({ queryKey: key });
   }
+}
+
+function refreshAlbums(albumId?: string): void {
+  void queryClient.invalidateQueries({ queryKey: ['my-albums'] });
+  if (albumId) void queryClient.invalidateQueries({ queryKey: ['album', 'local', albumId] });
+}
+
+export interface AlbumPatch {
+  title?: string;
+  artist?: string;
+  year?: number | null;
+  type?: 'album' | 'single' | 'ep' | 'compilation';
+}
+
+export async function createAlbum(body: {
+  title: string;
+  artist: string;
+  year?: number | null;
+  type?: 'album' | 'single' | 'ep' | 'compilation';
+  trackIds?: string[];
+}): Promise<AlbumDetailDto> {
+  const album = await apiFetch<AlbumDetailDto>('/albums', { method: 'POST', ...json(body) });
+  refreshAlbums(album.id);
+  void queryClient.invalidateQueries({ queryKey: ['my-uploads'] });
+  return album;
+}
+
+export async function updateAlbum(id: string, patch: AlbumPatch): Promise<AlbumDto> {
+  const album = await apiFetch<AlbumDto>(`/albums/${id}`, { method: 'PATCH', ...json(patch) });
+  refreshAlbums(id);
+  return album;
+}
+
+export async function setAlbumCover(id: string, image: Blob): Promise<AlbumDto> {
+  const form = new FormData();
+  form.append('file', image, 'cover.jpg');
+  const album = await apiFetch<AlbumDto>(`/albums/${id}/cover`, { method: 'PUT', body: form });
+  refreshAlbums(id);
+  return album;
+}
+
+export async function removeAlbumCover(id: string): Promise<AlbumDto> {
+  const album = await apiFetch<AlbumDto>(`/albums/${id}/cover`, { method: 'DELETE' });
+  refreshAlbums(id);
+  return album;
+}
+
+export async function deleteAlbum(id: string): Promise<void> {
+  await apiFetch(`/albums/${id}`, { method: 'DELETE' });
+  queryClient.removeQueries({ queryKey: ['album', 'local', id] });
+  useAlbumLikesStore.getState().drop({ source: 'local', id });
+  refreshAlbums();
+}
+
+export async function addTracksToAlbum(albumId: string, trackIds: string[]): Promise<number> {
+  if (!trackIds.length) return 0;
+  const res = await apiFetch<{ count: number }>(`/albums/${albumId}/tracks`, {
+    method: 'POST',
+    ...json({ trackIds }),
+  });
+  refreshAlbums(albumId);
+  return res.count;
+}
+
+export async function removeAlbumTracks(albumId: string, trackIds: string[]): Promise<void> {
+  await Promise.all(trackIds.map((trackId) => apiFetch(`/albums/${albumId}/tracks/${trackId}`, { method: 'DELETE' })));
+  refreshAlbums(albumId);
 }

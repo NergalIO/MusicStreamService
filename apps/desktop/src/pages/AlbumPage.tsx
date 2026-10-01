@@ -1,12 +1,16 @@
 import type { UnifiedTrack } from '@mss/shared';
-import { keepPreviousData, useQuery } from '@tanstack/react-query';
-import { Loader2 } from 'lucide-react';
-import { Fragment, useState } from 'react';
+import { keepPreviousData, useQuery, useQueryClient } from '@tanstack/react-query';
+import { ImagePlus, Heart, Loader2, Pencil, Trash2 } from 'lucide-react';
+import { Fragment, useRef, useState } from 'react';
 import { Link, useNavigate, useParams } from 'react-router-dom';
+import { toast } from 'sonner';
 import { CollectionHeader, TrackListSkeleton } from '@/components/media/CollectionHeader';
 import { DownloadAllButton } from '@/components/tracks/DownloadAllButton';
 import { TrackFilterInput, TrackList } from '@/components/tracks/TrackList';
 import { Button } from '@/components/ui/button';
+import { Dialog } from '@/components/ui/dialog';
+import { Input } from '@/components/ui/input';
+import { UploadButton } from '@/components/uploads/UploadButton';
 import { SOURCE_LABEL } from '@/lib/sources';
 import { cn } from '@/lib/utils';
 import { EmptyState, ErrorState } from '@/components/ui/states';
@@ -15,28 +19,37 @@ import { formatTotalDuration, formatTrackCount } from '@/lib/format';
 import { loadAlbum } from '@/lib/card-menus';
 import { albumMatchKey, findAlbumAlternatives } from '@/lib/album-match';
 import { albumPath, trackArtistLinks } from '@/lib/links';
+import { deleteAlbum, prepareCover, removeAlbumTracks, setAlbumCover, updateAlbum } from '@/lib/mss-library';
 import { playCollection } from '@/lib/player-actions';
+import { libraryPath } from '@/lib/service-routes';
+import { useIsAlbumLiked, useAlbumLikesStore } from '@/store/album-likes-store';
 
 const NO_TRACKS: UnifiedTrack[] = [];
 
 const TYPE_LABEL: Record<string, string> = {
   single: 'Сингл',
+  ep: 'EP',
   compilation: 'Сборник',
   podcast: 'Подкаст',
 };
 
 export function AlbumPage() {
   const { source = '', id = '' } = useParams();
-  const supported = source === 'yandex' || source === 'spotify';
+  const supported = source === 'yandex' || source === 'spotify' || source === 'local';
   const { data: album, isLoading, error, refetch } = useQuery({
     queryKey: ['album', source, id],
-    queryFn: () => loadAlbum(source as 'yandex' | 'spotify', id),
+    queryFn: () => loadAlbum(source as 'yandex' | 'spotify' | 'local', id),
     enabled: supported && !!id,
-    staleTime: 30 * 60_000,
+    staleTime: source === 'local' ? 30_000 : 30 * 60_000,
   });
   const { view, sort, cycle, filter, setFilter, isNatural } = useTrackSort(album?.tracks ?? NO_TRACKS);
   const [aboutOpen, setAboutOpen] = useState(false);
+  const [dialog, setDialog] = useState<'edit' | 'delete' | null>(null);
+  const coverInput = useRef<HTMLInputElement>(null);
+  const queryClient = useQueryClient();
   const navigate = useNavigate();
+  const liked = useIsAlbumLiked(album);
+  const toggleAlbumLike = useAlbumLikesStore((s) => s.toggle);
   const alternatives = useQuery({
     queryKey: ['album-alternatives', album ? albumMatchKey(album) : ''],
     queryFn: () => findAlbumAlternatives(album!),
@@ -45,7 +58,7 @@ export function AlbumPage() {
     placeholderData: keepPreviousData,
   });
 
-  if (!supported) return <EmptyState title="Страницы альбомов доступны для Яндекс Музыки и Spotify" />;
+  if (!supported) return <EmptyState title="Страницы альбомов доступны для MSS, Яндекс Музыки и Spotify" />;
   if (error) return <ErrorState title="Не удалось загрузить альбом" error={error} onRetry={() => void refetch()} />;
   if (isLoading || !album) {
     return (
@@ -108,7 +121,55 @@ export function AlbumPage() {
         coverUrl={album.coverUrl}
         onPlay={() => playCollection(album.tracks, context)}
         onShuffle={album.tracks.length > 1 ? () => playCollection(album.tracks, context, true) : undefined}
-        actions={<DownloadAllButton tracks={album.tracks} />}
+        actions={
+          <>
+            <Button
+              size="icon"
+              variant="ghost"
+              aria-label={liked ? 'Убрать из «Мне нравится»' : 'Мне нравится'}
+              aria-pressed={liked}
+              title={liked ? 'Убрать из «Мне нравится»' : 'Мне нравится'}
+              onClick={() => void toggleAlbumLike(album)}
+            >
+              <Heart size={18} className={cn(liked && 'fill-primary text-primary')} />
+            </Button>
+            {album.source === 'local' && (
+              <>
+                <UploadButton size="lg" variant="secondary" albumId={album.id} label="Добавить треки" />
+                <Button size="icon" variant="ghost" aria-label="Изменить" title="Изменить" onClick={() => setDialog('edit')}>
+                  <Pencil size={16} />
+                </Button>
+                <Button
+                  size="icon"
+                  variant="ghost"
+                  aria-label="Обложка"
+                  title="Обложка"
+                  onClick={() => coverInput.current?.click()}
+                >
+                  <ImagePlus size={16} />
+                </Button>
+                <Button size="icon" variant="ghost" aria-label="Удалить альбом" title="Удалить альбом" onClick={() => setDialog('delete')}>
+                  <Trash2 size={16} />
+                </Button>
+                <input
+                  ref={coverInput}
+                  type="file"
+                  accept="image/jpeg,image/png,image/webp"
+                  className="hidden"
+                  onChange={(e) => {
+                    const file = e.target.files?.[0];
+                    e.target.value = '';
+                    if (!file) return;
+                    void prepareCover(file)
+                      .then((blob) => setAlbumCover(album.id, blob))
+                      .catch((err) => toast.error(err instanceof Error ? err.message : 'Не удалось обновить обложку'));
+                  }}
+                />
+              </>
+            )}
+            <DownloadAllButton tracks={album.tracks} />
+          </>
+        }
       />
       {(platforms.length > 1 || alternatives.isFetching) && (
         <section className="-mt-4 mb-6 flex flex-wrap items-center gap-2" aria-label="Альбом на других площадках">
@@ -158,6 +219,15 @@ export function AlbumPage() {
         onSort={cycle}
         numbered={isNatural}
         emptyText="Ничего не найдено"
+        showSource={false}
+        onRemove={
+          album.source === 'local'
+            ? (track) => {
+                void removeAlbumTracks(album.id, [track.id]).catch(() => toast.error('Не удалось убрать трек из альбома'));
+              }
+            : undefined
+        }
+        removeLabel="Убрать из альбома"
       />
       {album.label && (
         <p className="mt-8 text-xs text-muted">
@@ -165,6 +235,91 @@ export function AlbumPage() {
           {album.label}
         </p>
       )}
+      {album.source === 'local' && dialog === 'edit' && (
+        <EditAlbumDialog
+          title={album.title}
+          artist={album.artist}
+          year={album.year}
+          onClose={() => setDialog(null)}
+          onSave={async (patch) => {
+            await updateAlbum(album.id, patch);
+            setDialog(null);
+            void queryClient.invalidateQueries({ queryKey: ['album', 'local', album.id] });
+          }}
+        />
+      )}
+      <Dialog open={album.source === 'local' && dialog === 'delete'} onClose={() => setDialog(null)} title="Удалить альбом?">
+        <p className="mb-5 text-sm text-muted">
+          «{album.title}» будет удалён из библиотеки. Треки останутся в «Мои треки».
+        </p>
+        <div className="flex justify-end gap-2">
+          <Button variant="ghost" onClick={() => setDialog(null)}>
+            Отмена
+          </Button>
+          <Button
+            variant="danger"
+            onClick={() => {
+              void deleteAlbum(album.id)
+                .then(() => navigate(libraryPath('media', 'albums'), { replace: true }))
+                .catch((e) => toast.error(e instanceof Error ? e.message : 'Не удалось удалить альбом'));
+            }}
+          >
+            Удалить
+          </Button>
+        </div>
+      </Dialog>
     </div>
+  );
+}
+
+function EditAlbumDialog({
+  title,
+  artist,
+  year,
+  onClose,
+  onSave,
+}: {
+  title: string;
+  artist: string;
+  year?: number;
+  onClose: () => void;
+  onSave: (patch: { title?: string; artist?: string; year?: number | null }) => Promise<void>;
+}) {
+  const [name, setName] = useState(title);
+  const [artistName, setArtistName] = useState(artist);
+  const [yearText, setYearText] = useState(year ? String(year) : '');
+  const [saving, setSaving] = useState(false);
+  return (
+    <Dialog open onClose={onClose} title="Альбом">
+      <form
+        className="space-y-3"
+        onSubmit={(e) => {
+          e.preventDefault();
+          const parsed = yearText.trim() ? Number(yearText.trim()) : null;
+          if (parsed != null && (!Number.isInteger(parsed) || parsed < 1000 || parsed > 2100)) {
+            toast.error('Год — число от 1000 до 2100');
+            return;
+          }
+          setSaving(true);
+          void onSave({
+            title: name.trim() || title,
+            artist: artistName.trim() || artist,
+            year: parsed,
+          }).finally(() => setSaving(false));
+        }}
+      >
+        <Input autoFocus value={name} onChange={(e) => setName(e.target.value)} placeholder="Название" />
+        <Input value={artistName} onChange={(e) => setArtistName(e.target.value)} placeholder="Исполнитель" />
+        <Input value={yearText} onChange={(e) => setYearText(e.target.value)} placeholder="Год" inputMode="numeric" />
+        <div className="flex justify-end gap-2 pt-2">
+          <Button variant="ghost" onClick={onClose} type="button">
+            Отмена
+          </Button>
+          <Button type="submit" disabled={saving}>
+            Сохранить
+          </Button>
+        </div>
+      </form>
+    </Dialog>
   );
 }

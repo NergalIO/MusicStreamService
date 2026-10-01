@@ -1,5 +1,7 @@
 package com.mss.android.ui.navigation
 
+import androidx.navigation.NavBackStackEntry
+import androidx.navigation.NavController
 import com.mss.android.ui.LibraryTab
 import com.mss.core.model.UnifiedArtist
 import com.mss.core.model.UnifiedTrack
@@ -112,3 +114,39 @@ object Routes {
     fun sourceHome(source: String) = "source/$source"
     fun lobbyRoom(id: String) = "lobby/$id"
 }
+
+/** Повторное открытие того же экрана не кладёт копию в стек, а возвращает к уже открытому. */
+fun NavController.openRoute(route: String) {
+    val targetId = currentBackStack.value.firstOrNull { it.matchesRoute(route) }?.id
+    if (targetId == null) {
+        navigate(route) { launchSingleTop = true }
+        return
+    }
+    while (currentBackStackEntry?.id != targetId) {
+        if (!popBackStack()) break
+    }
+}
+
+private fun NavBackStackEntry.matchesRoute(route: String): Boolean {
+    val pattern = destination.route ?: return false
+    if (pattern == route) return true
+    val filled = filledRoute() ?: return false
+    return filled == route || decodeParts(filled) == decodeParts(route)
+}
+
+private fun NavBackStackEntry.filledRoute(): String? {
+    val pattern = destination.route ?: return null
+    if ('{' !in pattern) return pattern
+    var filled = pattern
+    val args = arguments ?: return null
+    for (key in args.keySet()) {
+        val raw = args.getString(key) ?: continue
+        filled = filled.replace("{$key}", java.net.URLEncoder.encode(raw, Charsets.UTF_8))
+    }
+    return filled.takeIf { '{' !in it }
+}
+
+private fun decodeParts(route: String): String =
+    route.split('/').joinToString("/") { part ->
+        runCatching { java.net.URLDecoder.decode(part.replace("+", "%20"), Charsets.UTF_8) }.getOrDefault(part)
+    }

@@ -1,7 +1,8 @@
-import type { PlaylistDto, UnifiedPlaylist, UnifiedTrack } from '@mss/shared';
+import type { AlbumDetailDto, AlbumDto, AlbumWithTracks, PlaylistDto, UnifiedAlbum, UnifiedPlaylist, UnifiedTrack } from '@mss/shared';
 import { useQuery } from '@tanstack/react-query';
 import { useMemo } from 'react';
 import { apiFetch } from '@/lib/api';
+import { apiMediaUrl } from '@/lib/api-base';
 import { useSpotifyConnected, useVkConnected, useYandexConnected } from '@/lib/connectors';
 import { statsTrackToUnified, useShelves } from '@/lib/stats';
 import { mapLocalTrack, type LocalTrackDto } from '@/lib/sources';
@@ -27,6 +28,48 @@ export function useMyUploads() {
     refetchInterval: (query) =>
       query.state.data?.some((t) => t.status === 'processing' || t.status === 'uploading') ? 3000 : false,
   });
+}
+
+export function useMyAlbums() {
+  return useQuery({
+    queryKey: ['my-albums'],
+    queryFn: async () => (await apiFetch<{ items: AlbumDto[] }>('/albums')).items.map(mapLocalAlbum),
+  });
+}
+
+export function mapLocalAlbum(a: AlbumDto): UnifiedAlbum {
+  return {
+    source: 'local',
+    id: a.id,
+    title: a.title,
+    artist: a.artist,
+    year: a.year ?? undefined,
+    type: a.type ?? undefined,
+    trackCount: a.trackCount,
+    coverUrl: a.coverUrl ? albumCoverUrl(a.id, a.coverUrl) : undefined,
+  };
+}
+
+export function mapLocalAlbumDetail(a: AlbumDetailDto): AlbumWithTracks {
+  const album = mapLocalAlbum(a);
+  return {
+    ...album,
+    tracks: a.tracks.map((t) => {
+      const mapped = mapLocalTrack(t, { ownsLocal: true });
+      return {
+        ...mapped,
+        albumId: mapped.albumId ?? a.id,
+        album: mapped.album ?? a.title,
+        coverUrl: mapped.coverUrl ?? album.coverUrl,
+      };
+    }),
+    durationMs: a.tracks.reduce((sum, t) => sum + (t.durationMs ?? 0), 0) || undefined,
+  };
+}
+
+export function albumCoverUrl(id: string, url: string): string {
+  const q = url.includes('?') ? url.slice(url.indexOf('?')) : '';
+  return apiMediaUrl(`/albums/${id}/cover${q}`);
 }
 
 export function mssPlaylistToUnified(p: MssPlaylist): UnifiedPlaylist {

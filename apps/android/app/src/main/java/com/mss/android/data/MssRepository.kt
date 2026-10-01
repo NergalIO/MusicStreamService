@@ -6,6 +6,7 @@ import com.mss.core.connectors.ConnectorRegistry
 import com.mss.core.datastore.MssPreferences
 import com.mss.core.localtracks.CloudUrlStore
 import com.mss.core.localtracks.LocalTrackStore
+import com.mss.core.model.AlbumWithTracks
 import com.mss.core.model.AuthSession
 import com.mss.core.model.CatalogArtistDto
 import com.mss.core.model.HomeShelves
@@ -16,17 +17,22 @@ import com.mss.core.model.PlaylistDto
 import com.mss.core.model.RegisterPending
 import com.mss.core.model.SourceId
 import com.mss.core.model.TrackDto
+import com.mss.core.model.UnifiedAlbum
 import com.mss.core.model.UnifiedPlaylist
 import com.mss.core.model.UnifiedTrack
 import com.mss.core.model.UserSubscriptionDto
 import com.mss.core.model.audioContentType
 import com.mss.core.model.freshCloudUrl
+import com.mss.core.model.toAlbumWithTracks
+import com.mss.core.model.toUnifiedAlbum
 import com.mss.core.model.toUnifiedPlaylist
 import com.mss.core.model.toUnifiedTrack
 import com.mss.core.network.MssApiClient
 import com.mss.core.network.PresenceClient
 import javax.inject.Inject
 import javax.inject.Singleton
+
+private val ALBUM_COVER_TYPES = setOf("image/jpeg", "image/png", "image/webp")
 
 @Singleton
 class MssRepository @Inject constructor(
@@ -101,11 +107,20 @@ class MssRepository @Inject constructor(
 
     suspend fun mssLikes(): List<UnifiedTrack> = api.likedTracks().map { unify(it) }
 
+    suspend fun likedAlbums(): List<UnifiedAlbum> = api.likedAlbums()
+
     suspend fun toggleLike(track: UnifiedTrack, liked: Boolean) {
         if (track.source == SourceId.LOCAL) {
             if (liked) api.likeTrack(track.id) else api.unlikeTrack(track.id)
         } else if (track.source == SourceId.YANDEX) {
             connectors.yandex.setLike(track, liked)
+        }
+    }
+
+    suspend fun toggleAlbumLike(album: UnifiedAlbum, liked: Boolean) {
+        if (liked) api.likeAlbum(album) else api.unlikeAlbum(album.source, album.id)
+        if (album.source == SourceId.YANDEX) {
+            runCatching { connectors.yandex.setAlbumLike(album.id, liked) }
         }
     }
 
@@ -138,15 +153,35 @@ class MssRepository @Inject constructor(
 
     suspend fun uploads(): List<UnifiedTrack> = api.myUploads().map { unify(it) }
 
-    suspend fun artists(query: String = ""): List<CatalogArtistDto> = api.searchArtists(query)
+    suspend fun albums(query: String = ""): List<UnifiedAlbum> = api.listAlbums(query).map { it.toUnifiedAlbum() }
+
+    suspend fun album(id: String): AlbumWithTracks =
+        cloudMergeAlbum(api.getAlbum(id).toAlbumWithTracks(preferences.getApiBaseUrl()))
+
+    suspend fun createAlbum(title: String, artist: String, trackIds: List<String>): UnifiedAlbum =
+        api.createAlbum(title, artist, trackIds).toUnifiedAlbum()
+
+    suspend fun deleteAlbum(id: String) = api.deleteAlbum(id)
+
+    suspend fun setAlbumCover(id: String, uri: Uri): UnifiedAlbum {
+        val mime = coverMime(uri)
+        val bytes = localTracks.openInputStream(uri).use { it.readBytes() }
+        return api.putAlbumCover(id, bytes, mime).toUnifiedAlbum()
+    }
+
+    private fun cloudMergeAlbum(album: AlbumWithTracks): AlbumWithTracks =
+        album.copy(tracks = album.tracks.map { cloudUrls.mergeAndRemember(it) })
+
+    suspend fun artists(query: String = "", limit: Int = 40): List<CatalogArtistDto> =
+        api.searchArtists(query, limit)
 
     suspend fun artistTracks(name: String): List<UnifiedTrack> = api.artistTracks(name).map { unify(it) }
 
-    suspend fun registerLocalFile(uri: Uri, title: String, artist: String): UnifiedTrack {
+    suspend fun registerLocalFile(uri: Uri, title: String, artist: String, album: String? = null): UnifiedTrack {
         localTracks.persistUri(uri)
         val (hash, size) = localTracks.hashUri(uri)
         val name = localTracks.displayName(uri)
-        val dto = api.registerTrack(hash, title, artist, null, null, size, name)
+        val dto = api.registerTrack(hash, title, artist, album, null, size, name)
         localTracks.put(LocalHolding(dto.id, uri.toString(), hash, name))
         val contentType = localTracks.mimeType(uri).ifBlank { audioContentType(name) }
         val cloud = api.cloudUpload(dto.id, contentType)
@@ -171,6 +206,23 @@ class MssRepository @Inject constructor(
             runCatching { api.putTrackLyrics(done.id, format, text) }
         }
         return unify(done)
+    }
+
+    suspend fun registerLocalAlbum(uris: List<Uri>, title: String, artist: String, coverUri: Uri? = null): UnifiedAlbum {
+        val cover = coverUri?.let { uri ->
+            val mime = coverMime(uri)
+            mime to localTracks.openInputStream(uri).use { it.readBytes() }
+        }
+        val tracks = uris
+            .sortedWith(compareBy(String.CASE_INSENSITIVE_ORDER) { localTracks.displayName(it) })
+            .map { uri ->
+                registerLocalFile(uri, localTracks.displayName(uri).substringBeforeLast('.').ifBlank { title }, artist, title)
+            }
+        val created = api.createAlbum(title, artist, tracks.map { it.id })
+        if (cover != null) {
+            return api.putAlbumCover(created.id, cover.second, cover.first).toUnifiedAlbum()
+        }
+        return created.toUnifiedAlbum()
     }
 
     suspend fun resolveCloudDownloadUrl(track: UnifiedTrack): String? {
@@ -212,4 +264,18 @@ class MssRepository @Inject constructor(
     val connectorsRegistry get() = connectors
     val apiClient get() = api
     val prefs get() = preferences
+
+    private fun coverMime(uri: Uri): String {
+        val raw = localTracks.mimeType(uri).lowercase()
+        if (raw == "image/jpg" || raw == "image/jpeg") return "image/jpeg"
+        if (raw in ALBUM_COVER_TYPES) return raw
+        val fromName = when (localTracks.displayName(uri).substringAfterLast('.', "").lowercase()) {
+            "png" -> "image/png"
+            "webp" -> "image/webp"
+            "jpg", "jpeg" -> "image/jpeg"
+            else -> null
+        }
+        if (fromName != null) return fromName
+        error("Обложка должна быть в формате JPEG, PNG или WebP")
+    }
 }

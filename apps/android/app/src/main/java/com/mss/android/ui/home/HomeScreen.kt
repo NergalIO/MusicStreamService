@@ -43,8 +43,10 @@ import com.mss.android.ui.components.ScreenTitle
 import com.mss.android.ui.components.SectionTitle
 import com.mss.android.ui.components.TrackRow
 import com.mss.android.ui.components.greeting
+import com.mss.android.ui.components.sourceLabel
 import com.mss.android.ui.theme.rememberMssWindow
 import com.mss.android.ui.navigation.Routes
+import com.mss.android.ui.navigation.openRoute
 import com.mss.core.connectors.AuthStatus
 import com.mss.core.model.SourceId
 import com.mss.core.model.WaveSettings
@@ -57,64 +59,73 @@ fun HomeScreen(vm: MssViewModel, nav: NavHostController) {
     val feed by vm.feed.collectAsState()
     val playlists by vm.playlists.collectAsState()
     val tracks by vm.tracks.collectAsState()
+    val homeArtists by vm.homeArtists.collectAsState()
+    val homeAlbums by vm.homeAlbums.collectAsState()
     val liked by vm.likedIds.collectAsState()
     val player by vm.playerState.collectAsState()
     val sources by vm.sources.collectAsState()
     val canSuggest by vm.canSuggestToLobby.collectAsState()
     val window = rememberMssWindow()
-    val tabs = listOfNotNull(
-        Triple(SourceId.LOCAL, "MSS", null),
-        Triple(SourceId.YANDEX, "Яндекс", sources.yandex).takeIf { sources.yandex != AuthStatus.DISCONNECTED },
-        Triple(SourceId.SPOTIFY, "Spotify", sources.spotify).takeIf { sources.spotify != AuthStatus.DISCONNECTED },
-        Triple(SourceId.VK, "VK", sources.vk).takeIf { sources.vk != AuthStatus.DISCONNECTED },
-    )
+    val tabs = buildList<Triple<SourceId?, String, AuthStatus?>> {
+        add(Triple(null, "Все", null))
+        add(Triple(SourceId.LOCAL, "MSS", null))
+        if (sources.yandex != AuthStatus.DISCONNECTED) add(Triple(SourceId.YANDEX, "Яндекс", sources.yandex))
+        if (sources.spotify != AuthStatus.DISCONNECTED) add(Triple(SourceId.SPOTIFY, "Spotify", sources.spotify))
+        if (sources.vk != AuthStatus.DISCONNECTED) add(Triple(SourceId.VK, "VK", sources.vk))
+    }
     LaunchedEffect(tabs.map { it.first }) {
-        if (tabs.none { it.first == source }) vm.setHomeSource(SourceId.LOCAL)
+        if (source != null && tabs.none { it.first == source }) vm.setHomeSource(null)
     }
     LaunchedEffect(source) { vm.loadHome() }
-    val empty = shelves == null && feed.isEmpty() && playlists.isEmpty() && tracks.isEmpty()
+    val empty = shelves?.frequent.isNullOrEmpty() && shelves?.forgotten.isNullOrEmpty() &&
+        feed.isEmpty() && playlists.isEmpty() && tracks.isEmpty() &&
+        homeArtists.isEmpty() && homeAlbums.isEmpty()
     val currentKey = player.current?.let { "${it.source}:${it.id}" }
+    val showWave = source == SourceId.YANDEX ||
+        (source == null && sources.yandex != AuthStatus.DISCONNECTED)
+    val showShelves = source == null || source == SourceId.LOCAL
 
     LazyColumn(Modifier.fillMaxSize(), contentPadding = PaddingValues(bottom = 16.dp)) {
         item { ScreenTitle(greeting()) }
-        if (tabs.size > 1) {
-            item {
-                LazyRow(
-                    Modifier.padding(vertical = 8.dp),
-                    contentPadding = PaddingValues(horizontal = 16.dp),
-                    horizontalArrangement = Arrangement.spacedBy(8.dp),
-                ) {
-                    items(tabs) { (s, label, status) ->
-                        MssChip(
-                            selected = source == s,
-                            label = label,
-                            caption = status?.takeIf { it == AuthStatus.EXPIRED }?.let { "войти снова" },
-                            onClick = { vm.setHomeSource(s) },
-                        )
-                    }
+        item {
+            LazyRow(
+                Modifier.padding(vertical = 8.dp),
+                contentPadding = PaddingValues(horizontal = 16.dp),
+                horizontalArrangement = Arrangement.spacedBy(8.dp),
+            ) {
+                items(tabs) { (s, label, status) ->
+                    MssChip(
+                        selected = source == s,
+                        label = label,
+                        caption = status?.takeIf { it == AuthStatus.EXPIRED }?.let { "войти снова" },
+                        onClick = { vm.setHomeSource(s) },
+                    )
                 }
             }
         }
-        if (source == SourceId.YANDEX) {
+        if (showWave) {
             item {
                 WaveHero(
                     playing = player.playing && player.radio,
                     title = player.current?.let { "${it.title} — ${it.artist}" },
                     onPlay = { vm.startWave() },
-                    onOpen = { nav.navigate(Routes.WAVE) },
+                    onOpen = { nav.openRoute(Routes.WAVE) },
                 )
             }
         }
         if (empty) {
             item {
                 EmptyState(
-                    "Здесь появится ваша музыка",
-                    if (tabs.size > 1) "Слушайте треки — подборки соберутся из вашей статистики."
-                    else "Подключите Яндекс, Spotify или VK в разделе «Ещё» — их вкладки появятся здесь.",
+                    if (source == SourceId.LOCAL) "В MSS пока пусто" else "Здесь появится ваша музыка",
+                    when (source) {
+                        SourceId.LOCAL -> "Загрузите треки — они появятся по исполнителям и альбомам."
+                        null -> "Слушайте треки — подборки соберутся из вашей статистики и площадок."
+                        else -> "Подключите Яндекс, Spotify или VK в разделе «Ещё» — их вкладки появятся здесь."
+                    },
                 )
             }
         }
-        if (source == SourceId.LOCAL) {
+        if (showShelves) {
             shelves?.frequent?.takeIf { it.isNotEmpty() }?.let { list ->
                 item { SectionTitle("Часто слушаете") }
                 itemsIndexed(list) { i, t ->
@@ -144,6 +155,56 @@ fun HomeScreen(vm: MssViewModel, nav: NavHostController) {
                 }
             }
         }
+        if (source == null) {
+            shelves?.topArtists?.takeIf { it.isNotEmpty() }?.let { list ->
+                item { SectionTitle("Исполнители") }
+                item {
+                    LazyRow(contentPadding = PaddingValues(horizontal = 16.dp), horizontalArrangement = Arrangement.spacedBy(12.dp)) {
+                        items(list, key = { "top:${it.source}:${it.id ?: it.name}" }) { a ->
+                            MediaTile(
+                                title = a.name,
+                                subtitle = sourceLabel(a.source),
+                                cover = a.coverUrl,
+                                size = window.shelf(),
+                                onClick = { nav.openRoute(Routes.artist(a.name, a.source.name.lowercase(), a.id ?: "-")) },
+                            )
+                        }
+                    }
+                }
+            }
+        }
+        if (homeArtists.isNotEmpty()) {
+            item { SectionTitle("Исполнители") }
+            item {
+                LazyRow(contentPadding = PaddingValues(horizontal = 16.dp), horizontalArrangement = Arrangement.spacedBy(12.dp)) {
+                    items(homeArtists, key = { "ar:${it.id}" }) { a ->
+                        MediaTile(
+                            title = a.name,
+                            subtitle = a.trackCount?.takeIf { it > 0 }?.let { "$it тр." },
+                            cover = a.imageUrl,
+                            size = window.shelf(),
+                            onClick = { nav.openRoute(Routes.artist(a)) },
+                        )
+                    }
+                }
+            }
+        }
+        if (homeAlbums.isNotEmpty()) {
+            item { SectionTitle("Альбомы") }
+            item {
+                LazyRow(contentPadding = PaddingValues(horizontal = 16.dp), horizontalArrangement = Arrangement.spacedBy(12.dp)) {
+                    items(homeAlbums, key = { "al:${it.id}" }) { album ->
+                        MediaTile(
+                            title = album.title,
+                            subtitle = album.artist,
+                            cover = album.coverUrl,
+                            size = window.shelf(),
+                            onClick = { nav.openRoute(Routes.album(album.source.name.lowercase(), album.id)) },
+                        )
+                    }
+                }
+            }
+        }
         feed.forEach { block ->
             item { SectionTitle(block.title) }
             item {
@@ -154,14 +215,14 @@ fun HomeScreen(vm: MssViewModel, nav: NavHostController) {
                         val cover = item.playlist?.coverUrl ?: item.album?.coverUrl ?: item.track?.coverUrl ?: item.artist?.imageUrl
                         val open: () -> Unit = {
                             item.playlist?.let {
-                                nav.navigate(
+                                nav.openRoute(
                                     if (it.source == SourceId.LOCAL) Routes.mssPlaylist(it.id)
                                     else Routes.playlist(it.source.name.lowercase(), it.id),
                                 )
                             }
-                            item.album?.let { nav.navigate(Routes.album(it.source.name.lowercase(), it.id)) }
+                            item.album?.let { nav.openRoute(Routes.album(it.source.name.lowercase(), it.id)) }
                             item.track?.let { vm.play(listOf(it)) }
-                            item.artist?.let { nav.navigate(Routes.artist(it)) }
+                            item.artist?.let { nav.openRoute(Routes.artist(it)) }
                             Unit
                         }
                         MediaTile(
@@ -187,7 +248,7 @@ fun HomeScreen(vm: MssViewModel, nav: NavHostController) {
                             cover = p.coverUrl,
                             size = window.shelf(),
                             onClick = {
-                                nav.navigate(
+                                nav.openRoute(
                                     if (p.source == SourceId.LOCAL) Routes.mssPlaylist(p.id)
                                     else Routes.playlist(p.source.name.lowercase(), p.id),
                                 )
@@ -197,13 +258,16 @@ fun HomeScreen(vm: MssViewModel, nav: NavHostController) {
                 }
             }
         }
+        if (tracks.isNotEmpty() && (homeArtists.isNotEmpty() || homeAlbums.isNotEmpty() || playlists.isNotEmpty() || feed.isNotEmpty() || showShelves)) {
+            item { SectionTitle("Треки") }
+        }
         itemsIndexed(tracks) { i, track ->
             TrackRow(
                 track, track.id in liked,
                 onPlay = { vm.play(tracks, i) },
                 onLike = { vm.toggleLike(track) },
                 onDownload = { vm.download(track) },
-                onSimilar = { nav.navigate(Routes.similar(track.source.name.lowercase(), track.id)) },
+                onSimilar = { nav.openRoute(Routes.similar(track.source.name.lowercase(), track.id)) },
                 onQueue = { vm.player.enqueue(track) },
                 onWave = { vm.startWave(WaveSettings(seed = "track:${track.id}", seedTitle = track.title)) },
                 onSuggest = if (canSuggest) ({ vm.suggestToLobby(track) }) else null,

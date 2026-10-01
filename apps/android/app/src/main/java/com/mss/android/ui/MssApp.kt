@@ -4,6 +4,8 @@ import android.annotation.SuppressLint
 import android.net.Uri
 import android.view.View
 import android.webkit.WebView
+import androidx.compose.animation.EnterTransition
+import androidx.compose.animation.ExitTransition
 import androidx.compose.foundation.background
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
@@ -56,6 +58,8 @@ import androidx.core.view.WindowCompat
 import android.app.Activity
 import androidx.compose.ui.viewinterop.AndroidView
 import androidx.hilt.navigation.compose.hiltViewModel
+import androidx.lifecycle.Lifecycle
+import androidx.lifecycle.compose.currentStateAsState
 import androidx.navigation.NavGraph.Companion.findStartDestination
 import androidx.navigation.NavHostController
 import androidx.navigation.NavType
@@ -78,6 +82,7 @@ import com.mss.android.ui.more.MoreHub
 import com.mss.android.ui.more.VkIdOverlay
 import com.mss.android.ui.more.YandexLoginDialog
 import com.mss.android.ui.navigation.Routes
+import com.mss.android.ui.navigation.openRoute
 import com.mss.android.ui.navigation.parseMssLink
 import com.mss.android.ui.player.LobbyBar
 import com.mss.android.ui.components.LocalTrackHost
@@ -125,7 +130,7 @@ fun MssApp(
         if (action != null) {
             vm.applyDeepLink(url)
             snapshotFlow { nav.currentBackStackEntry }.filterNotNull().first()
-            nav.navigate(action.route)
+            nav.openRoute(action.route)
         }
         // Ссылку выполняем один раз: иначе выход и повторный вход снова включили бы трек или лобби.
         onUriHandled()
@@ -259,7 +264,7 @@ private fun MainShell(vm: MssViewModel, nav: NavHostController) {
                         Text(titleFor(route), maxLines = 1, overflow = TextOverflow.Ellipsis)
                     },
                     navigationIcon = {
-                        IconButton({ if (!nav.popBackStack()) nav.navigate(Routes.HOME) }) {
+                        IconButton({ if (!nav.popBackStack()) nav.openRoute(Routes.HOME) }) {
                             Icon(Icons.AutoMirrored.Filled.ArrowBack, "Назад")
                         }
                     },
@@ -274,8 +279,8 @@ private fun MainShell(vm: MssViewModel, nav: NavHostController) {
         bottomBar = {
             if (route != Routes.NOW_PLAYING) {
                 Column {
-                    LobbyBar(lobby) { nav.navigate(Routes.LOBBY) }
-                    MiniPlayer(vm, onOpen = { nav.navigate(Routes.NOW_PLAYING) }) {
+                    LobbyBar(lobby) { nav.openRoute(Routes.LOBBY) }
+                    MiniPlayer(vm, onOpen = { nav.openRoute(Routes.NOW_PLAYING) }) {
                         NavigationBar(containerColor = Color.Transparent, tonalElevation = 0.dp) {
                             listOf(
                                 Triple(Routes.HOME, "Главная", Icons.Default.Home),
@@ -287,17 +292,12 @@ private fun MainShell(vm: MssViewModel, nav: NavHostController) {
                                 NavigationBarItem(
                                     selected = selected,
                                     onClick = {
-                                        if (r != Routes.HOME && nav.inStack(r)) {
+                                        val startId = nav.graph.findStartDestination().id
+                                        if (selected) {
                                             nav.popBackStack(r, inclusive = false)
-                                        } else if (r == Routes.HOME) {
-                                            val startId = nav.graph.findStartDestination().id
-                                            if (!nav.popBackStack(startId, inclusive = false)) {
-                                                nav.navigate(Routes.HOME) { launchSingleTop = true }
-                                            }
-                                            nav.clearBackStack(Routes.HOME)
                                         } else {
                                             nav.navigate(r) {
-                                                popUpTo(nav.graph.findStartDestination().id) { saveState = true }
+                                                popUpTo(startId) { saveState = true }
                                                 launchSingleTop = true
                                                 restoreState = true
                                             }
@@ -387,7 +387,15 @@ private fun MainShell(vm: MssViewModel, nav: NavHostController) {
                     IconButton({ SpotifyCoverHealth.dismiss() }) { Icon(Icons.Default.Close, "Закрыть") }
                 }
             }
-            NavHost(nav, Routes.HOME, Modifier.weight(1f).fillMaxWidth()) {
+            NavHost(
+                nav,
+                Routes.HOME,
+                Modifier.weight(1f).fillMaxWidth(),
+                enterTransition = { EnterTransition.None },
+                exitTransition = { ExitTransition.None },
+                popEnterTransition = { EnterTransition.None },
+                popExitTransition = { ExitTransition.None },
+            ) {
                 composable(Routes.HOME) { HomeScreen(vm, nav) }
                 composable(Routes.SEARCH) { SearchScreen(vm, nav) }
                 composable(Routes.LIBRARY) { LibraryScreen(vm, nav) }
@@ -395,15 +403,21 @@ private fun MainShell(vm: MssViewModel, nav: NavHostController) {
                 composable(Routes.STATS) { StatsScreen(vm, nav) }
                 composable(Routes.WRAPPED) { StatsScreen(vm, nav, initialPeriod = "year") }
                 composable(Routes.SUBSCRIPTION) { SubScreen(vm) }
-                composable(Routes.SETTINGS) { SettingsScreen() }
+                composable(Routes.SETTINGS) { entry ->
+                    val state by entry.lifecycle.currentStateAsState()
+                    if (state.isAtLeast(Lifecycle.State.CREATED)) SettingsScreen()
+                }
                 composable(Routes.WAVE) { WaveScreen(vm) }
-                composable(Routes.LOBBY) { LobbyScreen(nav) }
+                composable(Routes.LOBBY) { entry ->
+                    val state by entry.lifecycle.currentStateAsState()
+                    if (state.isAtLeast(Lifecycle.State.CREATED)) LobbyScreen(nav)
+                }
                 composable(Routes.NOW_PLAYING) {
                     NowPlayingScreen(
                         vm,
                         onBack = { nav.popBackStack() },
-                        onArtist = { track -> nav.navigate(Routes.artist(track)) },
-                        onAlbum = { track -> nav.navigate(Routes.album(track)) },
+                        onArtist = { track -> nav.openRoute(Routes.artist(track)) },
+                        onAlbum = { track -> nav.openRoute(Routes.album(track)) },
                     )
                 }
                 composable(Routes.MSS_PLAYLIST, listOf(navArgument("id") { type = NavType.StringType })) { e ->
@@ -455,7 +469,9 @@ private fun MainShell(vm: MssViewModel, nav: NavHostController) {
                 }
                 composable(Routes.SOURCE_HOME, listOf(navArgument("source") { type = NavType.StringType })) { e ->
                     val s = e.arguments?.getString("source") ?: return@composable
-                    LaunchedEffect(s) { vm.setHomeSource(sourceFrom(s)) }
+                    LaunchedEffect(s) {
+                        vm.setHomeSource(if (s.equals("all", true)) null else sourceFrom(s))
+                    }
                     HomeScreen(vm, nav)
                 }
             }
@@ -464,7 +480,7 @@ private fun MainShell(vm: MssViewModel, nav: NavHostController) {
 }
 
 private fun NavHostController.inStack(route: String): Boolean =
-    runCatching { getBackStackEntry(route) }.isSuccess
+    currentBackStack.value.any { it.destination.route == route }
 
 @Composable
 private fun ApplySystemBars(darkBackground: Boolean) {

@@ -119,6 +119,23 @@ export class YandexMusicApi {
     this.invalidateLikedIdsCache();
   }
 
+  async likedAlbums(limit = 200): Promise<UnifiedAlbum[]> {
+    const uid = await this.client.uid();
+    const data = await this.client.get<Array<YAlbum | { album?: YAlbum }>>(`/users/${uid}/likes/albums`);
+    const rows = Array.isArray(data) ? data : [];
+    const albums = rows
+      .map((row) => ('title' in row && row.title ? row : row.album))
+      .filter((a): a is YAlbum => !!a?.title);
+    return albums.slice(0, limit).map(mapAlbum);
+  }
+
+  async setAlbumLike(albumId: string, liked: boolean): Promise<void> {
+    const uid = await this.client.uid();
+    await this.client.postForm(`/users/${uid}/likes/albums/${liked ? 'add-multiple' : 'remove'}`, {
+      'album-ids': albumId,
+    });
+  }
+
   async dislike(track: Pick<UnifiedTrack, 'id' | 'albumId'>): Promise<void> {
     const uid = await this.client.uid();
     await this.client.postForm(`/users/${uid}/dislikes/tracks/add-multiple`, {

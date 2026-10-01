@@ -5,9 +5,13 @@ import https from 'node:https';
 import { ipcMain, type IpcMainInvokeEvent } from 'electron';
 import {
   bindLocalTrack,
+  expandUploadSources,
   initLocalTrackIndex,
+  pickAlbumFolder,
   pickAudioFiles,
   prepareLocalFile,
+  readCoverJpeg,
+  readLocalTags,
   resolveLocalTrackPath,
 } from './local-tracks.js';
 import { connectPresenceWs, disconnectPresenceWs, fulfillRelayUpload } from './presence-ws.js';
@@ -59,6 +63,10 @@ async function putFileToUrl(
 
 export function registerLocalTracksIpc(): void {
   ipcMain.handle('localTracks:pickFiles', () => pickAudioFiles());
+  ipcMain.handle('localTracks:pickFolder', () => pickAlbumFolder());
+  ipcMain.handle('localTracks:expandSources', (_e, paths: string[]) => expandUploadSources(paths));
+  ipcMain.handle('localTracks:readTags', (_e, filePath: string) => readLocalTags(filePath));
+  ipcMain.handle('localTracks:readCoverJpeg', (_e, filePath: string) => readCoverJpeg(filePath));
   ipcMain.handle('localTracks:prepare', (_e, filePath: string) => prepareLocalFile(filePath));
   ipcMain.handle('localTracks:bind', (_e, trackId: string, path: string, contentHash: string) =>
     bindLocalTrack(trackId, { path, contentHash }),

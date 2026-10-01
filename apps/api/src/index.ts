@@ -12,6 +12,7 @@ import { artistRoutes } from './routes/artists.js';
 import { authRoutes } from './routes/auth.js';
 import { likeRoutes } from './routes/likes.js';
 import { objectRoutes } from './routes/objects.js';
+import { albumRoutes } from './routes/albums.js';
 import { playlistRoutes } from './routes/playlists.js';
 import { statsRoutes } from './routes/stats.js';
 import { subscriptionRoutes } from './routes/subscription.js';
@@ -61,6 +62,7 @@ const registerApi = async (scoped: FastifyInstance) => {
   await scoped.register(artistRoutes);
   await scoped.register(likeRoutes);
   await scoped.register(playlistRoutes);
+  await scoped.register(albumRoutes);
   await scoped.register(subscriptionRoutes);
   await scoped.register(statsRoutes);
   await scoped.register(siteRoutes);

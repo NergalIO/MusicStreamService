@@ -16,6 +16,7 @@ import { deleteObject, getObjectFull, getObjectRange, headObject, presignGet, pr
 import { detectLyricsFormat, formatFromKey, lyricsObjectKey, LYRICS_MAX_BYTES, parseLyricsFile, type LyricsFormat } from '../lib/lyrics.js';
 import { enqueueTranscode } from '../lib/queue.js';
 import { getActiveSubscription } from '../services/subscription.js';
+import { albumIdsForUserTracks, appendToAlbum, findOwnAlbum } from '../lib/albums.js';
 import { appendToPlaylist, findOwnPlaylist } from './playlists.js';
 import { computeAvailability, hasStreamableBytes } from '../lib/track-availability.js';
 import { ensureTrackStreamable } from '../lib/ensure-stream.js';
@@ -48,7 +49,11 @@ export function tagsFromFilename(filename: string): { title: string; artist: str
 
 export type TrackRow = typeof tracks.$inferSelect;
 
-export async function toTrackDto(t: TrackRow, availability?: TrackAvailability, opts?: { userHolds?: boolean }) {
+export async function toTrackDto(
+  t: TrackRow,
+  availability?: TrackAvailability,
+  opts?: { userHolds?: boolean; albumId?: string | null },
+) {
   const avail =
     availability ??
     (hasStreamableBytes(t) ? 'cached' : t.status === 'registered' || t.status === 'cached' ? 'unavailable' : 'unavailable');
@@ -59,6 +64,7 @@ export async function toTrackDto(t: TrackRow, availability?: TrackAvailability, 
     title: t.title,
     artist: t.artist,
     album: t.album,
+    albumId: opts?.albumId ?? null,
     durationMs: t.durationMs,
     loudnessLufs: t.loudnessLufs !== null && t.loudnessLufs > -70 ? t.loudnessLufs : null,
     status: t.status,
@@ -155,11 +161,13 @@ export async function trackRoutes(app: FastifyInstance) {
       .orderBy(desc(tracks.createdAt))
       .limit(limit)
       .offset(offset);
-    const heldIds = req.userId ? await heldTrackIdsForUser(req.userId, rows.map((r) => r.id)) : new Set<string>();
+    const ids = rows.map((r) => r.id);
+    const heldIds = req.userId ? await heldTrackIdsForUser(req.userId, ids) : new Set<string>();
+    const albumIds = req.userId ? await albumIdsForUserTracks(req.userId, ids) : new Map<string, string>();
     const items = await Promise.all(
       rows.map(async (r) => {
         const avail = await computeAvailability(r);
-        return await toTrackDto(r, avail, { userHolds: heldIds.has(r.id) });
+        return await toTrackDto(r, avail, { userHolds: heldIds.has(r.id), albumId: albumIds.get(r.id) ?? null });
       }),
     );
     return { items };
@@ -195,13 +203,15 @@ export async function trackRoutes(app: FastifyInstance) {
     if (!t) return reply.notFound();
     const avail = await computeAvailability(t);
     const userHolds = req.userId ? (await heldTrackIdsForUser(req.userId, [id])).has(id) : false;
-    return await toTrackDto(t, avail, { userHolds });
+    const albumId = req.userId ? ((await albumIdsForUserTracks(req.userId, [id])).get(id) ?? null) : null;
+    return await toTrackDto(t, avail, { userHolds, albumId });
   });
 
   app.post('/tracks/register', async (req, reply) => {
     await app.authenticate(req);
-    const { playlistId } = req.query as { playlistId?: string };
+    const { playlistId, albumId } = req.query as { playlistId?: string; albumId?: string };
     if (playlistId && !(await findOwnPlaylist(playlistId, req.userId!))) return reply.notFound('Плейлист не найден');
+    if (albumId && !(await findOwnAlbum(albumId, req.userId!))) return reply.notFound('Альбом не найден');
 
     const body = registerTrackSchema.parse(req.body);
     const hash = body.contentHash.toLowerCase();
@@ -240,7 +250,8 @@ export async function trackRoutes(app: FastifyInstance) {
     }
 
     if (playlistId) await appendToPlaylist(playlistId, trackId);
-    const dto = await toTrackDtoWithAvailability(row);
+    if (albumId) await appendToAlbum(albumId, trackId);
+    const dto = await toTrackDto(row, await computeAvailability(row), { userHolds: true, albumId: albumId ?? null });
     return reply.code(deduped ? 200 : 201).send(dto);
   });
 
@@ -378,7 +389,13 @@ export async function trackRoutes(app: FastifyInstance) {
       .innerJoin(tracks, eq(trackHoldings.trackId, tracks.id))
       .where(eq(trackHoldings.userId, req.userId!))
       .orderBy(desc(tracks.createdAt));
-    const items = await Promise.all(held.map((r) => toTrackDtoWithAvailability(r.track)));
+    const ids = held.map((r) => r.track.id);
+    const albumIds = await albumIdsForUserTracks(req.userId!, ids);
+    const items = await Promise.all(
+      held.map((r) =>
+        toTrackDtoWithAvailability(r.track).then((dto) => ({ ...dto, albumId: albumIds.get(r.track.id) ?? null })),
+      ),
+    );
     return { items };
   });
 

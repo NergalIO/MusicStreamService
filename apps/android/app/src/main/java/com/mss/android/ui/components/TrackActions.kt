@@ -65,6 +65,7 @@ import androidx.compose.ui.unit.dp
 import androidx.navigation.NavHostController
 import com.mss.android.ui.MssViewModel
 import com.mss.android.ui.navigation.Routes
+import com.mss.android.ui.navigation.openRoute
 import com.mss.core.downloads.DownloadScheduler
 import com.mss.core.model.SourceId
 import com.mss.core.model.UnifiedTrack
@@ -168,12 +169,12 @@ fun TrackActionsSheet(track: UnifiedTrack, onDismiss: () -> Unit, extra: List<Pa
             artistLinks(track).take(3).forEach { a ->
                 add(
                     SheetItem(Icons.Default.Mic, "Исполнитель: ${a.name}", action = run {
-                        nav.navigate(Routes.artist(a.name, track.source.name.lowercase(), a.id ?: "-"))
+                        nav.openRoute(Routes.artist(a.name, track.source.name.lowercase(), a.id ?: "-"))
                     }),
                 )
             }
             if (!track.album.isNullOrBlank() || !track.albumId.isNullOrBlank()) {
-                add(SheetItem(Icons.Default.Album, "Перейти к альбому", action = run { nav.navigate(Routes.album(track)) }))
+                add(SheetItem(Icons.Default.Album, "Перейти к альбому", action = run { nav.openRoute(Routes.album(track)) }))
             }
             when (track.source) {
                 SourceId.YANDEX -> add(
@@ -186,7 +187,7 @@ fun TrackActionsSheet(track: UnifiedTrack, onDismiss: () -> Unit, extra: List<Pa
             }
             add(
                 SheetItem(Icons.Default.AutoAwesome, "Похожие треки", action = run {
-                    nav.navigate(Routes.similar(track.source.name.lowercase(), track.id))
+                    nav.openRoute(Routes.similar(track.source.name.lowercase(), track.id))
                 }),
             )
         })

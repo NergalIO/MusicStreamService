@@ -211,6 +211,38 @@ CREATE TABLE IF NOT EXISTS listening_lobby_queue (
   created_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
 );
 CREATE INDEX IF NOT EXISTS listening_lobby_queue_lobby_idx ON listening_lobby_queue (lobby_id, position);
+
+-- Альбомы MSS: метаданные и обложка, треки — ссылки на каталог (тот же register/cloud-upload).
+CREATE TABLE IF NOT EXISTS albums (
+  id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+  user_id UUID NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+  title VARCHAR(500) NOT NULL,
+  artist VARCHAR(500) NOT NULL,
+  year INTEGER,
+  type VARCHAR(20) NOT NULL DEFAULT 'album',
+  cover_storage_key TEXT,
+  created_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
+);
+CREATE INDEX IF NOT EXISTS albums_user_idx ON albums (user_id, created_at DESC);
+
+CREATE TABLE IF NOT EXISTS album_tracks (
+  album_id UUID NOT NULL REFERENCES albums(id) ON DELETE CASCADE,
+  track_id UUID NOT NULL REFERENCES tracks(id) ON DELETE CASCADE,
+  position INTEGER NOT NULL DEFAULT 0,
+  PRIMARY KEY (album_id, track_id)
+);
+CREATE INDEX IF NOT EXISTS album_tracks_track_idx ON album_tracks (track_id);
+CREATE INDEX IF NOT EXISTS album_tracks_order_idx ON album_tracks (album_id, position);
+
+CREATE TABLE IF NOT EXISTS album_likes (
+  user_id UUID NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+  source VARCHAR(20) NOT NULL,
+  album_id VARCHAR(100) NOT NULL,
+  snapshot JSONB,
+  created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+  PRIMARY KEY (user_id, source, album_id)
+);
+CREATE INDEX IF NOT EXISTS album_likes_user_idx ON album_likes (user_id, created_at DESC);
 `;
 
 async function main() {
