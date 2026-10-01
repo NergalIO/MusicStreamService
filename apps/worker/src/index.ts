@@ -26,6 +26,36 @@ interface TranscodeJob {
   fallback?: { title: string; artist: string };
 }
 
+function lyricsFromMetadata(meta: { common?: { lyrics?: unknown } } | null): { format: 'lrc' | 'txt'; text: string } | null {
+  const raw = meta?.common?.lyrics;
+  const items = Array.isArray(raw) ? raw : raw != null ? [raw] : [];
+  for (const item of items) {
+    if (typeof item === 'string' && item.trim()) return { format: 'txt', text: item.trim() };
+    if (!item || typeof item !== 'object') continue;
+    const rec = item as { text?: unknown; syncText?: unknown };
+    if (Array.isArray(rec.syncText) && rec.syncText.length) {
+      const lines: string[] = [];
+      for (const row of rec.syncText) {
+        if (!row || typeof row !== 'object') continue;
+        const text = String((row as { text?: string }).text ?? '').trim();
+        const t = Number((row as { timestamp?: number; time?: number }).timestamp ?? (row as { time?: number }).time);
+        if (!text) continue;
+        if (!Number.isFinite(t) || t < 0) {
+          lines.push(text);
+          continue;
+        }
+        const sec = t > 10_000 ? t / 1000 : t;
+        const mm = Math.floor(sec / 60);
+        const ss = (sec % 60).toFixed(2).padStart(5, '0');
+        lines.push(`[${String(mm).padStart(2, '0')}:${ss}]${text}`);
+      }
+      if (lines.length) return { format: lines[0].startsWith('[') ? 'lrc' : 'txt', text: lines.join('\n') };
+    }
+    if (typeof rec.text === 'string' && rec.text.trim()) return { format: 'txt', text: rec.text.trim() };
+  }
+  return null;
+}
+
 async function processJob({ trackId, inputPath, originalKey, fallback }: TranscodeJob) {
   const workRoot = await fs.mkdtemp(path.join(os.tmpdir(), 'mss-transcode-'));
   const sourcePath = originalKey ? path.join(workRoot, 'original') : inputPath;
@@ -77,15 +107,23 @@ async function processJob({ trackId, inputPath, originalKey, fallback }: Transco
     await putObject(coversBucket, coverKey, Buffer.from(picture.data), picture.format);
   }
 
+  let lyricsKey: string | null = null;
+  const embedded = lyricsFromMetadata(meta);
+  if (embedded) {
+    lyricsKey = `tracks/${trackId}/lyrics.${embedded.format}`;
+    await putObject(bucket, lyricsKey, Buffer.from(embedded.text, 'utf8'), 'text/plain; charset=utf-8');
+  }
+
   await pool.query(
     `UPDATE tracks SET
       title = $1, artist = $2, album = $3, duration_ms = $4,
       status = 'ready', codec = 'opus', bitrate_kbps = $5,
       mime_type = 'audio/ogg', storage_key_master = $6,
       cover_storage_key = COALESCE($7, cover_storage_key), loudness_lufs = $8,
-      cache_expires_at = NULL
+      cache_expires_at = NULL,
+      storage_key_lyrics = COALESCE(storage_key_lyrics, $10)
     WHERE id = $9`,
-    [title, artist, album, durationMs, bitrate, storageKey, coverKey, loudness, trackId],
+    [title, artist, album, durationMs, bitrate, storageKey, coverKey, loudness, trackId, lyricsKey],
   );
 
   if (inputPath && !originalKey) await fs.unlink(inputPath).catch(() => {});

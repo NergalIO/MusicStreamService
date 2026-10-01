@@ -2,6 +2,7 @@ import type { SourceId, TrackLyrics, UnifiedTrack } from '@mss/shared';
 import { useQuery } from '@tanstack/react-query';
 import { Loader2 } from 'lucide-react';
 import { useEffect, useRef } from 'react';
+import { apiFetch } from '@/lib/api';
 import { seekTo } from '@/lib/player-actions';
 import { cn } from '@/lib/utils';
 import { usePlaybackStore } from '@/store/playback-store';
@@ -20,7 +21,16 @@ export function LyricsView({ track }: { track: UnifiedTrack }) {
   const supported = LYRICS_SOURCES.has(track.source);
   const { data, isLoading, isError } = useQuery({
     queryKey: ['lyrics', track.source, track.id],
-    queryFn: () => lyricsApi!(track.source, track.id),
+    queryFn: async () => {
+      const local = await lyricsApi!(track.source, track.id);
+      if (track.source !== 'local') return local;
+      if (local?.lines.some((l) => l.text.trim())) return local;
+      try {
+        return await apiFetch<TrackLyrics>(`/tracks/${track.id}/lyrics`);
+      } catch {
+        return null;
+      }
+    },
     enabled: supported && !!lyricsApi,
     staleTime: Infinity,
     retry: false,
@@ -46,7 +56,7 @@ export function LyricsView({ track }: { track: UnifiedTrack }) {
   if (!data || !data.lines.some((l) => l.text.trim())) {
     const empty =
       track.source === 'local'
-        ? 'Нет текста. Положите .lrc или .txt рядом с файлом трека (или скачанной копией).'
+        ? 'Нет текста. Положите .lrc или .txt рядом с файлом при загрузке — он сохранится в облаке.'
         : track.source === 'spotify'
           ? 'У этого трека нет текста в Spotify (или они недоступны для вашего аккаунта).'
           : 'У этого трека нет текста';

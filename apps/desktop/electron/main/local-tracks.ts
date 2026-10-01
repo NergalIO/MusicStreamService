@@ -22,6 +22,8 @@ export interface PreparedLocalFile {
   originalFilename: string;
   /** JPEG для загрузки на API, если в файле была embedded-обложка. */
   coverJpeg?: Buffer;
+  /** Содержимое .lrc / .txt рядом с файлом. */
+  lyrics?: { format: 'lrc' | 'txt'; text: string };
 }
 
 type Index = Record<string, LocalTrackEntry>;
@@ -100,7 +102,27 @@ export async function prepareLocalFile(filePath: string): Promise<PreparedLocalF
     sizeBytes: stat.size,
     originalFilename,
     coverJpeg,
+    lyrics: await readSidecarLyricsFile(resolved),
   };
+}
+
+export async function readSidecarLyricsFile(
+  audioPath: string,
+): Promise<{ format: 'lrc' | 'txt'; text: string } | undefined> {
+  const base = audioPath.replace(/\.[^.]+$/, '');
+  try {
+    const text = await fs.readFile(`${base}.lrc`, 'utf8');
+    if (text.trim()) return { format: 'lrc', text };
+  } catch {
+    /* нет .lrc */
+  }
+  try {
+    const text = await fs.readFile(`${base}.txt`, 'utf8');
+    if (text.trim()) return { format: 'txt', text };
+  } catch {
+    /* нет .txt */
+  }
+  return undefined;
 }
 
 /**

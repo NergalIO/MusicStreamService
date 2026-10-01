@@ -237,6 +237,7 @@ const api = {
         sizeBytes: number;
         originalFilename: string;
         coverJpeg?: Uint8Array;
+        lyrics?: { format: 'lrc' | 'txt'; text: string };
       }>,
     bind: (trackId: string, path: string, contentHash: string) =>
       ipcRenderer.invoke('localTracks:bind', trackId, path, contentHash) as Promise<void>,

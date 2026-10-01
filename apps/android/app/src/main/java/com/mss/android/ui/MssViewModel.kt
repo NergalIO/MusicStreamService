@@ -1017,17 +1017,21 @@ class MssViewModel @Inject constructor(
         val key = "${track.source}:${track.id}"
         _lyrics.value = LyricsUi(key = key, source = track.source, loading = true)
         viewModelScope.launch {
-            val remote = track.source == SourceId.YANDEX || track.source == SourceId.SPOTIFY
-            val cached = if (remote) contentCache.lyrics(track.source, track.id) else null
-            val result = if (cached != null) Result.success(cached) else runCatching {
-                when (track.source) {
-                    SourceId.YANDEX -> yandex.lyrics(track.id)
-                    SourceId.SPOTIFY -> spotify.lyrics(track.id)
-                    SourceId.LOCAL -> localTracks.lyrics(track.id)
-                    else -> null
+            val sidecar = if (track.source == SourceId.LOCAL) localTracks.lyrics(track.id) else null
+            val cached = if (sidecar == null) contentCache.lyrics(track.source, track.id) else null
+            val result = when {
+                sidecar != null -> Result.success(sidecar)
+                cached != null -> Result.success(cached)
+                else -> runCatching {
+                    when (track.source) {
+                        SourceId.YANDEX -> yandex.lyrics(track.id)
+                        SourceId.SPOTIFY -> spotify.lyrics(track.id)
+                        SourceId.LOCAL -> repo.trackLyrics(track.id)
+                        else -> null
+                    }
                 }
             }
-            if (remote && cached == null) result.getOrNull()?.let { contentCache.putLyrics(track.source, track.id, it) }
+            if (sidecar == null && cached == null) result.getOrNull()?.let { contentCache.putLyrics(track.source, track.id, it) }
             if (_lyrics.value.key != key) return@launch
             _lyrics.value = result.fold(
                 onSuccess = { LyricsUi(key = key, source = track.source, data = it) },

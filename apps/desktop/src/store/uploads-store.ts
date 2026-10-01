@@ -126,6 +126,18 @@ async function registerPath(item: UploadItem, filePath: string): Promise<void> {
   }
   rememberCloudUrls(done.id, done);
 
+  if (prepared.lyrics?.text.trim()) {
+    try {
+      await apiFetch(`/tracks/${done.id}/lyrics`, {
+        method: 'PUT',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(prepared.lyrics),
+      });
+    } catch {
+      /* текст необязателен */
+    }
+  }
+
   const cover = prepared.coverJpeg;
   if (cover?.byteLength && !done.coverUrl) {
     try {

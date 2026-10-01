@@ -763,7 +763,7 @@ private fun lyricsMessage(lyrics: LyricsUi): String? {
     }
     if (lyrics.data?.lines?.any { it.text.isNotBlank() } == true) return null
     return when (source) {
-        SourceId.LOCAL -> "Нет текста. Положите .lrc или .txt рядом с файлом трека."
+        SourceId.LOCAL -> "Нет текста. Положите .lrc или .txt рядом с файлом при загрузке — он сохранится в облаке."
         SourceId.SPOTIFY -> "У этого трека нет текста в Spotify."
         else -> "У этого трека нет текста"
     }

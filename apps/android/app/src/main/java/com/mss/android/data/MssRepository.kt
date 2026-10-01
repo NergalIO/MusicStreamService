@@ -164,6 +164,9 @@ class MssRepository @Inject constructor(
         } else {
             api.cloudComplete(dto.id)
         }
+        localTracks.sidecarLyrics(uri)?.let { (format, text) ->
+            runCatching { api.putTrackLyrics(done.id, format, text) }
+        }
         return unify(done)
     }
 
@@ -172,6 +175,8 @@ class MssRepository @Inject constructor(
         cloudUrls.downloadUrl(track.id)?.let { return it }
         return runCatching { api.trackDownloadUrl(track.id) }.getOrNull()
     }
+
+    suspend fun trackLyrics(trackId: String) = api.trackLyrics(trackId)
 
     private suspend fun unify(dto: TrackDto): UnifiedTrack =
         cloudUrls.mergeAndRemember(dto.toUnifiedTrack(preferences.getApiBaseUrl()))

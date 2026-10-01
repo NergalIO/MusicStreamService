@@ -12,8 +12,9 @@ export async function expireEphemeralCaches(): Promise<number> {
     id: string;
     storage_key_master: string | null;
     cover_storage_key: string | null;
+    storage_key_lyrics: string | null;
   }>(
-    `SELECT id, storage_key_master, cover_storage_key FROM tracks
+    `SELECT id, storage_key_master, cover_storage_key, storage_key_lyrics FROM tracks
      WHERE cache_expires_at IS NOT NULL AND cache_expires_at < NOW()`,
   );
   if (!rows.length) return 0;
@@ -22,6 +23,7 @@ export async function expireEphemeralCaches(): Promise<number> {
     try {
       if (row.storage_key_master) await deleteObject(bucket, row.storage_key_master);
       if (row.cover_storage_key) await deleteObject(coversBucket, row.cover_storage_key);
+      if (row.storage_key_lyrics) await deleteObject(bucket, row.storage_key_lyrics);
     } catch (e) {
       console.warn('Cache expire storage delete failed', row.id, e);
     }
@@ -30,6 +32,7 @@ export async function expireEphemeralCaches(): Promise<number> {
         status = 'registered',
         storage_key_master = NULL,
         cover_storage_key = NULL,
+        storage_key_lyrics = NULL,
         codec = NULL,
         bitrate_kbps = NULL,
         mime_type = NULL,

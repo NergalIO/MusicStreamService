@@ -55,6 +55,7 @@ export const tracks = pgTable('tracks', {
   storageKeyMaster: text('storage_key_master'),
   storageKeyOriginal: text('storage_key_original'),
   coverStorageKey: text('cover_storage_key'),
+  storageKeyLyrics: text('storage_key_lyrics'),
   uploadedBy: uuid('uploaded_by').references(() => users.id),
   originalFilename: text('original_filename'),
   loudnessLufs: real('loudness_lufs'),

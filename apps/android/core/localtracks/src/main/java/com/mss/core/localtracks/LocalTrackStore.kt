@@ -93,6 +93,12 @@ class LocalTrackStore @Inject constructor(
         readSidecar(Uri.parse(raw))
     }
 
+    fun sidecarLyrics(uri: Uri): Pair<String, String>? {
+        readText(sibling(uri, "lrc"))?.trim()?.takeIf { it.isNotEmpty() }?.let { return "lrc" to it }
+        readText(sibling(uri, "txt"))?.trim()?.takeIf { it.isNotEmpty() }?.let { return "txt" to it }
+        return null
+    }
+
     private fun readSidecar(audio: Uri): TrackLyrics? {
         readText(sibling(audio, "lrc"))?.let { text ->
             val lines = parseLrc(text)

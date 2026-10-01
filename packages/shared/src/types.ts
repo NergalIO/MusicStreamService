@@ -51,6 +51,7 @@ export interface TrackDto {
   cloudPlayUrl?: string | null;
   cloudDownloadUrl?: string | null;
   cloudUrlExpiresAt?: string | null;
+  hasLyrics?: boolean;
 }
 
 export interface PlaylistDto {

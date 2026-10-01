@@ -16,6 +16,7 @@ import com.mss.core.model.PlaylistsResponse
 import com.mss.core.model.RefreshResponse
 import com.mss.core.model.RegisterPending
 import com.mss.core.model.TrackDto
+import com.mss.core.model.TrackLyrics
 import com.mss.core.model.TracksResponse
 import com.mss.core.model.CatalogArtistDto
 import com.mss.core.model.UnifiedTrack
@@ -279,6 +280,22 @@ class MssApiClient @Inject constructor(
         return res.body()
     }
 
+    suspend fun putTrackLyrics(trackId: String, format: String, text: String) {
+        withAuth { token ->
+            http.put("${apiBase()}/tracks/$trackId/lyrics") {
+                header(HttpHeaders.Authorization, "Bearer $token")
+                contentType(ContentType.Application.Json)
+                setBody(LyricsBody(format, text))
+            }
+        }
+    }
+
+    suspend fun trackLyrics(trackId: String): TrackLyrics? {
+        val res = runCatching { http.get("${apiBase()}/tracks/$trackId/lyrics") }.getOrNull() ?: return null
+        if (res.status.value == 404 || !res.status.isSuccess()) return null
+        return runCatching { json.decodeFromString<TrackLyrics>(res.bodyAsText()) }.getOrNull()
+    }
+
     suspend fun patchTrack(id: String, title: String?, artist: String?, album: String?) {
         withAuth { token ->
             http.patch("${apiBase()}/tracks/$id") {
@@ -532,6 +549,7 @@ class MssApiClient @Inject constructor(
         val originalFilename: String,
     )
     @Serializable private data class UpdateTrackBody(val title: String? = null, val artist: String? = null, val album: String? = null)
+    @Serializable private data class LyricsBody(val format: String, val text: String)
     @Serializable private data class PlaysBody(val events: List<PlayEvent>)
     @Serializable private data class PromoBody(val code: String)
     @Serializable private data class CreateLobbyBody(

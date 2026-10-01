@@ -13,6 +13,7 @@ import { config } from '../config.js';
 import { db } from '../db/client.js';
 import { trackHoldings, tracks } from '../db/schema.js';
 import { deleteObject, getObjectFull, getObjectRange, headObject, presignGet, presignPut, putObject, CLOUD_GET_TTL_SEC } from '../lib/storage.js';
+import { detectLyricsFormat, formatFromKey, lyricsObjectKey, LYRICS_MAX_BYTES, parseLyricsFile, type LyricsFormat } from '../lib/lyrics.js';
 import { transcodeQueue, type TranscodeJob } from '../lib/queue.js';
 import { getActiveSubscription } from '../services/subscription.js';
 import { appendToPlaylist, findOwnPlaylist } from './playlists.js';
@@ -69,6 +70,7 @@ export async function toTrackDto(t: TrackRow, availability?: TrackAvailability, 
       ? `${config.publicUrl}/covers/${t.id}?v=${encodeURIComponent(t.coverStorageKey.split('/').pop()!.replace(/\.[^.]+$/, ''))}`
       : null,
     streamUrl: canStream ? `${config.publicUrl}/stream/${t.id}` : null,
+    hasLyrics: !!t.storageKeyLyrics,
     ...cloud,
   };
 }
@@ -409,6 +411,42 @@ export async function trackRoutes(app: FastifyInstance) {
     return toTrackDtoWithAvailability(updated);
   });
 
+  app.put('/tracks/:id/lyrics', async (req, reply) => {
+    await app.authenticate(req);
+    const { id } = req.params as { id: string };
+    const [t] = await db.select().from(tracks).where(eq(tracks.id, id)).limit(1);
+    if (!t) return reply.notFound();
+    if (!(await userOwnsTrack(req.userId!, id))) return reply.forbidden('Текст можно загрузить только к своим трекам');
+    const body = (req.body ?? {}) as { format?: string; text?: string };
+    const text = typeof body.text === 'string' ? body.text : '';
+    if (!text.trim()) return reply.badRequest('Пустой текст');
+    if (Buffer.byteLength(text, 'utf8') > LYRICS_MAX_BYTES) {
+      return reply.code(413).send({ message: 'Текст больше 512 КБ' });
+    }
+    const format: LyricsFormat =
+      body.format === 'lrc' || body.format === 'txt' ? body.format : detectLyricsFormat(text);
+    const parsed = parseLyricsFile(format, text);
+    if (!parsed) return reply.badRequest('Не удалось разобрать текст');
+    const key = lyricsObjectKey(id, format);
+    await putObject(config.minio.bucketTracks, key, Buffer.from(text, 'utf8'), 'text/plain; charset=utf-8');
+    if (t.storageKeyLyrics && t.storageKeyLyrics !== key) {
+      await deleteObject(config.minio.bucketTracks, t.storageKeyLyrics).catch(() => undefined);
+    }
+    const [updated] = await db.update(tracks).set({ storageKeyLyrics: key }).where(eq(tracks.id, id)).returning();
+    return toTrackDtoWithAvailability(updated ?? t);
+  });
+
+  app.get('/tracks/:id/lyrics', async (req, reply) => {
+    const { id } = req.params as { id: string };
+    const [t] = await db.select().from(tracks).where(eq(tracks.id, id)).limit(1);
+    if (!t?.storageKeyLyrics) return reply.notFound();
+    const raw = await getObjectFull(config.minio.bucketTracks, t.storageKeyLyrics).catch(() => null);
+    if (!raw?.length) return reply.notFound();
+    const parsed = parseLyricsFile(formatFromKey(t.storageKeyLyrics), raw.toString('utf8'));
+    if (!parsed) return reply.notFound();
+    return parsed;
+  });
+
   app.delete('/tracks/:id', async (req, reply) => {
     await app.authenticate(req);
     const { id } = req.params as { id: string };
@@ -425,6 +463,7 @@ export async function trackRoutes(app: FastifyInstance) {
       await Promise.all([
         t.storageKeyMaster && deleteObject(config.minio.bucketTracks, t.storageKeyMaster),
         t.storageKeyOriginal && deleteObject(config.minio.bucketTracks, t.storageKeyOriginal),
+        t.storageKeyLyrics && deleteObject(config.minio.bucketTracks, t.storageKeyLyrics),
         t.coverStorageKey && deleteObject(config.minio.bucketCovers, t.coverStorageKey),
       ]).catch((e) => req.log.warn({ err: e, trackId: id }, 'failed to delete track objects'));
     }
