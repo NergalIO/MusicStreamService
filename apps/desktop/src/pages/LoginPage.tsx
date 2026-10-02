@@ -59,7 +59,7 @@ export function LoginPage() {
       if (e instanceof EmailNotVerifiedError) {
         setEmail(e.email);
         setStep('verify');
-        setInfo('Подтвердите email — введите код из письма');
+        setInfo(e.message);
         return;
       }
       const message = e instanceof Error ? e.message : 'Ошибка входа';

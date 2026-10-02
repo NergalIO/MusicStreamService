@@ -39,6 +39,7 @@ import com.mss.core.model.WaveSettings
 import com.mss.core.model.dedupeCatalogTracks
 import com.mss.core.model.sameCatalogTrack
 import com.mss.core.model.sourceFrom
+import com.mss.core.network.EmailNotVerifiedException
 import com.mss.core.network.PlayReporter
 import com.mss.core.network.PresenceClient
 import com.mss.core.offline.OfflineStore
@@ -270,8 +271,14 @@ class MssViewModel @Inject constructor(
                     loadLikesIds()
                 }
             }.onFailure { e ->
-                sessionLog.error("auth", e.message ?: "login failed")
-                _error.value = e.message
+                if (e is EmailNotVerifiedException) {
+                    _authVerify.value = true
+                    _authInfo.value = e.message
+                    sessionLog.info("auth", "login mss needs verify")
+                } else {
+                    sessionLog.error("auth", e.message ?: "login failed")
+                    _error.value = e.message
+                }
             }
         }
     }

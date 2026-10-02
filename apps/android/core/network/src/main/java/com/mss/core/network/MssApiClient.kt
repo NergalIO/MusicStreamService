@@ -101,6 +101,10 @@ class MssApiClient @Inject constructor(
             }
         }
         if (!res.status.isSuccess()) throw ApiException(text)
+        val pending = runCatching { json.decodeFromString<RegisterPending>(text) }.getOrNull()
+        if (pending != null && pending.needsVerification && pending.email.isNotBlank()) {
+            throw EmailNotVerifiedException(pending.email, "Код отправлен на ${pending.email}")
+        }
         val session = json.decodeFromString<AuthSession>(text)
         preferences.saveSession(session)
         return session

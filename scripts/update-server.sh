@@ -169,6 +169,14 @@ load_env_api_public() {
 
 rebuild_server() {
   echo "$(LOG_PREFIX) сервер: docker compose + pnpm build"
+  if [[ -f "$ROOT/docker-compose.app.yml" ]] && docker info >/dev/null 2>&1; then
+    echo "$(LOG_PREFIX) Docker-стек: migrate внутри сети (хост postgres не резолвится)"
+    compose -f docker-compose.yml -f docker-compose.app.yml up -d --build --remove-orphans
+    compose -f docker-compose.yml -f docker-compose.app.yml run --rm migrate
+    echo "$(LOG_PREFIX) docker: api и worker пересобраны"
+    echo "$(LOG_PREFIX) сервер готов"
+    return 0
+  fi
   compose up -d postgres redis
   if ! command -v pnpm >/dev/null 2>&1; then
     echo "$(LOG_PREFIX) pnpm не найден" >&2
@@ -182,6 +190,7 @@ rebuild_server() {
     echo "$(LOG_PREFIX) systemd: mss-api, mss-worker перезапущены"
   else
     echo "$(LOG_PREFIX) systemd units не найдены — запустите api/worker вручную или установите deploy/systemd/*.service"
+    return 1
   fi
   echo "$(LOG_PREFIX) сервер готов"
 }

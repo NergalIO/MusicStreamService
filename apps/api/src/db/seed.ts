@@ -1,8 +1,6 @@
-import bcrypt from 'bcryptjs';
-import { eq } from 'drizzle-orm';
-import { assignPlan } from '../services/subscription.js';
+import { bootstrapAdmin } from '../lib/bootstrap-admin.js';
 import { db } from './client.js';
-import { promoCodes, subscriptionPlans, users } from './schema.js';
+import { promoCodes, subscriptionPlans } from './schema.js';
 
 const FREE_FEATURES = {
   max_offline_tracks: 0,
@@ -19,34 +17,6 @@ const PREMIUM_FEATURES = {
   external_sources_enabled: true,
   ads: false,
 };
-
-async function bootstrapAdmin() {
-  const email = process.env.MSS_BOOTSTRAP_ADMIN_EMAIL?.trim();
-  const password = process.env.MSS_BOOTSTRAP_ADMIN_PASSWORD?.trim();
-  if (!email || !password) return;
-
-  const existing = await db.select().from(users).where(eq(users.email, email)).limit(1);
-  if (existing.length) {
-    const patch: { role?: string; emailVerifiedAt?: Date } = {};
-    if (existing[0].role !== 'admin') patch.role = 'admin';
-    if (!existing[0].emailVerifiedAt) patch.emailVerifiedAt = new Date();
-    if (Object.keys(patch).length) {
-      await db.update(users).set(patch).where(eq(users.email, email));
-      console.log('Updated bootstrap admin:', email, Object.keys(patch).join(', '));
-    } else {
-      console.log('Admin user already exists:', email);
-    }
-    return;
-  }
-
-  const passwordHash = await bcrypt.hash(password, 10);
-  const [user] = await db
-    .insert(users)
-    .values({ email, passwordHash, role: 'admin', emailVerifiedAt: new Date() })
-    .returning();
-  await assignPlan(user.id, 'premium', 3650, 'bootstrap');
-  console.log('Bootstrap admin created:', email);
-}
 
 async function seedPlans(): Promise<void> {
   const existing = await db.select().from(subscriptionPlans).limit(1);
@@ -83,7 +53,8 @@ async function seedPlans(): Promise<void> {
 
 async function main() {
   await seedPlans();
-  await bootstrapAdmin();
+  const boot = await bootstrapAdmin();
+  if (boot) console.log('Bootstrap admin', boot);
 }
 
 main().catch((e) => {

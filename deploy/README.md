@@ -179,9 +179,11 @@ location /MusicStreamService/ {
 
 ## 9. Обновление и откат
 
-**Docker:** `git pull` → `docker compose -f docker-compose.yml -f docker-compose.app.yml up -d --build` → `run --rm migrate`.
+**Docker (как на VPS):** `./scripts/update-docker-vps.sh` или `./scripts/update-server.sh --force` — скрипт сам собирает `docker-compose.app.yml` и гоняет `migrate` внутри сети, где резолвится хост `postgres`. Не вызывайте `pnpm db:migrate` на хосте, если в `.env` `DATABASE_URL=...@postgres:5432/...`.
 
-**systemd:** `./scripts/update-server.sh --force` или `systemctl restart mss-api mss-worker`.
+**systemd:** `systemctl restart mss-api mss-worker`.
+
+Панель без SSH: `https://ваш-домен/MusicStreamService/dashboard` (логин администратора из `MSS_BOOTSTRAP_ADMIN_EMAIL`).
 
 ---
 

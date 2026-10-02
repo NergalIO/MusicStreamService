@@ -7,7 +7,10 @@ import type { FastifyInstance } from 'fastify';
 import type { ZodError } from 'zod';
 import { config } from './config.js';
 import { ensureBuckets } from './lib/storage.js';
+import { bootstrapAdmin } from './lib/bootstrap-admin.js';
+import { ingestPinoLine, pushLog } from './lib/log-ring.js';
 import { authPlugin } from './plugins/auth.js';
+import { adminRoutes } from './routes/admin.js';
 import { artistRoutes } from './routes/artists.js';
 import { authRoutes } from './routes/auth.js';
 import { likeRoutes } from './routes/likes.js';
@@ -24,7 +27,14 @@ import { wsLobbyRoutes } from './ws/lobby.js';
 import { wsPresenceRoutes } from './ws/presence.js';
 
 const app = Fastify({
-  logger: true,
+  logger: {
+    stream: {
+      write(msg: string) {
+        process.stdout.write(msg);
+        ingestPinoLine(msg);
+      },
+    },
+  },
   ...(config.tls ? { https: config.tls } : {}),
 });
 
@@ -53,6 +63,7 @@ const registerApi = async (scoped: FastifyInstance) => {
   }));
 
   await scoped.register(authRoutes);
+  await scoped.register(adminRoutes);
   await scoped.register(trackRoutes);
   await scoped.register(objectRoutes);
   await scoped.register(relayRoutes);
@@ -81,6 +92,21 @@ try {
   if (config.storageBackend !== 's3') process.exit(1);
   app.log.warn('S3 недоступен при старте — API слушаем, лайки/плейлисты/статистика из БД');
 }
+
+try {
+  const boot = await bootstrapAdmin();
+  if (boot) app.log.info({ boot }, 'bootstrap admin');
+} catch (err) {
+  app.log.warn(err, 'bootstrap admin skipped');
+}
+
+app.addHook('onResponse', (req, reply, done) => {
+  const url = req.url ?? '';
+  if (url.includes('/health') || reply.statusCode < 400) return done();
+  const level = reply.statusCode >= 500 ? 'error' : 'warn';
+  pushLog(level, `${req.method} ${url} ${reply.statusCode}`);
+  done();
+});
 
 try {
   await app.listen({ port: config.port, host: '0.0.0.0' });

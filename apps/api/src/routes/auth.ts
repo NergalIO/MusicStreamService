@@ -26,24 +26,25 @@ async function createSession(app: FastifyInstance, user: { id: string; email: st
   return {
     accessToken,
     refreshToken: refresh,
-    user: { id: user.id, email: user.email },
+    user: { id: user.id, email: user.email, role: user.role },
   };
 }
 
-async function sendRegisterCode(
+async function sendAuthCode(
   reply: FastifyReply,
   userId: string,
   email: string,
-  rollbackNewUser: boolean,
+  opts: { ignoreCooldown?: boolean; rollbackNewUser?: boolean; continueOnCooldown?: boolean; smtpHint: string },
 ): Promise<FastifyReply | null> {
   try {
-    await issueAndSendVerificationCode(userId, email, { ignoreCooldown: true });
+    await issueAndSendVerificationCode(userId, email, { ignoreCooldown: opts.ignoreCooldown });
     return null;
   } catch (e) {
-    if (rollbackNewUser) {
+    if (opts.rollbackNewUser) {
       await db.delete(users).where(eq(users.id, userId));
     }
     if (e instanceof Error && e.message === 'RESEND_TOO_SOON') {
+      if (opts.continueOnCooldown) return null;
       return reply.code(429).send({
         error: 'Too Many Requests',
         message: 'Подождите минуту перед повторной отправкой',
@@ -51,7 +52,7 @@ async function sendRegisterCode(
     }
     return reply.code(503).send({
       error: 'Service Unavailable',
-      message: 'Не удалось отправить письмо с кодом. Проверьте SMTP и нажмите регистрацию ещё раз.',
+      message: opts.smtpHint,
     });
   }
 }
@@ -74,7 +75,10 @@ export async function authRoutes(app: FastifyInstance) {
         return reply.conflict('Этот email уже зарегистрирован');
       }
       await db.update(users).set({ passwordHash }).where(eq(users.id, existing.id));
-      const failed = await sendRegisterCode(reply, existing.id, existing.email, false);
+      const failed = await sendAuthCode(reply, existing.id, existing.email, {
+        ignoreCooldown: true,
+        smtpHint: 'Не удалось отправить письмо с кодом. Проверьте SMTP и нажмите регистрацию ещё раз.',
+      });
       if (failed) return failed;
       return { needsVerification: true as const, email: existing.email };
     }
@@ -91,7 +95,11 @@ export async function authRoutes(app: FastifyInstance) {
     if (verifiedNow) {
       return createSession(app, user);
     }
-    const failed = await sendRegisterCode(reply, user.id, user.email, true);
+    const failed = await sendAuthCode(reply, user.id, user.email, {
+      ignoreCooldown: true,
+      rollbackNewUser: true,
+      smtpHint: 'Не удалось отправить письмо с кодом. Проверьте SMTP и нажмите регистрацию ещё раз.',
+    });
     if (failed) return failed;
     return { needsVerification: true as const, email: user.email };
   });
@@ -153,12 +161,12 @@ export async function authRoutes(app: FastifyInstance) {
       return reply.unauthorized('Invalid credentials');
     }
     if (emailVerificationRequired() && !user.emailVerifiedAt) {
-      return reply.code(403).send({
-        error: 'Forbidden',
-        code: 'EMAIL_NOT_VERIFIED',
-        message: 'Подтвердите email — проверьте почту или запросите код снова',
-        email: user.email,
+      const failed = await sendAuthCode(reply, user.id, user.email, {
+        continueOnCooldown: true,
+        smtpHint: 'Не удалось отправить письмо с кодом. Проверьте SMTP и войдите ещё раз.',
       });
+      if (failed) return failed;
+      return { needsVerification: true as const, email: user.email };
     }
     return createSession(app, user);
   });

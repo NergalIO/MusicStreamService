@@ -1,0 +1,94 @@
+<!DOCTYPE html>
+<html lang="ru">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <base href="{{BASE_HREF}}" />
+    <title>Панель — MusicStreamService</title>
+    <link rel="stylesheet" href="styles.css" />
+    <link rel="stylesheet" href="dashboard.css" />
+  </head>
+  <body class="dash-body">
+    <script>
+      window.MSS_BASE = '{{BASE_PATH}}';
+    </script>
+    <div id="login-view" class="dash-login page">
+      <header class="hero">
+        <p class="eyebrow">Админка</p>
+        <h1>Панель сервера</h1>
+        <p class="lead">Управление пользователями, каталогом и логами без SSH.</p>
+      </header>
+      <form id="login-form" class="dash-card dash-form">
+        <label>Email<input id="login-email" type="email" autocomplete="username" required /></label>
+        <label>Пароль<input id="login-password" type="password" autocomplete="current-password" required /></label>
+        <p id="login-error" class="dash-error" hidden></p>
+        <button class="btn btn-primary" type="submit">Войти</button>
+      </form>
+    </div>
+
+    <div id="app-view" hidden>
+      <aside class="dash-nav">
+        <p class="eyebrow">MSS</p>
+        <strong id="me-email"></strong>
+        <nav>
+          <button type="button" data-tab="overview" class="is-active">Обзор</button>
+          <button type="button" data-tab="users">Пользователи</button>
+          <button type="button" data-tab="catalog">Каталог</button>
+          <button type="button" data-tab="logs">Логи</button>
+          <button type="button" data-tab="server">Сервер</button>
+        </nav>
+        <button type="button" id="logout" class="btn btn-ghost">Выйти</button>
+      </aside>
+      <main class="dash-main">
+        <section data-panel="overview">
+          <h1>Обзор</h1>
+          <div id="overview-cards" class="dash-grid"></div>
+        </section>
+        <section data-panel="users" hidden>
+          <h1>Пользователи</h1>
+          <div class="dash-toolbar">
+            <input id="user-q" placeholder="Поиск по email" />
+            <button type="button" id="user-search" class="btn btn-secondary">Найти</button>
+          </div>
+          <form id="user-create" class="dash-card dash-form dash-form-row">
+            <input name="email" type="email" placeholder="Новый email" required />
+            <input name="password" type="password" placeholder="Пароль" minlength="8" required />
+            <select name="role">
+              <option value="user">user</option>
+              <option value="admin">admin</option>
+            </select>
+            <button class="btn btn-primary" type="submit">Создать</button>
+          </form>
+          <div id="users-table"></div>
+        </section>
+        <section data-panel="catalog" hidden>
+          <h1>Каталог</h1>
+          <div class="dash-toolbar">
+            <input id="catalog-q" placeholder="Название или исполнитель" />
+            <button type="button" id="catalog-search" class="btn btn-secondary">Найти</button>
+          </div>
+          <h2>Треки</h2>
+          <div id="tracks-table"></div>
+          <h2>Альбомы</h2>
+          <div id="albums-table"></div>
+        </section>
+        <section data-panel="logs" hidden>
+          <h1>Логи API</h1>
+          <p class="hint">Последние события этого процесса API. Обновляется каждые 5 секунд.</p>
+          <pre id="logs-view" class="dash-logs"></pre>
+        </section>
+        <section data-panel="server" hidden>
+          <h1>Сервер</h1>
+          <div id="server-info" class="dash-card"></div>
+          <form id="mail-test" class="dash-card dash-form">
+            <h2>Проверка SMTP</h2>
+            <label>Куда отправить<input id="mail-to" type="email" placeholder="оставьте пустым — себе" /></label>
+            <p id="mail-status" class="hint"></p>
+            <button class="btn btn-primary" type="submit">Отправить письмо</button>
+          </form>
+        </section>
+      </main>
+    </div>
+    <script src="dashboard.js"></script>
+  </body>
+</html>

@@ -1,7 +1,7 @@
 import fs from 'node:fs';
 import path from 'node:path';
 import fastifyStatic from '@fastify/static';
-import type { FastifyInstance } from 'fastify';
+import type { FastifyInstance, FastifyReply, FastifyRequest } from 'fastify';
 import { config } from '../config.js';
 import { fetchLatestReleaseDownloads } from '../lib/github-releases.js';
 
@@ -32,6 +32,19 @@ export async function siteRoutes(app: FastifyInstance) {
     html = html.replaceAll('{{API_PUBLIC_URL}}', config.publicUrl);
     return reply.type('text/html; charset=utf-8').send(html);
   });
+
+  const sendDashboard = async (_req: FastifyRequest, reply: FastifyReply) => {
+    const dashPath = path.join(config.publicDir, 'dashboard.html');
+    if (!fileExists(dashPath)) {
+      return reply.code(404).send({ error: 'Dashboard not found' });
+    }
+    let html = fs.readFileSync(dashPath, 'utf8');
+    html = html.replaceAll('{{BASE_HREF}}', baseHref);
+    html = html.replaceAll('{{BASE_PATH}}', config.basePath || '');
+    return reply.type('text/html; charset=utf-8').send(html);
+  };
+  app.get('/dashboard', sendDashboard);
+  app.get('/admin', sendDashboard);
 
   app.get('/site/downloads', async () => {
     const gh = await fetchLatestReleaseDownloads();
