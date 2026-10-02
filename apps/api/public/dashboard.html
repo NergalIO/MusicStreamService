@@ -12,24 +12,28 @@
     <script>
       window.MSS_BASE = '{{BASE_PATH}}';
     </script>
-    <div id="login-view" class="dash-login page">
-      <header class="hero">
+
+    <div id="login-view" class="dash-login">
+      <div class="dash-login-card">
         <p class="eyebrow">Админка</p>
         <h1>Панель сервера</h1>
-        <p class="lead">Управление пользователями, каталогом и логами без SSH.</p>
-      </header>
-      <form id="login-form" class="dash-card dash-form">
-        <label>Email<input id="login-email" type="email" autocomplete="username" required /></label>
-        <label>Пароль<input id="login-password" type="password" autocomplete="current-password" required /></label>
-        <p id="login-error" class="dash-error" hidden></p>
-        <button class="btn btn-primary" type="submit">Войти</button>
-      </form>
+        <p class="lead">Пользователи, каталог, логи и SMTP — без SSH.</p>
+        <form id="login-form" class="dash-form">
+          <label>Email<input id="login-email" type="email" autocomplete="username" required /></label>
+          <label>Пароль<input id="login-password" type="password" autocomplete="current-password" required /></label>
+          <p id="login-error" class="dash-error" hidden></p>
+          <button class="btn btn-primary" type="submit">Войти</button>
+        </form>
+      </div>
     </div>
 
     <div id="app-view" hidden>
       <aside class="dash-nav">
-        <p class="eyebrow">MSS</p>
-        <strong id="me-email"></strong>
+        <div class="dash-brand">
+          <p class="eyebrow">MSS</p>
+          <strong id="me-email"></strong>
+          <div id="health-dots" class="dash-health"></div>
+        </div>
         <nav>
           <button type="button" data-tab="overview" class="is-active">Обзор</button>
           <button type="button" data-tab="users">Пользователи</button>
@@ -40,19 +44,28 @@
         <button type="button" id="logout" class="btn btn-ghost">Выйти</button>
       </aside>
       <main class="dash-main">
+        <header class="dash-top">
+          <div>
+            <h1 id="page-title">Обзор</h1>
+            <p id="page-sub" class="hint">Состояние сервера</p>
+          </div>
+          <span id="top-meta" class="dash-top-meta"></span>
+        </header>
+
         <section data-panel="overview">
-          <h1>Обзор</h1>
+          <div id="overview-health" class="dash-pills"></div>
           <div id="overview-cards" class="dash-grid"></div>
+          <div id="overview-queue" class="dash-card"></div>
         </section>
+
         <section data-panel="users" hidden>
-          <h1>Пользователи</h1>
           <div class="dash-toolbar">
             <input id="user-q" placeholder="Поиск по email" />
             <button type="button" id="user-search" class="btn btn-secondary">Найти</button>
           </div>
           <form id="user-create" class="dash-card dash-form dash-form-row">
             <input name="email" type="email" placeholder="Новый email" required />
-            <input name="password" type="password" placeholder="Пароль" minlength="8" required />
+            <input name="password" type="password" placeholder="Пароль от 8 символов" minlength="8" required />
             <select name="role">
               <option value="user">user</option>
               <option value="admin">admin</option>
@@ -60,35 +73,68 @@
             <button class="btn btn-primary" type="submit">Создать</button>
           </form>
           <div id="users-table"></div>
+          <div id="users-pager" class="dash-pager"></div>
         </section>
+
         <section data-panel="catalog" hidden>
-          <h1>Каталог</h1>
           <div class="dash-toolbar">
+            <div class="dash-seg" role="tablist">
+              <button type="button" data-cat="tracks" class="is-active">Треки</button>
+              <button type="button" data-cat="albums">Альбомы</button>
+            </div>
             <input id="catalog-q" placeholder="Название или исполнитель" />
             <button type="button" id="catalog-search" class="btn btn-secondary">Найти</button>
           </div>
-          <h2>Треки</h2>
-          <div id="tracks-table"></div>
-          <h2>Альбомы</h2>
-          <div id="albums-table"></div>
+          <div id="catalog-table"></div>
+          <div id="catalog-pager" class="dash-pager"></div>
         </section>
+
         <section data-panel="logs" hidden>
-          <h1>Логи API</h1>
-          <p class="hint">Последние события этого процесса API. Обновляется каждые 5 секунд.</p>
-          <pre id="logs-view" class="dash-logs"></pre>
+          <div class="dash-toolbar">
+            <div class="dash-seg" id="log-levels">
+              <button type="button" data-level="all" class="is-active">Все</button>
+              <button type="button" data-level="info">info</button>
+              <button type="button" data-level="warn">warn</button>
+              <button type="button" data-level="error">error</button>
+            </div>
+            <input id="log-q" placeholder="Поиск в логах" />
+          </div>
+          <div id="logs-view" class="dash-logs"></div>
         </section>
+
         <section data-panel="server" hidden>
-          <h1>Сервер</h1>
-          <div id="server-info" class="dash-card"></div>
+          <div id="server-info" class="dash-kv-grid"></div>
           <form id="mail-test" class="dash-card dash-form">
             <h2>Проверка SMTP</h2>
-            <label>Куда отправить<input id="mail-to" type="email" placeholder="оставьте пустым — себе" /></label>
-            <p id="mail-status" class="hint"></p>
+            <label>Куда отправить<input id="mail-to" type="email" placeholder="пусто — на ваш email" /></label>
             <button class="btn btn-primary" type="submit">Отправить письмо</button>
           </form>
         </section>
       </main>
     </div>
+
+    <aside id="drawer" class="dash-drawer" hidden>
+      <div class="dash-drawer-head">
+        <h2 id="drawer-title">Пользователь</h2>
+        <button type="button" id="drawer-close" class="btn btn-ghost">Закрыть</button>
+      </div>
+      <div id="drawer-body"></div>
+    </aside>
+    <div id="drawer-backdrop" class="dash-backdrop" hidden></div>
+
+    <div id="modal" class="dash-modal" hidden>
+      <div class="dash-modal-card">
+        <h2 id="modal-title">Подтверждение</h2>
+        <p id="modal-text" class="lead"></p>
+        <div id="modal-fields"></div>
+        <div class="dash-modal-actions">
+          <button type="button" id="modal-cancel" class="btn btn-ghost">Отмена</button>
+          <button type="button" id="modal-ok" class="btn btn-primary">ОК</button>
+        </div>
+      </div>
+    </div>
+
+    <div id="toasts" class="dash-toasts"></div>
     <script src="dashboard.js"></script>
   </body>
 </html>

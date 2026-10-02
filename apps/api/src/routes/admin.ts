@@ -2,7 +2,7 @@ import { execFile } from 'node:child_process';
 import fs from 'node:fs/promises';
 import { promisify } from 'node:util';
 import bcrypt from 'bcryptjs';
-import { count, desc, eq, ilike, or, sql } from 'drizzle-orm';
+import { count, desc, eq, ilike, inArray, max, or, sql } from 'drizzle-orm';
 import type { FastifyInstance } from 'fastify';
 import { z } from 'zod';
 import { config, emailVerificationRequired, smtpConfigured } from '../config.js';
@@ -12,6 +12,7 @@ import {
   playlists,
   refreshTokens,
   tracks,
+  userDevices,
   users,
 } from '../db/schema.js';
 import { listLogs, pushLog } from '../lib/log-ring.js';
@@ -61,6 +62,54 @@ async function dirBytes(dir: string): Promise<number | null> {
   } catch {
     return null;
   }
+}
+
+async function extrasForUsers(ids: string[]) {
+  const empty = {
+    deviceCount: 0,
+    lastSeenAt: null as string | null,
+    trackCount: 0,
+    albumCount: 0,
+  };
+  const map = new Map(ids.map((id) => [id, { ...empty }]));
+  if (!ids.length) return map;
+
+  const devices = await db
+    .select({
+      userId: userDevices.userId,
+      deviceCount: count(),
+      lastSeenAt: max(userDevices.lastSeenAt),
+    })
+    .from(userDevices)
+    .where(inArray(userDevices.userId, ids))
+    .groupBy(userDevices.userId);
+  for (const d of devices) {
+    const cur = map.get(d.userId);
+    if (cur) {
+      cur.deviceCount = Number(d.deviceCount);
+      cur.lastSeenAt = d.lastSeenAt?.toISOString() ?? null;
+    }
+  }
+
+  const trackRows = await db
+    .select({ userId: tracks.uploadedBy, n: count() })
+    .from(tracks)
+    .where(inArray(tracks.uploadedBy, ids))
+    .groupBy(tracks.uploadedBy);
+  for (const t of trackRows) {
+    if (t.userId && map.has(t.userId)) map.get(t.userId)!.trackCount = Number(t.n);
+  }
+
+  const albumRows = await db
+    .select({ userId: albums.userId, n: count() })
+    .from(albums)
+    .where(inArray(albums.userId, ids))
+    .groupBy(albums.userId);
+  for (const a of albumRows) {
+    const cur = map.get(a.userId);
+    if (cur) cur.albumCount = Number(a.n);
+  }
+  return map;
 }
 
 export async function adminRoutes(app: FastifyInstance) {
@@ -118,6 +167,7 @@ export async function adminRoutes(app: FastifyInstance) {
       uptimeSec: Math.round((Date.now() - startedAt) / 1000),
       users: Number(userRow?.n ?? 0),
       verifiedUsers: Number(verifiedRow?.n ?? 0),
+      unverifiedUsers: Math.max(0, Number(userRow?.n ?? 0) - Number(verifiedRow?.n ?? 0)),
       tracks: Number(trackRow?.n ?? 0),
       albums: Number(albumRow?.n ?? 0),
       playlists: Number(playlistRow?.n ?? 0),
@@ -187,15 +237,63 @@ export async function adminRoutes(app: FastifyInstance) {
       .orderBy(desc(users.createdAt))
       .limit(limit)
       .offset(offset);
+    const extras = await extrasForUsers(rows.map((u) => u.id));
     const items = await Promise.all(
-      rows.map(async (u) => ({
-        ...u,
-        emailVerifiedAt: u.emailVerifiedAt?.toISOString() ?? null,
-        createdAt: u.createdAt.toISOString(),
-        subscription: await getActiveSubscription(u.id),
-      })),
+      rows.map(async (u) => {
+        const extra = extras.get(u.id)!;
+        return {
+          id: u.id,
+          email: u.email,
+          role: u.role,
+          emailVerifiedAt: u.emailVerifiedAt?.toISOString() ?? null,
+          createdAt: u.createdAt.toISOString(),
+          subscription: await getActiveSubscription(u.id),
+          deviceCount: extra.deviceCount,
+          lastSeenAt: extra.lastSeenAt,
+          trackCount: extra.trackCount,
+          albumCount: extra.albumCount,
+        };
+      }),
     );
-    return { total: Number(totalRow?.n ?? 0), items };
+    return { total: Number(totalRow?.n ?? 0), limit, offset, items };
+  });
+
+  app.get('/admin/users/:id', async (req, reply) => {
+    const { id } = req.params as { id: string };
+    const [user] = await db.select().from(users).where(eq(users.id, id)).limit(1);
+    if (!user) return reply.notFound('User not found');
+    const extras = (await extrasForUsers([id])).get(id)!;
+    const devices = await db
+      .select({
+        id: userDevices.id,
+        name: userDevices.name,
+        lastSeenAt: userDevices.lastSeenAt,
+      })
+      .from(userDevices)
+      .where(eq(userDevices.userId, id))
+      .orderBy(desc(userDevices.lastSeenAt));
+    const [playlistRow] = await db
+      .select({ n: count() })
+      .from(playlists)
+      .where(eq(playlists.userId, id));
+    return {
+      id: user.id,
+      email: user.email,
+      role: user.role,
+      emailVerifiedAt: user.emailVerifiedAt?.toISOString() ?? null,
+      createdAt: user.createdAt.toISOString(),
+      subscription: await getActiveSubscription(user.id),
+      deviceCount: extras.deviceCount,
+      lastSeenAt: extras.lastSeenAt,
+      trackCount: extras.trackCount,
+      albumCount: extras.albumCount,
+      playlistCount: Number(playlistRow?.n ?? 0),
+      devices: devices.map((d) => ({
+        id: d.id,
+        name: d.name,
+        lastSeenAt: d.lastSeenAt.toISOString(),
+      })),
+    };
   });
 
   app.post('/admin/users', async (req, reply) => {
@@ -297,6 +395,8 @@ export async function adminRoutes(app: FastifyInstance) {
       .offset(offset);
     return {
       total: Number(totalRow?.n ?? 0),
+      limit,
+      offset,
       items: items.map((t) => ({ ...t, createdAt: t.createdAt.toISOString() })),
     };
   });
@@ -329,6 +429,8 @@ export async function adminRoutes(app: FastifyInstance) {
       .offset(offset);
     return {
       total: Number(totalRow?.n ?? 0),
+      limit,
+      offset,
       items: items.map((a) => ({ ...a, createdAt: a.createdAt.toISOString() })),
     };
   });
