@@ -362,7 +362,6 @@ class PlayerController @Inject constructor(
             holdCommand()
             awaitingStart = true
             suppressExternalPauseUntil = android.os.SystemClock.elapsedRealtime() + SKIP_PAUSE_GUARD_MS
-            holdSpotifyFocus()
             spotifyWeb.wake()
             spotifyWeb.resume()
         } else {
@@ -514,7 +513,7 @@ class PlayerController @Inject constructor(
         val pos = _state.value.positionMs
         usingSpotify = true
         silenceExo()
-        holdSpotifyFocus()
+        dropSpotifyFocus()
         scope.launch { spotifyWeb.play(track.id, pos, fast = preferences.loadPlaybackSettings().spotifyFastStart) }
     }
 
@@ -534,6 +533,7 @@ class PlayerController @Inject constructor(
             if (ours && d.playing) {
                 sawOwnSpotifyTitle = true
                 spotifyStarting = false
+                awaitingStart = false
             } else if (ours) {
                 sawOwnSpotifyTitle = true
             }
@@ -643,8 +643,10 @@ class PlayerController @Inject constructor(
     }
 
     private fun domIsOurTrack(d: SpotifyDomState): Boolean {
-        val title = _state.value.current?.title ?: return false
-        return spotifyTitleMatches(d.title, title)
+        val cur = _state.value.current ?: return false
+        if (d.trackId.isNotBlank() && d.trackId == cur.id) return true
+        if (cur.title.isBlank() || cur.title == cur.id) return false
+        return spotifyTitleMatches(d.title, cur.title)
     }
 
     private fun onEnded() {
@@ -673,6 +675,13 @@ class PlayerController @Inject constructor(
     private fun playCurrent(crossfade: Boolean) {
         val track = queue.getOrNull(index) ?: return
         val gen = ++playGen
+        spotifyWeb.cancelActivePlay()
+        if (track.source != SourceId.SPOTIFY) {
+            usingSpotify = false
+            spotifyStarting = false
+            spotifyWeb.stopPlayback()
+            restoreExoFocus()
+        }
         awaitingStart = true
         suppressExternalPauseUntil = android.os.SystemClock.elapsedRealtime() + SKIP_PAUSE_GUARD_MS
         _state.value = _state.value.copy(
@@ -719,7 +728,7 @@ class PlayerController @Inject constructor(
                     usingSpotify = true
                     exoStarting = false
                     silenceExo()
-                    holdSpotifyFocus()
+                    dropSpotifyFocus()
                     spotifyWeb.wake()
                     spotifyStarting = true
                     _state.value = _state.value.copy(positionMs = 0)
@@ -736,21 +745,27 @@ class PlayerController @Inject constructor(
                             if (gen != playGen) return@launch
                             suppressExternalPauseUntil = android.os.SystemClock.elapsedRealtime() + SKIP_PAUSE_GUARD_MS
                             val d = spotifyWeb.dom.value
-                            val ours = domIsOurTrack(d)
+                            val ours = domIsOurTrack(d) || d.ad
                             if (d.playing && ours) {
                                 awaitingStart = false
                                 spotifyStarting = false
+                            } else {
+                                spotifyStarting = true
                             }
                             _state.value = _state.value.copy(
                                 playing = true,
+                                buffering = !d.playing || !ours,
                                 durationMs = (if (ours) d.durationMs.takeIf { it > 0 } else null) ?: track.durationMs ?: 0,
-                                positionMs = if (ours) d.positionMs else 0,
+                                positionMs = if (ours && d.playing) d.positionMs else 0,
                             )
+                            if (spotifyStarting) confirmSpotifyStarted(gen)
                         }
                         .onFailure { err ->
                             if (gen != playGen) return@launch
                             awaitingStart = false
+                            spotifyStarting = false
                             usingSpotify = false
+                            spotifyWeb.stopPlayback()
                             restoreExoFocus()
                             _state.value = _state.value.copy(playing = false, buffering = false)
                             session("error", "player", err.message ?: "Spotify play failed")
@@ -759,6 +774,8 @@ class PlayerController @Inject constructor(
                 }
                 is ResolvedPlayback.Url -> {
                     usingSpotify = false
+                    spotifyStarting = false
+                    spotifyWeb.stopPlayback()
                     restoreExoFocus()
                     val settings = preferences.loadPlaybackSettings()
                     val fade = crossfade && settings.crossfadeMs > 0
@@ -773,6 +790,35 @@ class PlayerController @Inject constructor(
         maybeLoadWave()
     }
 
+    /** Ждём панель веб-плеера. Играющий наш id не гасим — только если звука так и нет. */
+    private fun confirmSpotifyStarted(gen: Int) {
+        scope.launch {
+            repeat(24) {
+                delay(500)
+                if (gen != playGen || !usingSpotify) return@launch
+                val d = spotifyWeb.dom.value
+                if (d.ad || (d.playing && (domIsOurTrack(d) || d.trackId == _state.value.current?.id))) {
+                    spotifyStarting = false
+                    awaitingStart = false
+                    return@launch
+                }
+            }
+            if (gen != playGen || !usingSpotify || !spotifyStarting) return@launch
+            spotifyWeb.resume()
+            delay(2_000)
+            if (gen != playGen || !usingSpotify) return@launch
+            val d = spotifyWeb.dom.value
+            if (d.playing) {
+                spotifyStarting = false
+                awaitingStart = false
+                return@launch
+            }
+            session("error", "player", "Spotify не запустил трек")
+            onError?.invoke("Spotify не запустил трек")
+            _state.value = _state.value.copy(buffering = false)
+        }
+    }
+
     /** Битый файл волны не должен оставлять плеер на паузе: берём следующий трек. */
     private fun failPlayback(gen: Int) {
         if (gen != playGen) return
@@ -785,7 +831,12 @@ class PlayerController @Inject constructor(
             return
         }
         awaitingStart = false
-        if (usingSpotify) dropSpotifyFocus()
+        spotifyStarting = false
+        if (usingSpotify) {
+            usingSpotify = false
+            spotifyWeb.stopPlayback()
+            dropSpotifyFocus()
+        }
         active.pause()
         _state.value = _state.value.copy(playing = false, buffering = false)
     }

@@ -1,5 +1,5 @@
 (function () {
-  var VERSION = 3;
+  var VERSION = 6;
   if (window.__mss && window.__mss.version === VERSION) return;
   if (window.__mssObserver) {
     try {
@@ -81,6 +81,20 @@
     return { positionMs: clockPos, durationMs: clockDur || max };
   }
 
+  function barTrackId() {
+    var bar = q('[data-testid="now-playing-widget"]') || q('[data-testid="now-playing-bar"]');
+    var link =
+      (bar && bar.querySelector('[data-testid="context-item-info-title"] a[href*="/track/"]')) ||
+      (bar && bar.querySelector('a[href*="/track/"]'));
+    var href = (link && (link.getAttribute('href') || link.pathname)) || '';
+    var m = String(href).match(/\/track\/([A-Za-z0-9]{10,40})/);
+    if (m) return m[1];
+    if (typeof mss !== 'undefined' && mss.lastTrackId && location.pathname.indexOf(mss.lastTrackId) >= 0) {
+      return mss.lastTrackId;
+    }
+    return null;
+  }
+
   function readState() {
     var button = q('[data-testid="control-button-playpause"]');
     var prog = readProgress();
@@ -91,6 +105,7 @@
       ad: isAd(),
       positionMs: Math.round(prog.positionMs || 0),
       durationMs: Math.round(prog.durationMs || 0),
+      trackId: barTrackId(),
     };
   }
 
@@ -305,7 +320,7 @@
       }
       if (res.status === 401 || res.status === 403) return { ok: false, authFailed: true };
       if (!res.ok) return { ok: false };
-      for (var t = 0; t < 400; t += 80) {
+      for (var t = 0; t < 800; t += 80) {
         if (gen !== mss.gen) return { cancelled: true };
         var s = readState();
         var remote = remoteFromBar();
@@ -364,8 +379,7 @@
   var armed = false;
 
   function pushState(s) {
-    s.trackId = mss.lastTrackId;
-    var key = s.playing + '|' + s.ad + '|' + s.title + '|' + Math.round((s.positionMs || 0) / 250) + '|' + s.durationMs;
+    var key = s.playing + '|' + s.ad + '|' + s.title + '|' + (s.trackId || '') + '|' + Math.round((s.positionMs || 0) / 250) + '|' + s.durationMs;
     if (key === lastPush) return;
     lastPush = key;
     notify('state', s);
@@ -449,9 +463,7 @@
       return run;
     },
     state: function () {
-      var s = readState();
-      s.trackId = this.lastTrackId;
-      return s;
+      return readState();
     },
     pause: function () {
       var gen = ++this.gen;
@@ -584,12 +596,12 @@
           return {
             ready: state.ready,
             title: state.title,
-            playing: state.playing,
+            playing: extra.playing !== undefined ? extra.playing : state.playing,
             ad: state.ad,
             positionMs: state.positionMs,
             durationMs: state.durationMs,
             trackTitle: extra.trackTitle || state.title,
-            trackId: self.lastTrackId,
+            trackId: extra.trackId !== undefined ? extra.trackId : state.trackId || self.lastTrackId,
             remoteName: remote || null,
             deviceUrl: extra.deviceUrl || (self.ownDevice && self.ownDevice.url) || null,
             cancelled: false,
@@ -597,18 +609,6 @@
             posted: !!extra.posted,
             error: extra.error || '',
           };
-        }
-
-        await waitFor(
-          20000,
-          function () {
-            return !!q('[data-testid="control-button-playpause"]');
-          },
-          gen,
-        );
-        if (gen !== self.gen) return { cancelled: true };
-        if (!q('[data-testid="control-button-playpause"]')) {
-          return pack(readState(), { error: 'Веб-плеер Spotify не загрузился' });
         }
 
         var path = '/track/' + trackId;
@@ -620,7 +620,7 @@
             self.lastTrackId = trackId;
             return pack(readState());
           }
-          clickPlayPause(true);
+          if (q('[data-testid="control-button-playpause"]')) clickPlayPause(true);
           if (target > 0 && Math.abs(hereState.positionMs - target) > 2000) applySeek(target);
           await waitFor(
             4000,
@@ -644,8 +644,27 @@
             if (fast.deviceUrl) self.ownDevice = parseDeviceUrl(fast.deviceUrl);
             self.lastTrackId = trackId;
             var fs = fast.state || readState();
-            return pack(fs, { deviceUrl: fast.deviceUrl, trackTitle: fs.title, posted: fast.posted });
+            var confirmed = !!(fs.ad || (fs.playing && (fs.trackId === trackId || location.pathname.indexOf(trackId) >= 0)));
+            return pack(fs, {
+              deviceUrl: fast.deviceUrl,
+              trackTitle: confirmed ? fs.title : '',
+              trackId: trackId,
+              playing: confirmed,
+              posted: !confirmed,
+            });
           }
+        }
+
+        await waitFor(
+          5000,
+          function () {
+            return !!q('[data-testid="control-button-playpause"]');
+          },
+          gen,
+        );
+        if (gen !== self.gen) return { cancelled: true };
+        if (!q('[data-testid="control-button-playpause"]')) {
+          return pack(readState(), { error: 'Веб-плеер Spotify не загрузился' });
         }
 
         if (location.pathname !== path) {
@@ -653,7 +672,7 @@
           history.pushState({}, '', path);
           dispatchEvent(new PopStateEvent('popstate', { state: {} }));
           await waitFor(
-            5000,
+            2500,
             function () {
               return ((q('main h1') || {}).textContent || '') !== before;
             },
@@ -663,7 +682,7 @@
           if (((q('main h1') || {}).textContent || '') === before) {
             location.assign('https://open.spotify.com' + path);
             await waitFor(
-              20000,
+              8000,
               function () {
                 return !!q('[data-testid="control-button-playpause"]');
               },
@@ -676,7 +695,7 @@
         var actionButton = null;
         var heading = '';
         await waitFor(
-          20000,
+          5000,
           function () {
             heading = ((q('main h1') || {}).textContent || '').trim();
             actionButton = q('main [data-testid="action-bar-row"] [data-testid="play-button"]');

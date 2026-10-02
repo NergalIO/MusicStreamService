@@ -44,6 +44,7 @@ data class SpotifyDomState(
     val positionMs: Long = 0,
     val durationMs: Long = 0,
     val title: String = "",
+    val trackId: String = "",
 )
 
 @Singleton
@@ -405,6 +406,7 @@ class SpotifyWebSession @Inject constructor(
         if (!TRACK_ID_RE.matches(trackId)) throw ConnectorException("Некорректный id трека Spotify")
         wake()
         if (webView == null) throw ConnectorException("Веб-плеер Spotify не запущен — откройте Spotify в приложении")
+        cancelActivePlay()
         injectBridge()
         pageMutex.withLock {
             val first = awaitPlay(trackId, positionMs, fast)
@@ -415,6 +417,18 @@ class SpotifyWebSession @Inject constructor(
                 awaitPlay(trackId, positionMs, true)
             }
         }
+    }
+
+    fun cancelActivePlay() {
+        val cancelled = JSONObject().put("cancelled", true)
+        playWaiters.values.forEach { it.complete(cancelled) }
+        playWaiters.clear()
+        eval("window.__mss && window.__mss.cancel()")
+    }
+
+    fun stopPlayback() {
+        cancelActivePlay()
+        eval("window.__mss && window.__mss.stop()")
     }
 
     private fun deviceListForFastPlay(): List<String> {
@@ -450,7 +464,7 @@ class SpotifyWebSession @Inject constructor(
             """.trimIndent(),
         )
         val result = try {
-            withTimeoutOrNull(30_000) { done.await() }
+            withTimeoutOrNull(20_000) { done.await() }
                 ?: throw ConnectorException("Spotify не ответил")
         } finally {
             playWaiters.remove(id)
@@ -458,16 +472,15 @@ class SpotifyWebSession @Inject constructor(
         if (result.optBoolean("cancelled")) return result
         result.optString("deviceUrl").takeIf { it.isNotBlank() }?.let { ownDeviceUrl = it }
         runCatching {
-            val posted = result.optBoolean("posted")
-            val playing = result.optBoolean("playing") || posted
             val title = result.optString("trackTitle").ifBlank { result.optString("title") }
             _dom.value = SpotifyDomState(
                 ready = result.optBoolean("ready"),
-                playing = playing,
+                playing = result.optBoolean("playing"),
                 ad = result.optBoolean("ad"),
                 positionMs = result.optLong("positionMs"),
                 durationMs = result.optLong("durationMs"),
-                title = if (posted && !result.optBoolean("playing")) _dom.value.title else title,
+                title = title,
+                trackId = result.optString("trackId"),
             )
         }
         result.opt("remoteName")
@@ -568,6 +581,7 @@ class SpotifyWebSession @Inject constructor(
     )
 
     fun pause() {
+        cancelActivePlay()
         eval("window.__mss && window.__mss.pause()")
     }
 
@@ -665,6 +679,7 @@ class SpotifyWebSession @Inject constructor(
                     positionMs = obj.optLong("positionMs"),
                     durationMs = obj.optLong("durationMs"),
                     title = obj.optString("title"),
+                    trackId = obj.optString("trackId"),
                 )
             }
         }
