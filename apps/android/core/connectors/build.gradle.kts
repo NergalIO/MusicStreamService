@@ -24,6 +24,23 @@ android {
     kotlinOptions { jvmTarget = "17" }
 }
 
+val spotifyBridgeSrc = rootProject.projectDir.resolve("../../packages/stream-connectors/src/spotify-page-bridge.inject.js")
+val spotifyBridgeDst = file("src/main/assets/spotify-page-bridge.inject.js")
+
+tasks.register("syncSpotifyPageBridge") {
+    inputs.file(spotifyBridgeSrc)
+    outputs.file(spotifyBridgeDst)
+    doLast {
+        if (!spotifyBridgeSrc.exists()) return@doLast
+        spotifyBridgeDst.parentFile.mkdirs()
+        spotifyBridgeSrc.copyTo(spotifyBridgeDst, overwrite = true)
+    }
+}
+
+afterEvaluate {
+    tasks.findByName("preBuild")?.dependsOn("syncSpotifyPageBridge")
+}
+
 fun gradleProp(name: String, fallback: String): String {
     val value = (project.findProperty(name) as? String)?.trim().orEmpty()
     return value.ifBlank { fallback }

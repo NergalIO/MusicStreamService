@@ -11,7 +11,7 @@
     }
   },
   "scripts": {
-    "build": "tsc && node -e \"require('fs').copyFileSync('src/spotify-page-bridge.inject.js','dist/spotify-page-bridge.inject.js')\"",
+    "build": "tsc && node scripts/copy-spotify-page-bridge.cjs",
     "test": "vitest run"
   },
   "dependencies": {

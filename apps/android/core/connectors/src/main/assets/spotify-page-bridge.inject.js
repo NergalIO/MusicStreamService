@@ -1,6 +1,13 @@
 (function () {
-  var VERSION = 6;
+  var VERSION = 9;
   if (window.__mss && window.__mss.version === VERSION) return;
+  if (window.__mss && window.__mss.cancel) {
+    try {
+      window.__mss.cancel();
+    } catch (e) {
+      /* previous generation */
+    }
+  }
   if (window.__mssObserver) {
     try {
       window.__mssObserver.disconnect();
@@ -10,7 +17,10 @@
     window.__mssObserver = null;
   }
   if (window.__mssTimers) {
-    for (var ti = 0; ti < window.__mssTimers.length; ti++) clearInterval(window.__mssTimers[ti]);
+    for (var ti = 0; ti < window.__mssTimers.length; ti++) {
+      clearInterval(window.__mssTimers[ti]);
+      clearTimeout(window.__mssTimers[ti]);
+    }
     window.__mssTimers = [];
   }
 
@@ -24,8 +34,38 @@
     });
   }
 
+  function alive(el) {
+    return !!(el && el.isConnected);
+  }
+
+  var nodes = {
+    bar: null,
+    widget: null,
+    button: null,
+    title: null,
+    progress: null,
+    position: null,
+    duration: null,
+    volume: null,
+    connect: null,
+  };
+
+  function nowPlayingBar() {
+    if (alive(nodes.bar)) return nodes.bar;
+    nodes.bar = q('[data-testid="now-playing-bar"]') || q('footer');
+    return nodes.bar;
+  }
+
+  function playPauseButton() {
+    if (alive(nodes.button)) return nodes.button;
+    nodes.button = q('[data-testid="control-button-playpause"]');
+    return nodes.button;
+  }
+
+  var PAUSE_RE = /pause|pausar|pausa|pauzeren|pausieren|пауз|приостанов|一時停止|暂停/i;
+
   function isPauseLabel(el) {
-    return /pause|пауз/i.test((el && el.getAttribute('aria-label')) || '');
+    return PAUSE_RE.test((el && el.getAttribute('aria-label')) || '');
   }
 
   var AD_TITLE = /advertisement|реклама|advertencia|publicit[eé]|werbung|annuncio/i;
@@ -52,37 +92,56 @@
 
   function setRange(input, value) {
     var desc = Object.getOwnPropertyDescriptor(HTMLInputElement.prototype, 'value');
-    desc.set.call(input, String(value));
+    if (desc && desc.set) desc.set.call(input, String(value));
+    else input.value = String(value);
     input.dispatchEvent(new Event('input', { bubbles: true }));
     input.dispatchEvent(new Event('change', { bubbles: true }));
   }
 
   function barTitle() {
-    var bar = q('[data-testid="now-playing-bar"]') || q('footer');
-    var el =
-      (bar && bar.querySelector('[data-testid="context-item-info-title"]')) ||
-      q('[data-testid="context-item-info-title"]');
+    var bar = nowPlayingBar();
+    var el = alive(nodes.title)
+      ? nodes.title
+      : (bar && bar.querySelector('[data-testid="context-item-info-title"]')) ||
+        q('[data-testid="context-item-info-title"]');
+    nodes.title = el;
     return ((el && el.textContent) || '').trim();
   }
 
   function progressInput() {
-    return q('[data-testid="playback-progressbar"] input[type="range"]');
+    if (alive(nodes.progress)) return nodes.progress;
+    var bar = nowPlayingBar();
+    nodes.progress =
+      (bar && bar.querySelector('[data-testid="playback-progressbar"] input[type="range"]')) ||
+      q('[data-testid="playback-progressbar"] input[type="range"]');
+    return nodes.progress;
+  }
+
+  function clockEl(testId, cacheKey) {
+    if (alive(nodes[cacheKey])) return nodes[cacheKey];
+    var bar = nowPlayingBar();
+    nodes[cacheKey] =
+      (bar && bar.querySelector('[data-testid="' + testId + '"]')) || q('[data-testid="' + testId + '"]');
+    return nodes[cacheKey];
   }
 
   function readProgress() {
     var progress = progressInput();
-    var clockPos = parseClock((q('[data-testid="playback-position"]') || {}).textContent);
-    var clockDur = parseClock((q('[data-testid="playback-duration"]') || {}).textContent);
+    var clockPos = parseClock((clockEl('playback-position', 'position') || {}).textContent);
+    var clockDur = parseClock((clockEl('playback-duration', 'duration') || {}).textContent);
     if (!progress) return { positionMs: clockPos, durationMs: clockDur };
     var max = Number(progress.max);
     var val = Number(progress.value);
     if (max > 1000) return { positionMs: val, durationMs: max };
     if (max > 0 && clockDur > 0) return { positionMs: (val / max) * clockDur, durationMs: clockDur };
-    return { positionMs: clockPos, durationMs: clockDur || max };
+    return { positionMs: clockPos, durationMs: clockDur };
   }
 
   function barTrackId() {
-    var bar = q('[data-testid="now-playing-widget"]') || q('[data-testid="now-playing-bar"]');
+    var bar = alive(nodes.widget)
+      ? nodes.widget
+      : q('[data-testid="now-playing-widget"]') || nowPlayingBar();
+    nodes.widget = bar;
     var link =
       (bar && bar.querySelector('[data-testid="context-item-info-title"] a[href*="/track/"]')) ||
       (bar && bar.querySelector('a[href*="/track/"]'));
@@ -96,7 +155,7 @@
   }
 
   function readState() {
-    var button = q('[data-testid="control-button-playpause"]');
+    var button = playPauseButton();
     var prog = readProgress();
     return {
       ready: !!button,
@@ -120,46 +179,62 @@
     } catch (e) {
       /* native bridge missing */
     }
-    try {
-      console.debug('__mss:' + kind + ':' + json);
-    } catch (e2) {
-      /* console blocked */
+    if (kind !== 'state' || typeof MssSpotify === 'undefined') {
+      try {
+        console.debug('__mss:' + kind + ':' + json);
+      } catch (e2) {
+        /* console blocked */
+      }
     }
   }
 
   var LOCAL_RE =
     /this web browser|этот веб-браузер|этот браузер|this computer|этот компьютер|this device|это устройство/i;
+  var WEB_PLAYER_RE = /web player|веб-плеер/i;
   var PLAYING_RE =
     /^(?:playing on|listening on|воспроизводится на|воспроизведение на|слушаете на|играет на)\s+/i;
   var CONNECT_ROW_RE =
     /^(?:connect to this device|подключиться к этому устройству|подключить это устройство)[.…]?/i;
 
   function isLocalName(n) {
-    return LOCAL_RE.test(String(n || ''));
-  }
-
-  /** «Web Player (Chrome)» — и этот плеер, и чужой. После своей команды play это мы, не колонка. */
-  function isLikelySelfName(n) {
-    return isLocalName(n) || /web player|веб-плеер/i.test(String(n || ''));
+    var name = String(n || '');
+    if (LOCAL_RE.test(name)) return true;
+    if (!WEB_PLAYER_RE.test(name)) return false;
+    var lower = name.toLowerCase();
+    var ua = String((typeof navigator !== 'undefined' && navigator.userAgent) || '').toLowerCase();
+    if (ua.indexOf('edg') >= 0) return lower.indexOf('edge') >= 0;
+    if (ua.indexOf('firefox') >= 0) return lower.indexOf('firefox') >= 0;
+    if (ua.indexOf('chrome') >= 0) return lower.indexOf('chrome') >= 0 && lower.indexOf('edge') < 0;
+    return false;
   }
 
   function remoteFromBar() {
-    var bar = q('[data-testid="now-playing-bar"]') || q('footer');
+    var bar = nowPlayingBar();
     if (!bar) return null;
-    var els = bar.querySelectorAll('button, a, span, div');
-    for (var i = 0; i < els.length; i++) {
-      var el = els[i];
-      if (el.childElementCount > 4) continue;
-      var t = String(el.innerText || el.textContent || '').replace(/\s+/g, ' ').trim();
+    var parts = [];
+    var btn = connectBtn();
+    if (btn) {
+      parts.push(btn.getAttribute('aria-label') || '');
+      parts.push(btn.innerText || btn.textContent || '');
+    }
+    var labeled = bar.querySelectorAll('[aria-label]');
+    for (var i = 0; i < labeled.length && i < 48; i++) {
+      parts.push(labeled[i].getAttribute('aria-label') || '');
+    }
+    for (var p = 0; p < parts.length; p++) {
+      var t = String(parts[p] || '')
+        .replace(/\s+/g, ' ')
+        .trim();
       if (!PLAYING_RE.test(t)) continue;
       var name = t.replace(PLAYING_RE, '').trim();
-      if (name && !isLikelySelfName(name)) return name;
+      if (name && !isLocalName(name)) return name;
     }
     return null;
   }
 
   function connectBtn() {
-    return (
+    if (alive(nodes.connect)) return nodes.connect;
+    nodes.connect =
       q(
         '[data-testid="connect-device-picker"], [data-testid="device-picker-icon-button"], [data-testid="control-button-connect"]',
       ) ||
@@ -169,8 +244,8 @@
           return /connect|device|устройств/i.test(b.getAttribute('aria-label') || '');
         },
       ) ||
-      null
-    );
+      null;
+    return nodes.connect;
   }
 
   function pickerRows() {
@@ -179,18 +254,25 @@
     );
   }
 
-  function openPicker() {
+  function generationAlive(gen) {
+    return gen === undefined || gen === mss.gen;
+  }
+
+  function openPicker(gen) {
     return (async function () {
       if (pickerRows().length) return true;
       var b = connectBtn();
       if (!b) return false;
       b.click();
-      for (var i = 0; i < 30 && !pickerRows().length; i++) await sleep(100);
+      for (var i = 0; i < 30 && !pickerRows().length; i++) {
+        if (!generationAlive(gen)) return false;
+        await sleep(100);
+      }
       return pickerRows().length > 0;
     })();
   }
 
-  function closePicker() {
+  function closePicker(gen) {
     return (async function () {
       if (!pickerRows().length) return;
       var close = q('[data-testid="PanelHeader_CloseButton"] button, [data-testid="PanelHeader_CloseButton"]');
@@ -199,8 +281,21 @@
         var b = connectBtn();
         if (b) b.click();
       }
-      for (var i = 0; i < 20 && pickerRows().length; i++) await sleep(100);
+      for (var i = 0; i < 20 && pickerRows().length; i++) {
+        if (!generationAlive(gen)) return;
+        await sleep(100);
+      }
     })();
+  }
+
+  function pickerRowActive(row) {
+    var selected = row.getAttribute('aria-selected');
+    var current = row.getAttribute('aria-current');
+    if (selected === 'true' || current === 'true') return true;
+    if (selected === 'false' || current === 'false') return false;
+    if (row.querySelector('[aria-selected="true"], [aria-current="true"]')) return true;
+    if (row.querySelector('[aria-selected="false"]')) return false;
+    return !row.closest('ul, [role="list"]');
   }
 
   function readPicker() {
@@ -210,23 +305,22 @@
     for (var i = 0; i < rows.length; i++) {
       var row = rows[i];
       var titled = (row.querySelector('[data-testid="list-row-title"]') || {}).textContent;
-      var lines = String(titled || row.innerText || '')
+      var name = String(titled || row.innerText || '')
         .split('\n')
         .map(function (s) {
           return s.trim();
         })
         .filter(function (s) {
-          return s && !CONNECT_ROW_RE.test(s);
-        });
-      var name = lines[lines.length - 1] || '';
-      if (!name || name.length > 60) continue;
+          return s && !CONNECT_ROW_RE.test(s) && s.length <= 60;
+        })[0] || '';
+      if (!name) continue;
       var inList = !!row.closest('ul, [role="list"]');
       var key = name + (inList ? '|list' : '|current');
       if (seen[key]) continue;
       seen[key] = true;
       out.push({
         name: name,
-        active: !inList,
+        active: pickerRowActive(row),
         local: isLocalName(name),
         el: row.querySelector('[role="button"]') || row,
       });
@@ -234,18 +328,41 @@
     return out;
   }
 
-  function transferHere() {
+  function matchPickerRow(rows, target) {
+    var exactInactive = rows.find(function (d) {
+      return !d.active && d.name === target;
+    });
+    if (exactInactive) return exactInactive;
+    var exact = rows.find(function (d) {
+      return d.name === target;
+    });
+    if (exact) return exact;
+    if (!target) return null;
+    var partial = rows.filter(function (d) {
+      return !d.active && d.name.indexOf(target) >= 0;
+    });
+    return partial.length === 1 ? partial[0] : null;
+  }
+
+  function transferHere(gen) {
     return (async function () {
       if (!remoteFromBar()) return true;
-      if (!(await openPicker())) return false;
+      if (!(await openPicker(gen))) return false;
+      if (!generationAlive(gen)) return false;
       var here = readPicker().find(function (d) {
         return d.local && !d.active;
       });
       if (here) {
         here.el.click();
-        for (var i = 0; i < 24 && remoteFromBar(); i++) await sleep(250);
+        closePicker(gen);
+        for (var i = 0; i < 8; i++) {
+          if (!generationAlive(gen)) return false;
+          if (!remoteFromBar()) return true;
+          await sleep(100);
+        }
+        return !remoteFromBar();
       }
-      await closePicker();
+      await closePicker(gen);
       return !remoteFromBar();
     })();
   }
@@ -257,35 +374,30 @@
   }
 
   function collectDevices(auth) {
-    var devices = [];
-    function add(url) {
-      var d = parseDeviceUrl(url);
-      if (!d) return;
-      for (var i = 0; i < devices.length; i++) {
-        if (devices[i].id === d.id) {
-          devices.splice(i, 1);
-          break;
-        }
-      }
-      devices.push(d);
-    }
-    if (mss.ownDevice && mss.ownDevice.url) add(mss.ownDevice.url);
+    var own = (mss.ownDevice && mss.ownDevice.url) || '';
     var list = (auth && auth.devices) || [];
-    for (var a = 0; a < list.length; a++) add(list[a]);
-    if (!mss.ownDevice) {
-      try {
-        var entries = performance.getEntriesByType('resource');
-        for (var e = 0; e < entries.length; e++) add(entries[e].name);
-      } catch (err) {
-        /* no performance timeline */
-      }
+    var seen = {};
+    function consider(url) {
+      var d = parseDeviceUrl(url);
+      if (!d || seen[d.id]) return null;
+      seen[d.id] = true;
+      return d;
     }
-    if (mss.ownDevice) {
-      for (var x = 0; x < devices.length; x++) {
-        if (devices[x].id === mss.ownDevice.id) return devices[x];
-      }
+    var first = consider(own);
+    if (first) return first;
+    for (var a = 0; a < list.length; a++) {
+      var next = consider(list[a]);
+      if (next) return next;
     }
-    return devices.length ? devices[devices.length - 1] : null;
+    return null;
+  }
+
+  function fastPlayLooksStarted(s, beforeTitle, trackId) {
+    if (s.ad) return true;
+    if (!s.playing) return false;
+    if (s.trackId === trackId) return true;
+    if (location.pathname.indexOf(trackId) >= 0) return true;
+    return !!(s.title && beforeTitle && s.title !== beforeTitle);
   }
 
   function fastPlay(auth, trackId, positionMs, gen) {
@@ -325,14 +437,12 @@
         var s = readState();
         var remote = remoteFromBar();
         if (remote) return { ok: false, remoteName: remote, state: s };
-        var restarted =
-          s.positionMs < positionMs + 3000 && (!before.playing || before.positionMs > positionMs + 3000);
-        if (s.ad || (s.playing && (s.title !== before.title || restarted || location.pathname.indexOf(trackId) >= 0))) {
+        if (fastPlayLooksStarted(s, before.title, trackId)) {
           return { ok: true, deviceUrl: dev.url, state: s };
         }
         await sleep(80);
       }
-      return { ok: true, posted: true, deviceUrl: dev.url, state: readState() };
+      return { ok: false, state: readState() };
     })();
   }
 
@@ -349,24 +459,33 @@
   }
 
   function clickPlayPause(wantPlaying) {
-    var button = q('[data-testid="control-button-playpause"]');
+    var button = playPauseButton();
     if (!button) throw new Error('Веб-плеер Spotify не загрузился');
     if (isPauseLabel(button) !== wantPlaying) button.click();
     return true;
   }
 
+  function seekSliderValue(positionMs, max, durationMs) {
+    if (!(max > 0) || !(positionMs >= 0)) return null;
+    if (max > 1000) return Math.min(positionMs, max);
+    if (!(durationMs > 1000)) return null;
+    return (Math.min(positionMs, durationMs) / durationMs) * max;
+  }
+
   function applySeek(positionMs) {
     var progress = progressInput();
     if (!progress) return false;
-    var max = Number(progress.max);
-    var duration = readProgress().durationMs || positionMs;
-    var value = max > 1000 ? Math.min(positionMs, max) : max > 0 ? (Math.min(positionMs, duration) / (duration || 1)) * max : positionMs;
+    var value = seekSliderValue(positionMs, Number(progress.max), readProgress().durationMs || 0);
+    if (value == null) return false;
     setRange(progress, value);
     return true;
   }
 
   function applyVolume(fraction) {
-    var volume = q('[data-testid="volume-bar"] input[type="range"]') || q('[aria-label*="Volume"] input');
+    var volume = alive(nodes.volume)
+      ? nodes.volume
+      : q('[data-testid="volume-bar"] input[type="range"]') || q('[aria-label*="Volume"] input');
+    nodes.volume = volume;
     if (!volume) return false;
     var max = Number(volume.max);
     var v = Math.max(0, Math.min(1, fraction));
@@ -375,57 +494,134 @@
   }
 
   var lastPush = '';
+  var lastRemote = undefined;
   var endedFor = null;
   var armed = false;
+  var lastEndedTitle = '';
+  var lastWasAd = false;
+  var lastNearEnd = false;
+  var lastOurs = false;
 
-  function pushState(s) {
-    var key = s.playing + '|' + s.ad + '|' + s.title + '|' + (s.trackId || '') + '|' + Math.round((s.positionMs || 0) / 250) + '|' + s.durationMs;
-    if (key === lastPush) return;
-    lastPush = key;
-    notify('state', s);
-    if (s.durationMs > 0 && s.durationMs - s.positionMs > mss.endLeadMs) {
-      if (s.playing && !s.ad) armed = true;
+  function leftPrevNearEnd(positionMs, durationMs) {
+    return durationMs > 0 && durationMs - positionMs < 5000 && positionMs * 2 > durationMs;
+  }
+
+  function considerEnded(s, seeking) {
+    var expected = mss.lastTrackId;
+    var ours = !!(
+      expected &&
+      (s.trackId === expected || (!s.trackId && s.title && s.title === lastEndedTitle && lastOurs))
+    );
+    if (seeking) {
+      armed = false;
+      lastEndedTitle = s.title;
+      lastWasAd = s.ad;
+      lastNearEnd = false;
+      lastOurs = ours;
+      return;
     }
-    if (
-      armed &&
-      !s.ad &&
-      s.playing &&
-      s.durationMs > 0 &&
-      s.durationMs - s.positionMs <= mss.endLeadMs &&
-      mss.lastTrackId
-    ) {
-      if (endedFor !== mss.lastTrackId) {
-        endedFor = mss.lastTrackId;
-        notify('ended', { trackId: mss.lastTrackId });
+    var left = s.durationMs - s.positionMs;
+    if (ours && s.durationMs > 0 && left > mss.endLeadMs && s.playing && !s.ad) armed = true;
+    if (armed && !s.ad && expected && endedFor !== expected) {
+      var near = s.durationMs > 0 && left <= mss.endLeadMs;
+      var emit = false;
+      if (ours && s.playing && near) emit = true;
+      else if (!ours && lastWasAd && s.title && s.title !== lastEndedTitle) emit = true;
+      else if (!ours && lastOurs && lastNearEnd) emit = true;
+      if (emit) {
+        endedFor = expected;
+        notify('ended', { trackId: expected });
       }
     }
+    lastEndedTitle = s.title;
+    lastWasAd = s.ad;
+    lastNearEnd = leftPrevNearEnd(s.positionMs, s.durationMs);
+    lastOurs = ours;
+  }
+
+  function pushState(s, seeking) {
+    var remote = remoteFromBar();
+    if (remote !== lastRemote) {
+      var hadRemote = lastRemote !== undefined;
+      lastRemote = remote;
+      if (hadRemote || remote) notify('remote', { remoteName: remote || '' });
+    }
+    var key =
+      s.playing +
+      '|' +
+      s.ad +
+      '|' +
+      s.title +
+      '|' +
+      (s.trackId || '') +
+      '|' +
+      Math.round((s.positionMs || 0) / 250) +
+      '|' +
+      s.durationMs +
+      '|' +
+      (remote || '');
+    if (!seeking && key === lastPush) return;
+    lastPush = key;
+    notify('state', s);
+    considerEnded(s, seeking);
   }
 
   function installObserver() {
     if (window.__mssObserver) return;
     function pick() {
-      return q('[data-testid="now-playing-bar"]') || q('footer');
+      return nowPlayingBar();
     }
     var bar = null;
     var button = null;
     var titleEl = null;
+    var posEl = null;
+    var durEl = null;
+    var progressEl = null;
     var obs = new MutationObserver(function () {
       pushState(readState());
     });
     function attach() {
       var next = pick();
-      var btn = q('[data-testid="control-button-playpause"]');
+      var btn = playPauseButton();
       var title =
         (next && next.querySelector('[data-testid="context-item-info-title"]')) ||
         q('[data-testid="context-item-info-title"]');
-      if (next === bar && btn === button && title === titleEl) return;
+      if (next !== bar) {
+        nodes.progress = null;
+        nodes.position = null;
+        nodes.duration = null;
+        nodes.volume = null;
+        nodes.connect = null;
+        nodes.widget = null;
+      }
+      var nextPos = clockEl('playback-position', 'position');
+      var nextDur = clockEl('playback-duration', 'duration');
+      var nextProgress = progressInput();
+      if (
+        next === bar &&
+        btn === button &&
+        title === titleEl &&
+        nextPos === posEl &&
+        nextDur === durEl &&
+        nextProgress === progressEl
+      ) {
+        return;
+      }
       obs.disconnect();
       bar = next;
       button = btn;
       titleEl = title;
+      posEl = nextPos;
+      durEl = nextDur;
+      progressEl = nextProgress;
+      nodes.bar = next;
+      nodes.button = btn;
+      nodes.title = title;
       if (btn) obs.observe(btn, { attributes: true, attributeFilter: ['aria-label'] });
       if (title) obs.observe(title, { childList: true, characterData: true, subtree: true });
-      if (next) obs.observe(next, { childList: true });
+      if (posEl) obs.observe(posEl, { childList: true, characterData: true, subtree: true, attributes: true });
+      if (durEl) obs.observe(durEl, { childList: true, characterData: true, subtree: true });
+      if (progressEl) obs.observe(progressEl, { attributes: true, attributeFilter: ['value', 'aria-valuenow'] });
       pushState(readState());
     }
     window.__mssObserver = obs;
@@ -434,7 +630,8 @@
     window.__mssTimers.push(setInterval(attach, 1000));
     window.__mssTimers.push(
       setInterval(function () {
-        pushState(readState());
+        var s = readState();
+        if (s.playing || s.ad) pushState(s);
       }, 250),
     );
   }
@@ -485,11 +682,14 @@
       this.lastTrackId = null;
       armed = false;
       endedFor = null;
+      lastNearEnd = false;
+      lastOurs = false;
       return this.pause();
     },
     seek: function (positionMs) {
+      armed = false;
       var ok = applySeek(positionMs);
-      pushState(readState());
+      pushState(readState(), true);
       return ok;
     },
     setVolume: function (fraction) {
@@ -500,7 +700,7 @@
       var self = this;
       self.volGen += 1;
       var gen = self.volGen;
-      var start = typeof performance !== 'undefined' && performance.now ? performance.now() : Date.now();
+      var start = Date.now();
       var ms = Number.isFinite(durationMs) ? Math.max(0, durationMs) : 0;
       applyVolume(from);
       if (ms <= 0) {
@@ -508,51 +708,55 @@
         return Promise.resolve();
       }
       return new Promise(function (resolve) {
-        function step(now) {
+        function step() {
           if (gen !== self.volGen) {
             resolve();
             return;
           }
-          var t = Math.min(1, (now - start) / ms);
+          var t = Math.min(1, (Date.now() - start) / ms);
           applyVolume(from + (to - from) * t);
           if (t >= 1) resolve();
-          else requestAnimationFrame(step);
+          else {
+            var id = setTimeout(step, 50);
+            window.__mssTimers = window.__mssTimers || [];
+            window.__mssTimers.push(id);
+          }
         }
-        requestAnimationFrame(step);
+        var first = setTimeout(step, 50);
+        window.__mssTimers = window.__mssTimers || [];
+        window.__mssTimers.push(first);
       });
     },
     devices: function (action, target) {
       var self = this;
+      if (action !== 'list' && action !== 'select') {
+        return Promise.resolve({ remoteName: remoteFromBar(), devices: [] });
+      }
+      var gen = self.gen;
       return this.enqueue(async function () {
+        if (gen !== self.gen) return { remoteName: remoteFromBar(), devices: [] };
         function plain(list) {
           return list.map(function (d) {
             return { name: d.name, active: d.active, local: d.local };
           });
         }
         if (action === 'select') {
-          if (!(await openPicker())) throw new Error('Кнопка устройств Spotify не найдена');
+          if (!(await openPicker(gen))) throw new Error('Кнопка устройств Spotify не найдена');
+          if (gen !== self.gen) return { remoteName: remoteFromBar(), devices: [] };
           var rows = readPicker();
-          var row =
-            rows.find(function (d) {
-              return !d.active && d.name === target;
-            }) ||
-            rows.find(function (d) {
-              return !d.active && target && d.name.indexOf(target) >= 0;
-            }) ||
-            rows.find(function (d) {
-              return d.name === target;
-            });
+          var row = matchPickerRow(rows, target);
           if (!row) {
-            await closePicker();
+            await closePicker(gen);
             throw new Error('Устройство Spotify не найдено');
           }
           if (!row.active) row.el.click();
           for (var i = 0; i < 16; i++) {
+            if (gen !== self.gen) break;
             await sleep(250);
             var r = remoteFromBar();
-            if (row.local ? !r : r) break;
+            if (row.local ? !r : r && (r === row.name || r.indexOf(row.name) >= 0 || row.name.indexOf(r) >= 0)) break;
           }
-          await closePicker();
+          await closePicker(gen);
           var remoteName = remoteFromBar();
           return { remoteName: remoteName, selectedLocal: !!(row.local && !remoteName), devices: plain(rows) };
         }
@@ -560,9 +764,9 @@
         var list = [];
         if (action === 'list') {
           var wasOpen = pickerRows().length > 0;
-          if (await openPicker()) {
+          if (await openPicker(gen)) {
             list = readPicker();
-            if (!wasOpen) await closePicker();
+            if (!wasOpen) await closePicker(gen);
           }
           if (!remote) {
             var current = list.find(function (d) {
@@ -589,6 +793,7 @@
         if (gen !== self.gen) return { cancelled: true };
         armed = false;
         endedFor = null;
+        lastNearEnd = false;
 
         function pack(state, extra) {
           extra = extra || {};
@@ -611,28 +816,53 @@
           };
         }
 
-        var path = '/track/' + trackId;
-        var alreadyHere = location.pathname.indexOf(trackId) >= 0;
-        if (alreadyHere) {
-          var hereState = readState();
-          if (hereState.playing || hereState.ad) {
-            if (target > 0 && Math.abs(hereState.positionMs - target) > 2000) applySeek(target);
-            self.lastTrackId = trackId;
-            return pack(readState());
+        function sameTrack(state, heading) {
+          return !!(
+            state.trackId === trackId ||
+            (heading && state.title === heading) ||
+            location.pathname.indexOf(trackId) >= 0
+          );
+        }
+
+        async function seekIfNeeded() {
+          var s = readState();
+          if (target > 0 && !s.ad && s.playing && Math.abs(s.positionMs - target) > 2000) {
+            applySeek(target);
+            s = readState();
           }
-          if (q('[data-testid="control-button-playpause"]')) clickPlayPause(true);
-          if (target > 0 && Math.abs(hereState.positionMs - target) > 2000) applySeek(target);
-          await waitFor(
-            4000,
+          return s;
+        }
+
+        async function waitPlaying(ms) {
+          return waitFor(
+            ms,
             function () {
               var s = readState();
               return s.playing || s.ad;
             },
             gen,
           );
+        }
+
+        if (location.pathname.indexOf(trackId) >= 0) {
+          var hereState = readState();
+          if (hereState.ad || (hereState.playing && (hereState.trackId === trackId || !hereState.trackId))) {
+            self.lastTrackId = trackId;
+            return pack(await seekIfNeeded());
+          }
+          if (playPauseButton()) clickPlayPause(true);
+          var startedHere = await waitPlaying(1500);
+          if (!startedHere && gen === self.gen && playPauseButton()) {
+            clickPlayPause(true);
+            startedHere = await waitPlaying(1500);
+          }
           if (gen !== self.gen) return { cancelled: true };
+          var afterHere = readState();
+          if (!afterHere.playing && !afterHere.ad) {
+            return pack(afterHere, { error: 'Spotify не запустил трек — проверьте веб-плеер (Spotify → Веб-плеер)' });
+          }
           self.lastTrackId = trackId;
-          return pack(readState());
+          return pack(await seekIfNeeded());
         }
 
         if (auth && auth.authorization) {
@@ -644,47 +874,48 @@
             if (fast.deviceUrl) self.ownDevice = parseDeviceUrl(fast.deviceUrl);
             self.lastTrackId = trackId;
             var fs = fast.state || readState();
-            var confirmed = !!(fs.ad || (fs.playing && (fs.trackId === trackId || location.pathname.indexOf(trackId) >= 0)));
             return pack(fs, {
               deviceUrl: fast.deviceUrl,
-              trackTitle: confirmed ? fs.title : '',
+              trackTitle: fs.title,
               trackId: trackId,
-              playing: confirmed,
-              posted: !confirmed,
+              playing: true,
             });
           }
         }
 
-        await waitFor(
-          5000,
-          function () {
-            return !!q('[data-testid="control-button-playpause"]');
-          },
-          gen,
-        );
+        if (!playPauseButton()) {
+          await waitFor(
+            5000,
+            function () {
+              return !!playPauseButton();
+            },
+            gen,
+          );
+        }
         if (gen !== self.gen) return { cancelled: true };
-        if (!q('[data-testid="control-button-playpause"]')) {
+        if (!playPauseButton()) {
           return pack(readState(), { error: 'Веб-плеер Spotify не загрузился' });
         }
 
+        var path = '/track/' + trackId;
         if (location.pathname !== path) {
           var before = (q('main h1') || {}).textContent || '';
           history.pushState({}, '', path);
           dispatchEvent(new PopStateEvent('popstate', { state: {} }));
-          await waitFor(
-            2500,
+          var routed = await waitFor(
+            400,
             function () {
               return ((q('main h1') || {}).textContent || '') !== before;
             },
             gen,
           );
           if (gen !== self.gen) return { cancelled: true };
-          if (((q('main h1') || {}).textContent || '') === before) {
+          if (!routed) {
             location.assign('https://open.spotify.com' + path);
             await waitFor(
               8000,
               function () {
-                return !!q('[data-testid="control-button-playpause"]');
+                return !!playPauseButton() && location.pathname.indexOf(trackId) >= 0;
               },
               gen,
             );
@@ -706,11 +937,11 @@
         if (gen !== self.gen) return { cancelled: true };
         if (!actionButton || location.pathname.indexOf(trackId) < 0) {
           heading = ((q('main h1') || {}).textContent || barTitle() || '').trim();
-          actionButton = q('[data-testid="control-button-playpause"]');
+          actionButton = playPauseButton();
         }
         if (!actionButton) return pack(readState(), { error: 'Не удалось открыть трек в веб-плеере Spotify' });
 
-        var movedHere = await transferHere();
+        var movedHere = await transferHere(gen);
         if (gen !== self.gen) return { cancelled: true };
         if (!movedHere) {
           var busy = remoteFromBar();
@@ -721,29 +952,37 @@
         }
 
         var bar = readState();
-        if (bar.playing || bar.ad) {
+        if ((bar.playing || bar.ad) && sameTrack(bar, heading)) {
           self.lastTrackId = trackId;
-          return pack(bar, { trackTitle: heading || bar.title });
+          return pack(await seekIfNeeded(), { trackTitle: heading || bar.title });
         }
         if (!isPauseLabel(actionButton)) actionButton.click();
-        await waitFor(
-          10000,
-          function () {
-            var s = readState();
-            return s.playing && (s.title === heading || !heading || s.ad);
-          },
-          gen,
-        );
+        var started = await waitPlaying(1500);
+        if (!started && gen === self.gen) {
+          actionButton = playPauseButton() || actionButton;
+          if (actionButton && !isPauseLabel(actionButton)) actionButton.click();
+          started = await waitPlaying(1500);
+        }
+        if (started) {
+          await waitFor(
+            10000,
+            function () {
+              var s = readState();
+              return s.playing && (s.title === heading || !heading || s.ad || s.trackId === trackId);
+            },
+            gen,
+          );
+        }
         if (gen !== self.gen) return { cancelled: true };
 
         var state = readState();
         if (!state.ad && heading && state.title !== heading && !state.playing) {
           return pack(state, { error: 'Spotify не запустил трек — проверьте веб-плеер (Spotify → Веб-плеер)' });
         }
-        if (target > 0 && !state.ad && Math.abs(state.positionMs - target) > 2000) {
-          applySeek(target);
-          state.positionMs = target;
+        if (!state.playing && !state.ad) {
+          return pack(state, { error: 'Spotify не запустил трек — проверьте веб-плеер (Spotify → Веб-плеер)' });
         }
+        state = await seekIfNeeded();
         self.lastTrackId = trackId;
         return pack(state, { trackTitle: heading || state.title });
       });

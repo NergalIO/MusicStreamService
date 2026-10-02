@@ -443,10 +443,6 @@ async function logout(): Promise<void> {
   emitLoggedIn();
 }
 
-export function isSpotifyWebSessionVisible(): boolean {
-  return visible;
-}
-
 function bindWindow(win: BrowserWindow): void {
   const relayout = () => {
     if (visible) applyBounds(lastBounds);

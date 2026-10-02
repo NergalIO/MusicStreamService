@@ -1,5 +1,6 @@
 import { BrowserWindow, ipcMain } from 'electron';
 import { log } from './logger.js';
+import { advanceTrackEnd, emptyTrackEndWatch, type TrackEndWatch } from '@mss/stream-connectors';
 import {
   currentSpotifyWebHeaders,
   invalidateSpotifyWebHeaders,
@@ -39,7 +40,6 @@ export interface SpotifyPlayResult {
   positionMs: number;
   durationMs: number;
   remoteDevice: string | null;
-  posted?: boolean;
 }
 
 export interface SpotifyDevice {
@@ -67,7 +67,6 @@ interface PageState {
   deviceUrl?: string | null;
   cancelled?: boolean;
   authFailed?: boolean;
-  posted?: boolean;
   error?: string;
 }
 
@@ -89,7 +88,7 @@ let active = false;
 let playSeq = 0;
 let endLeadMs = END_EARLY_MS;
 let starting = false;
-let armed = false;
+let endWatch: TrackEndWatch = emptyTrackEndWatch();
 let lastDevices: SpotifyDeviceStatus = { remoteName: null, devices: [] };
 let deviceGate: Promise<void> = Promise.resolve();
 
@@ -130,39 +129,40 @@ function emitConnectState(s: PageState): SpotifyConnectState {
   return payload;
 }
 
-function leftPrevNearEnd(prev: PageState): boolean {
-  if (!(prev.durationMs > 0)) return false;
-  return prev.durationMs - prev.positionMs < 5000 && prev.positionMs * 2 > prev.durationMs;
-}
-
-function handleState(s: PageState): number {
-  const prev = lastState;
+function handleState(s: PageState, allowEnded = true): number {
   lastState = s;
-  const ours = (expectedTrackId && s.trackId === expectedTrackId) || (!!expectedTitle && s.title === expectedTitle);
-  const left = s.durationMs - s.positionMs;
-  if (ours && s.durationMs > 0 && left > endLeadMs) armed = true;
-  if (!s.ad && armed && !starting) {
-    if (ours && s.playing && s.durationMs > 0 && left <= endLeadMs) {
-      emitEnded();
-    } else if (!ours && prev?.ad && expectedTitle && s.title !== expectedTitle) {
-      emitEnded();
-    } else if (!ours && prev && prev.title === expectedTitle && leftPrevNearEnd(prev)) {
-      emitEnded();
-    }
+  if (allowEnded && expectedTrackId) {
+    const sampleTrackId =
+      s.trackId || (expectedTitle && s.title === expectedTitle ? expectedTrackId : null);
+    const next = advanceTrackEnd(
+      endWatch,
+      {
+        playing: !!s.playing,
+        ad: !!s.ad,
+        title: s.title || '',
+        trackId: sampleTrackId ?? null,
+        positionMs: s.positionMs || 0,
+        durationMs: s.durationMs || 0,
+      },
+      expectedTrackId,
+      endLeadMs,
+    );
+    endWatch = next.watch;
+    if (next.emitTrackId) emitEnded();
   }
   emitConnectState(s);
   return POLL_WATCHDOG_MS;
 }
 
 function onPageMessage(message: string): void {
-  if (!active || starting) return;
+  if (!active) return;
   if (message.startsWith('__mss:ended:')) {
-    emitEnded();
+    if (!starting) emitEnded();
     return;
   }
   if (!expectedTrackId || !message.startsWith('__mss:state:')) return;
   try {
-    handleState(JSON.parse(message.slice('__mss:state:'.length)) as PageState);
+    handleState(JSON.parse(message.slice('__mss:state:'.length)) as PageState, !starting);
   } catch {
     /* ignore malformed page payload */
   }
@@ -171,16 +171,12 @@ function onPageMessage(message: string): void {
 async function poll(): Promise<void> {
   pollTimer = null;
   if (!active) return;
-  if (starting) {
-    schedulePoll(400);
-    return;
-  }
   try {
-    handleState(await spotifyWebExec<PageState>('window.__mss.state()'));
+    handleState(await spotifyWebExec<PageState>('window.__mss.state()'), !starting);
   } catch (e) {
     log.warn('spotify web player poll failed', e instanceof Error ? e.message : e);
   }
-  schedulePoll(POLL_WATCHDOG_MS);
+  schedulePoll(starting ? 400 : POLL_WATCHDOG_MS);
 }
 
 function withDevicePage<T>(fn: () => Promise<T>): Promise<T> {
@@ -249,7 +245,7 @@ async function play(trackId: string, positionMs = 0, fast = false): Promise<Spot
   expectedTrackId = trackId;
   expectedTitle = null;
   endedFor = null;
-  armed = false;
+  endWatch = emptyTrackEndWatch();
   lastState = null;
   try {
     const state = await playOnce(trackId, positionMs, fast, false);
@@ -257,11 +253,8 @@ async function play(trackId: string, positionMs = 0, fast = false): Promise<Spot
     if (state?.cancelled) return;
     if (state?.deviceUrl) markSpotifyOwnDevice(state.deviceUrl);
     if (state?.error && !state.remoteName && !state.ad) throw new Error(state.error);
-    if (!state.posted || state.playing || state.ad) {
+    if (state.playing || state.ad) {
       expectedTitle = state.trackTitle || state.title;
-    }
-    if (state.posted && !state.playing && !state.ad && !state.remoteName) {
-      state.playing = true;
     }
     lastState = state;
     const sent = emitConnectState(state);
@@ -277,7 +270,6 @@ async function play(trackId: string, positionMs = 0, fast = false): Promise<Spot
         positionMs: sent.positionMs,
         durationMs: sent.durationMs,
         remoteDevice: null,
-        posted: !!state.posted,
       },
       state.remoteName,
     );
@@ -382,6 +374,7 @@ async function stop(): Promise<void> {
   expectedTrackId = null;
   expectedTitle = null;
   lastState = null;
+  endWatch = emptyTrackEndWatch();
   if (pollTimer) clearTimeout(pollTimer);
   pollTimer = null;
   pendingVolume = null;

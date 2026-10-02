@@ -190,7 +190,7 @@ export async function startSpotifyTrack(
       duration: started.durationMs / 1000,
     });
   } else {
-    const confirmed = !!started.playing && !started.posted;
+    const confirmed = !!started.playing;
     setAnchor(startAtSeconds * 1000, true);
     markPositionMoved(startAtSeconds * 1000);
     holdLocal({ playing: true, positionMs: startAtSeconds * 1000 });

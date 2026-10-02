@@ -117,8 +117,6 @@ class SpotifyWebSession @Inject constructor(
         _loggedIn.value = false
     }
 
-    fun isReady(): Boolean = webView != null && _loggedIn.value
-
     fun operationHash(name: String): String? = hashes[name]
 
     fun invalidateHashes() {
@@ -407,15 +405,13 @@ class SpotifyWebSession @Inject constructor(
         wake()
         if (webView == null) throw ConnectorException("Веб-плеер Spotify не запущен — откройте Spotify в приложении")
         cancelActivePlay()
-        injectBridge()
-        pageMutex.withLock {
-            val first = awaitPlay(trackId, positionMs, fast)
-            if (first.optBoolean("cancelled")) return@withLock
-            if (first.optBoolean("authFailed") && fast) {
-                invalidateHeaders()
-                runCatching { awaitHeaders() }
-                awaitPlay(trackId, positionMs, true)
-            }
+        ensureBridge()
+        val first = awaitPlay(trackId, positionMs, fast)
+        if (first.optBoolean("cancelled")) return
+        if (first.optBoolean("authFailed") && fast) {
+            invalidateHeaders()
+            runCatching { awaitHeaders() }
+            awaitPlay(trackId, positionMs, true)
         }
     }
 
@@ -497,15 +493,10 @@ class SpotifyWebSession @Inject constructor(
         return result
     }
 
-    /** Открывает меню устройств веб-плеера и возвращает, занят ли аккаунт чужим устройством. */
+    /** Баннер «играет на …» без открытия пикера: не ждёт pageMutex и очередь play. */
     suspend fun refreshDevices() {
-        if (!pageMutex.tryLock()) return
-        try {
-            if (_visibleForLogin.value || webView == null) return
-            applyDevices(queryDevices("peek", ""))
-        } finally {
-            pageMutex.unlock()
-        }
+        if (_visibleForLogin.value || webView == null) return
+        applyDevices(queryDevices("peek", ""))
     }
 
     suspend fun listDevices(): List<SpotifyDevice> {
@@ -531,7 +522,7 @@ class SpotifyWebSession @Inject constructor(
 
     private suspend fun queryDevices(action: String, target: String): DeviceQuery {
         if (webView == null) return DeviceQuery(null, emptyList(), false)
-        injectBridge()
+        ensureBridge()
         val id = httpIds.incrementAndGet().toString()
         val done = CompletableDeferred<String>()
         deviceWaiters[id] = done
@@ -607,7 +598,34 @@ class SpotifyWebSession @Inject constructor(
 
     private fun injectBridge() {
         val js = bridgeScript ?: loadBridgeScript() ?: return
-        eval(js)
+        val view = webView ?: return
+        main.post {
+            view.onResume()
+            view.resumeTimers()
+            view.evaluateJavascript("!!(window.__mss && window.__mss.version === $BRIDGE_VERSION)") { ready ->
+                if (ready != "true") view.evaluateJavascript(js, null)
+            }
+        }
+    }
+
+    private suspend fun ensureBridge() {
+        val js = bridgeScript ?: loadBridgeScript() ?: return
+        val view = webView ?: return
+        val done = CompletableDeferred<Unit>()
+        main.post {
+            view.onResume()
+            view.resumeTimers()
+            view.evaluateJavascript("!!(window.__mss && window.__mss.version === $BRIDGE_VERSION)") { ready ->
+                if (ready == "true") {
+                    if (!done.isCompleted) done.complete(Unit)
+                } else {
+                    view.evaluateJavascript(js) {
+                        if (!done.isCompleted) done.complete(Unit)
+                    }
+                }
+            }
+        }
+        withTimeoutOrNull(4_000) { done.await() }
     }
 
     private fun loadBridgeScript(): String? {
@@ -687,6 +705,7 @@ class SpotifyWebSession @Inject constructor(
 
     companion object {
         private const val BRIDGE_ASSET = "spotify-page-bridge.inject.js"
+        private const val BRIDGE_VERSION = 9
         private const val HOME = "https://open.spotify.com/"
         private const val COOKIE_KEY = "spotify_web_cookies"
         private const val FLAG_KEY = "spotify_web_logged_in"

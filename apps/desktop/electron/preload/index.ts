@@ -186,7 +186,6 @@ const api = {
         positionMs: number;
         durationMs: number;
         remoteDevice: string | null;
-        posted?: boolean;
       } | void>,
     deviceStatus: () =>
       ipcRenderer.invoke('spotify-connect:deviceStatus') as Promise<{

@@ -3,11 +3,8 @@ package com.mss.core.player
 import android.annotation.SuppressLint
 import android.content.Context
 import android.content.Intent
-import android.media.AudioFocusRequest
-import android.media.AudioManager
 import android.media.audiofx.Equalizer
 import android.os.Build
-import android.media.AudioAttributes as PlatformAudioAttributes
 import android.os.Looper
 import androidx.media3.common.AudioAttributes
 import androidx.media3.common.C
@@ -126,28 +123,6 @@ class PlayerController @Inject constructor(
     private var lastSpotifyMovePos = 0L
     private var playbackServiceRunning = false
     private var lastSettings: PlaybackSettings? = null
-    private val audioManager = context.getSystemService(Context.AUDIO_SERVICE) as AudioManager
-    private var focusRequest: AudioFocusRequest? = null
-    /** Повторный requestAudioFocus после play() забирает фокус у WebView и ставит трек на паузу. */
-    private var spotifyFocusHeld = false
-    /** Сразу после смены трека WebView и шторка шлют LOSS_TRANSIENT / pause — это не команда пользователя. */
-    private var suppressExternalPauseUntil = 0L
-    private val focusListener = AudioManager.OnAudioFocusChangeListener { change ->
-        when (change) {
-            AudioManager.AUDIOFOCUS_GAIN -> {
-                if (usingSpotify) spotifyFocusHeld = true
-            }
-            AudioManager.AUDIOFOCUS_LOSS -> {
-                if (usingSpotify && ignoreExternalSpotifyPause()) return@OnAudioFocusChangeListener
-                spotifyFocusHeld = false
-                if (usingSpotify && _state.value.playing) pause()
-            }
-            AudioManager.AUDIOFOCUS_LOSS_TRANSIENT -> {
-                if (usingSpotify && ignoreExternalSpotifyPause()) return@OnAudioFocusChangeListener
-                if (usingSpotify && _state.value.playing) pause()
-            }
-        }
-    }
 
     init {
         listOf(exoA, exoB).forEach { player ->
@@ -316,7 +291,6 @@ class PlayerController @Inject constructor(
             playGen += 1
             awaitingStart = false
             if (usingSpotify) spotifyWeb.pause() else active.pause()
-            dropSpotifyFocus()
             _state.value = _state.value.copy(queue = emptyList(), index = 0, current = null, playing = false)
             return
         }
@@ -361,7 +335,6 @@ class PlayerController @Inject constructor(
         if (usingSpotify) {
             holdCommand()
             awaitingStart = true
-            suppressExternalPauseUntil = android.os.SystemClock.elapsedRealtime() + SKIP_PAUSE_GUARD_MS
             spotifyWeb.wake()
             spotifyWeb.resume()
         } else {
@@ -513,7 +486,6 @@ class PlayerController @Inject constructor(
         val pos = _state.value.positionMs
         usingSpotify = true
         silenceExo()
-        dropSpotifyFocus()
         scope.launch { spotifyWeb.play(track.id, pos, fast = preferences.loadPlaybackSettings().spotifyFastStart) }
     }
 
@@ -554,11 +526,6 @@ class PlayerController @Inject constructor(
                 pos = if (seekTarget != null) _state.value.positionMs else d.positionMs
                 playing = d.playing
             }
-            if (!spotifyStarting && ours && d.ready && dur > 0 && pos >= dur - 1_500 && playing && endedGen != playGen) {
-                endedGen = playGen
-                onEnded()
-                return
-            }
             if (spotifyLeftTrack(d, dur, holding)) {
                 endedGen = playGen
                 onEnded()
@@ -570,8 +537,6 @@ class PlayerController @Inject constructor(
             playing = awaitingStart || active.isPlaying || (active.playWhenReady && active.playbackState == Player.STATE_BUFFERING)
         }
         // Считаем прослушанное, а не максимум позиции: перемотка назад иначе завышала бы отчёт.
-        val step = pos - lastTickPos
-        if (step in 1..5_000 && playing) playedMs += step
         val now = android.os.SystemClock.elapsedRealtime()
         val nearEnd = dur > 0 && pos >= dur - 5_000
         val ad = usingSpotify && spotifyWeb.dom.value.ad
@@ -586,7 +551,16 @@ class PlayerController @Inject constructor(
         }
         val stalled = usingSpotify && playing && !spotifyStarting && !awaitingStart && !ad && !nearEnd &&
             seekTarget == null && now - lastSpotifyMoveAt > STALL_MS
-        val frozenPos = if (stalled) lastSpotifyMovePos else pos
+        val frozenPos = when {
+            stalled -> lastSpotifyMovePos
+            usingSpotify && playing && !ad && seekTarget == null && !spotifyStarting && lastSpotifyMoveAt > 0L -> {
+                val guessed = lastSpotifyMovePos + (now - lastSpotifyMoveAt)
+                if (dur > 0) guessed.coerceIn(0L, dur) else guessed.coerceAtLeast(0L)
+            }
+            else -> pos
+        }
+        val step = frozenPos - lastTickPos
+        if (step in 1..5_000 && playing) playedMs += step
         lastTickPos = frozenPos
         val buffering = usingSpotify && (spotifyStarting || awaitingStart || stalled)
         _state.value = _state.value.copy(
@@ -683,7 +657,6 @@ class PlayerController @Inject constructor(
             restoreExoFocus()
         }
         awaitingStart = true
-        suppressExternalPauseUntil = android.os.SystemClock.elapsedRealtime() + SKIP_PAUSE_GUARD_MS
         _state.value = _state.value.copy(
             current = track,
             queue = queue.toList(),
@@ -728,7 +701,6 @@ class PlayerController @Inject constructor(
                     usingSpotify = true
                     exoStarting = false
                     silenceExo()
-                    dropSpotifyFocus()
                     spotifyWeb.wake()
                     spotifyStarting = true
                     _state.value = _state.value.copy(positionMs = 0)
@@ -743,7 +715,6 @@ class PlayerController @Inject constructor(
                     result
                         .onSuccess {
                             if (gen != playGen) return@launch
-                            suppressExternalPauseUntil = android.os.SystemClock.elapsedRealtime() + SKIP_PAUSE_GUARD_MS
                             val d = spotifyWeb.dom.value
                             val ours = domIsOurTrack(d) || d.ad
                             if (d.playing && ours) {
@@ -758,7 +729,9 @@ class PlayerController @Inject constructor(
                                 durationMs = (if (ours) d.durationMs.takeIf { it > 0 } else null) ?: track.durationMs ?: 0,
                                 positionMs = if (ours && d.playing) d.positionMs else 0,
                             )
-                            if (spotifyStarting) confirmSpotifyStarted(gen)
+                            if (spotifyStarting && !d.playing && !d.ad && spotifyWeb.remoteDevice.value == null) {
+                                confirmSpotifyStarted(gen)
+                            }
                         }
                         .onFailure { err ->
                             if (gen != playGen) return@launch
@@ -835,7 +808,6 @@ class PlayerController @Inject constructor(
         if (usingSpotify) {
             usingSpotify = false
             spotifyWeb.stopPlayback()
-            dropSpotifyFocus()
         }
         active.pause()
         _state.value = _state.value.copy(playing = false, buffering = false)
@@ -974,12 +946,12 @@ class PlayerController @Inject constructor(
                 safeTick()
                 if (usingSpotify) {
                     spotifyTicks += 1
-                    if (spotifyTicks % 8 == 0) spotifyWeb.pollState()
-                    if (spotifyTicks % 20 == 0 && deviceProbe?.isActive != true && !awaitingStart && !_state.value.playing) {
+                    if (spotifyTicks % 16 == 0) spotifyWeb.pollState()
+                    if (spotifyTicks % 40 == 0 && deviceProbe?.isActive != true && !awaitingStart && !_state.value.playing) {
                         deviceProbe = scope.launch { spotifyWeb.refreshDevices() }
                     }
                 }
-                delay(500)
+                delay(if (usingSpotify) 250 else 500)
             }
         }
     }
@@ -1060,48 +1032,9 @@ class PlayerController @Inject constructor(
     }
 
     private fun restoreExoFocus() {
-        dropSpotifyFocus()
         val attrs = musicAttrs()
         exoA.setAudioAttributes(attrs, true)
         exoB.setAudioAttributes(attrs, true)
-    }
-
-    /** Веб-плеер Spotify сам фокус не берёт — без этого другие приложения не затихают. */
-    private fun holdSpotifyFocus() {
-        if (spotifyFocusHeld) return
-        val granted = if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
-            val req = focusRequest ?: AudioFocusRequest.Builder(AudioManager.AUDIOFOCUS_GAIN)
-                .setAudioAttributes(
-                    PlatformAudioAttributes.Builder()
-                        .setUsage(PlatformAudioAttributes.USAGE_MEDIA)
-                        .setContentType(PlatformAudioAttributes.CONTENT_TYPE_MUSIC)
-                        .build(),
-                )
-                .setOnAudioFocusChangeListener(focusListener)
-                .setAcceptsDelayedFocusGain(false)
-                .build()
-                .also { focusRequest = it }
-            audioManager.requestAudioFocus(req)
-        } else {
-            @Suppress("DEPRECATION")
-            audioManager.requestAudioFocus(focusListener, AudioManager.STREAM_MUSIC, AudioManager.AUDIOFOCUS_GAIN)
-        }
-        spotifyFocusHeld = granted == AudioManager.AUDIOFOCUS_REQUEST_GRANTED
-    }
-
-    private fun dropSpotifyFocus() {
-        spotifyFocusHeld = false
-        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
-            focusRequest?.let { audioManager.abandonAudioFocusRequest(it) }
-        } else {
-            @Suppress("DEPRECATION")
-            audioManager.abandonAudioFocus(focusListener)
-        }
-    }
-
-    private fun ignoreExternalSpotifyPause(): Boolean {
-        return spotifyStarting || awaitingStart ||
-            android.os.SystemClock.elapsedRealtime() < suppressExternalPauseUntil
     }
 
     private fun applySettings(settings: PlaybackSettings) {
@@ -1137,7 +1070,6 @@ class PlayerController @Inject constructor(
 
     private companion object {
         const val COMMAND_HOLD_MS = 1_500L
-        const val SKIP_PAUSE_GUARD_MS = 3_500L
         const val SEEK_WAIT_MS = 10_000L
         const val AUTOPLAY_START_MS = 10_000L
         const val STALL_MS = 4_000L
