@@ -1,5 +1,6 @@
 import {
   Heart,
+  Loader2,
   Maximize2,
   Pause,
   Play,
@@ -152,14 +153,20 @@ export function MiniPlayer() {
       </button>
       <button
         type="button"
-        title={state.playing ? 'Пауза' : 'Играть'}
-        aria-label={state.playing ? 'Пауза' : 'Играть'}
+        title={state.loading ? 'Загрузка' : state.playing ? 'Пауза' : 'Играть'}
+        aria-label={state.loading ? 'Загрузка' : state.playing ? 'Пауза' : 'Играть'}
         className={cn(btn, 'bg-foreground text-background hover:bg-foreground/90 hover:text-background')}
         style={size}
         disabled={!state.hasTrack}
         onClick={() => api.player.sendCommand('toggle')}
       >
-        {state.playing ? <Pause size={16} fill="currentColor" /> : <Play size={16} fill="currentColor" className="ml-0.5" />}
+        {state.loading ? (
+          <Loader2 size={16} className="animate-spin" />
+        ) : state.playing ? (
+          <Pause size={16} fill="currentColor" />
+        ) : (
+          <Play size={16} fill="currentColor" className="ml-0.5" />
+        )}
       </button>
       <button type="button" title="Следующий" aria-label="Следующий" className={btn} style={size} disabled={!state.hasTrack} onClick={() => api.player.sendCommand('next')}>
         <SkipForward size={16} fill="currentColor" />

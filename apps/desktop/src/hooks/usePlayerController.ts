@@ -181,7 +181,7 @@ function runSleepCommand(cmd: string): void {
 
 function publishSnapshot(): void {
   const { current, volume, muted, shuffle, repeat, radio } = usePlayerStore.getState();
-  const { playing, ad } = usePlaybackStore.getState();
+  const { playing, ad, loading } = usePlaybackStore.getState();
   const { endsAt, afterTrack } = useSleepStore.getState();
   window.electronAPI?.player.publishState({
     title: current?.title ?? 'Ничего не играет',
@@ -198,6 +198,7 @@ function publishSnapshot(): void {
     repeat,
     radio: !!radio,
     ad,
+    loading,
     sleep: { endsAt, afterTrack },
   });
   publishProgress();
@@ -276,7 +277,12 @@ async function startCurrent(playId: number): Promise<void> {
     if (current.source === 'spotify') stopSpotifyTrack();
     handlePlaybackFailure(errorMessage(e).replace(/^Error invoking remote method '[^']+': (Error: )?/, ''), transition === 'crossfade');
   } finally {
-    if (usePlayerStore.getState().playId === playId) usePlaybackStore.setState({ loading: false });
+    if (
+      usePlayerStore.getState().playId === playId &&
+      !(current.source === 'spotify' && !downloadedFileUrl(current))
+    ) {
+      usePlaybackStore.setState({ loading: false });
+    }
   }
 }
 
@@ -492,10 +498,11 @@ export function usePlayerController(): void {
     const offSpotifyState = window.electronAPI?.spotifyConnect?.onState((state) => {
       const wasPlaying = usePlaybackStore.getState().playing;
       const wasAd = usePlaybackStore.getState().ad;
+      const wasLoading = usePlaybackStore.getState().loading;
       if (!applySpotifyState(state)) return;
       const playback = usePlaybackStore.getState();
       if (playback.ad) {
-        if (wasPlaying !== playback.playing || !wasAd) publishSnapshot();
+        if (wasPlaying !== playback.playing || !wasAd || wasLoading !== playback.loading) publishSnapshot();
         else publishProgress();
         return;
       }
@@ -506,7 +513,7 @@ export function usePlayerController(): void {
         session.lastTime = t;
       }
       if (Math.abs(t - lastSavedResume) >= RESUME_SAVE_EVERY) saveResumePosition(t);
-      if (wasPlaying !== playback.playing || wasAd) publishSnapshot();
+      if (wasPlaying !== playback.playing || wasAd || wasLoading !== playback.loading) publishSnapshot();
       else publishProgress();
     });
 

@@ -42,6 +42,7 @@ export interface PlayerSnapshot {
   /** Играет «Моя волна»: порядок задаёт Яндекс, перемешивание недоступно, повтор — только трека. */
   radio: boolean;
   ad?: boolean;
+  loading?: boolean;
   sleep?: { endsAt: number | null; afterTrack: boolean };
 }
 
@@ -215,6 +216,7 @@ const api = {
         durationMs: number;
         ad: boolean;
         adTitle: string | null;
+        audible?: boolean;
       }) => void,
     ) => subscribe('spotify-connect:state', cb),
     onDevice: (

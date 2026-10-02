@@ -1,3 +1,4 @@
+import { preferOwnDeviceUrls, SPOTIFY_PAGE_BRIDGE, SPOTIFY_PAGE_BRIDGE_VERSION } from '@mss/stream-connectors';
 import {
   BrowserWindow,
   ipcMain,
@@ -50,11 +51,17 @@ function header(headers: Record<string, string>, name: string): string | undefin
 
 const CONNECT_DEVICE_RE = /https:\/\/[^/]+\/connect-state\/v1\/devices\/hobs_[0-9a-f]{16,}/;
 const connectDeviceUrls: string[] = [];
+let ownDeviceUrl: string | null = null;
 const pageMessageListeners = new Set<(message: string) => void>();
 
-/** Адреса connect-state этого веб-плеера (последний — актуальный): по ним быстрый старт узнаёт свой id устройства. */
+/** Адреса connect-state: свой веб-плеер первым, чтобы быстрый старт не ушёл на чужой hobs_. */
 export function spotifyConnectDeviceUrls(): string[] {
-  return [...connectDeviceUrls];
+  return preferOwnDeviceUrls(connectDeviceUrls, ownDeviceUrl);
+}
+
+export function markSpotifyOwnDevice(url?: string | null): void {
+  if (!url || !CONNECT_DEVICE_RE.test(url)) return;
+  ownDeviceUrl = url.match(CONNECT_DEVICE_RE)?.[0] ?? url;
 }
 
 /** Текущие заголовки веб-плеера без ожидания; null, если он ещё не делал запросов. */
@@ -262,6 +269,9 @@ function configureWebContents(wc: WebContents, opts: { media: boolean }): void {
   });
   wc.on('did-navigate', emitLoggedIn);
   wc.on('did-navigate-in-page', emitLoggedIn);
+  wc.on('did-finish-load', () => {
+    void injectSpotifyPageBridge(wc);
+  });
   wc.on('did-fail-load', (_e, code, desc, url, isMain) => {
     if (!isMain || code === -3) return;
     log.warn(`Spotify web session failed to load (${code}): ${desc} ${url}`);
@@ -345,9 +355,21 @@ export function invalidateSpotifyWebHeaders(): void {
   wc.reload();
 }
 
-/** Выполняет JS в странице веб-плеера с user gesture — иначе Chromium не даст запустить звук. */
-export async function spotifyWebExec<T>(script: string): Promise<T> {
-  await requireLogin();
+async function injectSpotifyPageBridge(wc: WebContents): Promise<void> {
+  if (wc.isDestroyed()) return;
+  try {
+    const ready = await wc.executeJavaScript(
+      `!!(window.__mss && window.__mss.version === ${SPOTIFY_PAGE_BRIDGE_VERSION})`,
+      true,
+    );
+    if (!ready) await wc.executeJavaScript(SPOTIFY_PAGE_BRIDGE, true);
+  } catch (e) {
+    log.warn('spotify page bridge', e instanceof Error ? e.message : e);
+  }
+}
+
+/** Ставит window.__mss, если страница перезагрузилась. */
+export async function ensureSpotifyPageBridge(): Promise<void> {
   const wc = ensureLoaded().webContents;
   if (wc.isLoading()) {
     await new Promise<void>((resolve) => {
@@ -358,7 +380,14 @@ export async function spotifyWebExec<T>(script: string): Promise<T> {
       });
     });
   }
-  return (await wc.executeJavaScript(script, true)) as T;
+  await injectSpotifyPageBridge(wc);
+}
+
+/** Выполняет JS в странице веб-плеера с user gesture — иначе Chromium не даст запустить звук. */
+export async function spotifyWebExec<T>(script: string): Promise<T> {
+  await requireLogin();
+  await ensureSpotifyPageBridge();
+  return (await ensureLoaded().webContents.executeJavaScript(script, true)) as T;
 }
 
 /** Пока MSS ведёт воспроизведение через Connect, уход со страницы Spotify не ставит плеер на паузу. */
@@ -403,6 +432,7 @@ async function pausePlayback(): Promise<void> {
 async function logout(): Promise<void> {
   loaded = false;
   webHeaders = null;
+  ownDeviceUrl = null;
   loggedInCached = false;
   const target = ensureSession();
   await target.clearStorageData();

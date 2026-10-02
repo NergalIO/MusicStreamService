@@ -75,11 +75,14 @@ class SpotifyWebSession @Inject constructor(
     private val httpIds = AtomicInteger()
     private val httpWaiters = ConcurrentHashMap<String, CompletableDeferred<Pair<Int, String>>>()
     private val deviceWaiters = ConcurrentHashMap<String, CompletableDeferred<String>>()
-    private val playWaiters = ConcurrentHashMap<String, CompletableDeferred<Unit>>()
+    private val playWaiters = ConcurrentHashMap<String, CompletableDeferred<JSONObject>>()
     private val imageWaiters = ConcurrentHashMap<String, CompletableDeferred<String>>()
     private val pageMutex = Mutex()
     /** id этого веб-плеера в Spotify Connect (из адресов connect-state), нужен для быстрого старта. */
     private val deviceIds = java.util.Collections.synchronizedSet(linkedSetOf<String>())
+    @Volatile private var ownDeviceUrl: String? = null
+    @Volatile var onTrackEnded: ((String) -> Unit)? = null
+    @Volatile private var bridgeScript: String? = null
 
     init {
         runCatching {
@@ -119,7 +122,7 @@ class SpotifyWebSession @Inject constructor(
 
     fun invalidateHashes() {
         hashes = emptyMap()
-        injectHelpers()
+        injectBridge()
         eval(SCAN_OPERATIONS)
     }
 
@@ -171,8 +174,7 @@ class SpotifyWebSession @Inject constructor(
             override fun onPageFinished(view: WebView?, url: String?) {
                 if (url?.startsWith(HOME) == true || hasLoginCookies()) syncLoginState()
                 if (loginAgent) eval(FIT_MOBILE)
-                injectHelpers()
-                if (!loginAgent) eval(STATE_OBSERVER)
+                injectBridge()
                 if (_loggedIn.value && !loginAgent) eval(SCAN_OPERATIONS)
             }
         }
@@ -345,6 +347,7 @@ class SpotifyWebSession @Inject constructor(
         loginAgent = false
         headers = null
         hashes = emptyMap()
+        ownDeviceUrl = null
         vault.delete(COOKIE_KEY)
         vault.delete(FLAG_KEY)
         main.post {
@@ -396,108 +399,85 @@ class SpotifyWebSession @Inject constructor(
     }
 
     /**
-     * @param fast быстрый старт: PUT /v1/me/player/play на этот веб-плеер; при любой ошибке — обычный путь через страницу трека.
+     * @param fast быстрый старт: команда play в connect-state этого веб-плеера; при ошибке — страница трека.
      */
     suspend fun play(trackId: String, positionMs: Long = 0, fast: Boolean = false) {
         if (!TRACK_ID_RE.matches(trackId)) throw ConnectorException("Некорректный id трека Spotify")
         wake()
-        // Без веб-плеера скрипт просто не выполнится, и вызов висел бы до таймаута в 30 секунд.
         if (webView == null) throw ConnectorException("Веб-плеер Spotify не запущен — откройте Spotify в приложении")
+        injectBridge()
         pageMutex.withLock {
-            val id = httpIds.incrementAndGet().toString()
-            val done = CompletableDeferred<Unit>()
-            playWaiters[id] = done
-            val auth = headers
-            val fastAuth = JSONObject()
-                .put("authorization", if (fast) auth?.authorization.orEmpty() else "")
-                .put("clientToken", auth?.clientToken.orEmpty())
-                .put("appVersion", auth?.appVersion.orEmpty())
-                .put("devices", JSONArray(deviceIds.toList()))
-                .toString()
-            eval(
-                """
-                (async () => {
-                  try {
-                    $HELPERS
-                    $DEVICE_HELPERS
-                    $STATE_OBSERVER
-                    const trackId = ${JSONObject.quote(trackId)};
-                    const path = '/track/' + trackId;
-                    const tick = 80;
-                    const waitFor = async (ms, ok) => {
-                      for (let t = 0; t < ms; t += tick) {
-                        if (ok()) return true;
-                        await sleep(tick);
-                      }
-                      return !!ok();
-                    };
-                    const fastAuth = JSON.parse(${JSONObject.quote(fastAuth)});
-                    $FAST_PLAY
-                    if (fastAuth.authorization && q('[data-testid="control-button-playpause"]')
-                      && await fastPlay(fastAuth, trackId, ${positionMs.coerceAtLeast(0)}).catch(() => false)) {
-                      MssSpotify.onState(JSON.stringify(readState()));
-                      MssSpotify.onRemote(remoteFromBar() || '');
-                      MssSpotify.onPlayDone('$id', '');
-                      return;
-                    }
-                    await waitFor(20000, () => q('[data-testid="control-button-playpause"]'));
-                    if (!q('[data-testid="control-button-playpause"]')) throw new Error('Веб-плеер Spotify не загрузился');
-                    if (location.pathname !== path) {
-                      const before = q('main h1')?.textContent || '';
-                      history.pushState({}, '', path);
-                      dispatchEvent(new PopStateEvent('popstate', { state: {} }));
-                      await waitFor(5000, () => (q('main h1')?.textContent || '') !== before);
-                      if ((q('main h1')?.textContent || '') === before) {
-                        location.assign('https://open.spotify.com' + path);
-                        await waitFor(20000, () => q('[data-testid="control-button-playpause"]'));
-                      }
-                    }
-                    let button = null;
-                    let heading = '';
-                    await waitFor(20000, () => {
-                      heading = (q('main h1')?.textContent || '').trim();
-                      button = q('main [data-testid="action-bar-row"] [data-testid="play-button"]');
-                      return !!(button && heading && location.pathname.indexOf(trackId) >= 0);
-                    });
-                    if (!button || location.pathname.indexOf(trackId) < 0) {
-                      heading = (q('main h1')?.textContent || q('[data-testid="context-item-info-title"]')?.textContent || '').trim();
-                      button = q('[data-testid="control-button-playpause"]');
-                    }
-                    if (!button) throw new Error('Не удалось открыть трек в веб-плеере Spotify');
-                    const movedHere = await transferHere();
-                    if (!movedHere) {
-                      throw new Error('Spotify играет на устройстве «' + (remoteFromBar() || 'другом') + '» — выберите это приложение в списке устройств');
-                    }
-                    if (!isPauseLabel(button)) button.click();
-                    await waitFor(10000, () => {
-                      const s = readState();
-                      return s.playing && (s.title === heading || !heading || s.ad);
-                    });
-                    const state = readState();
-                    if (!state.playing && !state.ad) {
-                      throw new Error('Spotify не запустил трек — выберите это приложение в устройствах Spotify');
-                    }
-                    MssSpotify.onState(JSON.stringify(state));
-                    if ($positionMs > 0 && !state.ad && Math.abs(state.positionMs - $positionMs) > 2000) {
-                      const progress = q('[data-testid="playback-progressbar"] input[type="range"]');
-                      if (progress) setRange(progress, $positionMs);
-                    }
-                    MssSpotify.onRemote(remoteFromBar() || '');
-                    MssSpotify.onPlayDone('$id', '');
-                  } catch (e) {
-                    try { MssSpotify.onRemote(remoteFromBar() || ''); } catch (_) {}
-                    MssSpotify.onPlayDone('$id', String(e && e.message || e));
-                  }
-                })();
-                """.trimIndent(),
-            )
-            try {
-                withTimeoutOrNull(30_000) { done.await() }
-                    ?: throw ConnectorException("Spotify не ответил")
-            } finally {
-                playWaiters.remove(id)
+            val first = awaitPlay(trackId, positionMs, fast)
+            if (first.optBoolean("authFailed") && fast) {
+                invalidateHeaders()
+                runCatching { awaitHeaders() }
+                awaitPlay(trackId, positionMs, true)
             }
         }
+    }
+
+    private fun deviceListForFastPlay(): List<String> {
+        val own = ownDeviceUrl
+        if (own.isNullOrBlank()) return deviceIds.toList()
+        return listOf(own) + deviceIds.filter { it != own }
+    }
+
+    private suspend fun awaitPlay(trackId: String, positionMs: Long, fast: Boolean): JSONObject {
+        val id = httpIds.incrementAndGet().toString()
+        val done = CompletableDeferred<JSONObject>()
+        playWaiters[id] = done
+        val auth = headers
+        val fastAuth = JSONObject()
+            .put("authorization", if (fast) auth?.authorization.orEmpty() else "")
+            .put("clientToken", auth?.clientToken.orEmpty())
+            .put("appVersion", auth?.appVersion.orEmpty())
+            .put("devices", JSONArray(deviceListForFastPlay()))
+            .toString()
+        eval(
+            """
+            (async () => {
+              const id = ${JSONObject.quote(id)};
+              try {
+                if (!window.__mss) throw new Error('Веб-плеер Spotify не загрузился');
+                const auth = JSON.parse(${JSONObject.quote(fastAuth)});
+                const r = await window.__mss.play(${JSONObject.quote(trackId)}, ${positionMs.coerceAtLeast(0)}, auth);
+                MssSpotify.onPlayDone(id, JSON.stringify(r || { cancelled: true }));
+              } catch (e) {
+                MssSpotify.onPlayDone(id, JSON.stringify({ error: String(e && e.message || e) }));
+              }
+            })();
+            """.trimIndent(),
+        )
+        val result = try {
+            withTimeoutOrNull(30_000) { done.await() }
+                ?: throw ConnectorException("Spotify не ответил")
+        } finally {
+            playWaiters.remove(id)
+        }
+        if (result.optBoolean("cancelled")) return result
+        result.optString("deviceUrl").takeIf { it.isNotBlank() }?.let { ownDeviceUrl = it }
+        runCatching {
+            _dom.value = SpotifyDomState(
+                ready = result.optBoolean("ready"),
+                playing = result.optBoolean("playing"),
+                ad = result.optBoolean("ad"),
+                positionMs = result.optLong("positionMs"),
+                durationMs = result.optLong("durationMs"),
+                title = result.optString("trackTitle").ifBlank { result.optString("title") },
+            )
+        }
+        result.opt("remoteName")
+            ?.takeUnless { it == JSONObject.NULL }
+            ?.toString()
+            ?.let { _remoteDevice.value = it.takeIf { name -> name.isNotBlank() && name != "null" } }
+        val error = result.optString("error")
+        if (error.isNotBlank() && !result.optBoolean("authFailed") && result.opt("remoteName") == JSONObject.NULL) {
+            throw ConnectorException(error)
+        }
+        if (error.isNotBlank() && !result.optBoolean("authFailed") && result.optString("remoteName").isBlank()) {
+            throw ConnectorException(error)
+        }
+        return result
     }
 
     /** Открывает меню устройств веб-плеера и возвращает, занят ли аккаунт чужим устройством. */
@@ -534,10 +514,24 @@ class SpotifyWebSession @Inject constructor(
 
     private suspend fun queryDevices(action: String, target: String): DeviceQuery {
         if (webView == null) return DeviceQuery(null, emptyList(), false)
+        injectBridge()
         val id = httpIds.incrementAndGet().toString()
         val done = CompletableDeferred<String>()
         deviceWaiters[id] = done
-        eval(deviceScript(action, JSONObject.quote(target), id))
+        eval(
+            """
+            (async () => {
+              const id = ${JSONObject.quote(id)};
+              try {
+                if (!window.__mss) throw new Error('Веб-плеер Spotify не загрузился');
+                const r = await window.__mss.devices(${JSONObject.quote(action)}, ${JSONObject.quote(target)});
+                MssSpotify.onDeviceResult(id, JSON.stringify(r || {}));
+              } catch (e) {
+                MssSpotify.onDeviceResult(id, JSON.stringify({ error: String(e && e.message || e) }));
+              }
+            })();
+            """.trimIndent(),
+        )
         val json = try {
             withTimeoutOrNull(8_000) { done.await() }
         } finally {
@@ -570,59 +564,39 @@ class SpotifyWebSession @Inject constructor(
     )
 
     fun pause() {
-        eval(
-            """
-            (function(){ $HELPERS
-              const btn = q('[data-testid="control-button-playpause"]');
-              if (btn && isPauseLabel(btn)) btn.click();
-            })();
-            """.trimIndent(),
-        )
+        eval("window.__mss && window.__mss.pause()")
     }
 
     fun resume() = playCurrent()
 
     fun seek(positionMs: Long) {
-        eval(
-            """
-            (function(){ $HELPERS
-              const progress = q('[data-testid="playback-progressbar"] input[type="range"]');
-              if (progress) setRange(progress, $positionMs);
-            })();
-            """.trimIndent(),
-        )
+        eval("window.__mss && window.__mss.seek($positionMs)")
     }
 
     fun setVolume(volume: Float) {
-        val pct = (volume * 100).toInt().coerceIn(0, 100)
-        eval(
-            """
-            (function(){ $HELPERS
-              const input = q('[data-testid="volume-bar"] input[type="range"]') || q('[aria-label*="Volume"] input');
-              if (input) setRange(input, $pct);
-            })();
-            """.trimIndent(),
-        )
+        val fraction = volume.coerceIn(0f, 1f)
+        eval("window.__mss && window.__mss.setVolume($fraction)")
     }
 
     fun pollState() {
         if (pageMutex.isLocked) return
-        eval("MssSpotify.onState(JSON.stringify((function(){ $HELPERS return readState(); })()))")
+        eval("window.__mss && MssSpotify.onState(JSON.stringify(window.__mss.state()))")
     }
 
     private fun playCurrent() {
-        eval(
-            """
-            (function(){ $HELPERS
-              const btn = q('[data-testid="control-button-playpause"]');
-              if (btn && !isPauseLabel(btn)) btn.click();
-            })();
-            """.trimIndent(),
-        )
+        eval("window.__mss && window.__mss.resume()")
     }
 
-    private fun injectHelpers() {
-        eval("$HELPERS")
+    private fun injectBridge() {
+        val js = bridgeScript ?: loadBridgeScript() ?: return
+        eval(js)
+    }
+
+    private fun loadBridgeScript(): String? {
+        val view = webView ?: return null
+        return runCatching {
+            view.context.assets.open(BRIDGE_ASSET).bufferedReader().use { it.readText() }
+        }.getOrNull()?.also { bridgeScript = it }
     }
 
     private fun eval(script: String) {
@@ -649,10 +623,16 @@ class SpotifyWebSession @Inject constructor(
         }
 
         @JavascriptInterface
-        fun onPlayDone(id: String, error: String) {
+        fun onPlayDone(id: String, resultJson: String) {
             val waiter = playWaiters.remove(id) ?: return
-            if (error.isNotBlank()) waiter.completeExceptionally(ConnectorException(error))
-            else waiter.complete(Unit)
+            val obj = runCatching { JSONObject(resultJson) }.getOrNull()
+            if (obj != null) waiter.complete(obj)
+            else waiter.completeExceptionally(ConnectorException(resultJson.ifBlank { "Spotify не ответил" }))
+        }
+
+        @JavascriptInterface
+        fun onEnded(trackId: String) {
+            if (trackId.isNotBlank()) onTrackEnded?.invoke(trackId)
         }
 
         @JavascriptInterface
@@ -687,6 +667,7 @@ class SpotifyWebSession @Inject constructor(
     }
 
     companion object {
+        private const val BRIDGE_ASSET = "spotify-page-bridge.inject.js"
         private const val HOME = "https://open.spotify.com/"
         private const val COOKIE_KEY = "spotify_web_cookies"
         private const val FLAG_KEY = "spotify_web_logged_in"
@@ -708,152 +689,8 @@ class SpotifyWebSession @Inject constructor(
           })();
         """
 
-        private const val HELPERS = """
-          const q = (s) => document.querySelector(s);
-          const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
-          const isPauseLabel = (el) => /pause|пауз/i.test(el?.getAttribute('aria-label') || '');
-          const AD_TITLE = /advertisement|реклама/i;
-          const isAd = () => {
-            if (q('[data-testid="ad-skip-button"], [data-testid="ad-cta-button"]')) return true;
-            const title = (q('[data-testid="context-item-info-title"]')?.textContent || '').trim();
-            return AD_TITLE.test(title);
-          };
-          const parseClock = (t) => (t || '').trim().split(':').reduce((acc, part) => acc * 60 + (Number(part) || 0), 0) * 1000;
-          const setRange = (input, value) => {
-            const setter = Object.getOwnPropertyDescriptor(HTMLInputElement.prototype, 'value').set;
-            setter.call(input, String(value));
-            input.dispatchEvent(new Event('input', { bubbles: true }));
-            input.dispatchEvent(new Event('change', { bubbles: true }));
-          };
-          const barTitle = () => {
-            const bar = q('[data-testid="now-playing-bar"]') || q('footer');
-            const el = bar?.querySelector('[data-testid="context-item-info-title"]') || q('[data-testid="context-item-info-title"]');
-            return (el?.textContent || '').trim();
-          };
-          const readState = () => {
-            const button = q('[data-testid="control-button-playpause"]');
-            const progress = q('[data-testid="playback-progressbar"] input[type="range"]');
-            return {
-              ready: !!button,
-              title: barTitle(),
-              playing: isPauseLabel(button),
-              ad: isAd(),
-              positionMs: parseClock(q('[data-testid="playback-position"]')?.textContent),
-              durationMs: Number(progress?.max) || parseClock(q('[data-testid="playback-duration"]')?.textContent),
-            };
-          };
-        """
-
         private val DEVICE_ID_RE = Regex("""https://[^/]+/connect-state/v1/devices/hobs_[0-9a-f]{16,}""")
         private val TRACK_ID_RE = Regex("""[A-Za-z0-9]{10,40}""")
-
-        /**
-         * Быстрый старт: команда «play» в Spotify Connect от этого веб-плеера самому себе — тот же канал,
-         * которым веб-плеер управляет устройствами. Возвращает false, если что-то не сошлось: тогда работает обычный путь.
-         */
-        private const val FAST_PLAY = """
-          const fastPlay = async (auth, trackId, positionMs) => {
-            const devices = [];
-            const add = (url) => {
-              const m = String(url).match(/(https:\/\/[^\/]+)\/connect-state\/v1\/devices\/(hobs_[0-9a-f]{16,})/);
-              if (!m) return;
-              const i = devices.findIndex((d) => d.id === m[2]);
-              if (i >= 0) devices.splice(i, 1);
-              devices.push({ origin: m[1], id: m[2] });
-            };
-            (auth.devices || []).forEach(add);
-            performance.getEntriesByType('resource').forEach((e) => add(e.name));
-            const dev = devices[devices.length - 1];
-            if (!dev) return false;
-            const read = () => readState();
-            const before = read();
-            const uri = 'spotify:track:' + trackId;
-            const res = await fetch(dev.origin + '/connect-state/v1/player/command/from/' + dev.id + '/to/' + dev.id, {
-              method: 'POST',
-              headers: {
-                authorization: auth.authorization,
-                'client-token': auth.clientToken,
-                'spotify-app-version': auth.appVersion,
-                'app-platform': 'WebPlayer',
-                'content-type': 'application/json',
-              },
-              body: JSON.stringify({
-                command: {
-                  context: { uri, url: 'context://' + uri, metadata: {} },
-                  play_origin: { feature_identifier: 'harmony', feature_version: auth.appVersion || '' },
-                  options: { skip_to: { track_uri: uri }, seek_to: positionMs, player_options_override: {} },
-                  logging_params: { command_id: Math.random().toString(16).slice(2) + Date.now().toString(16) },
-                  endpoint: 'play',
-                },
-              }),
-            });
-            if (!res.ok) return false;
-            for (let t = 0; t < 5000; t += 80) {
-              const s = read();
-              const restarted = s.positionMs < positionMs + 3000 && (!before.playing || before.positionMs > positionMs + 3000);
-              if (s.ad || (s.playing && (s.title !== before.title || restarted))) return true;
-              await new Promise((r) => setTimeout(r, 80));
-            }
-            return false;
-          };
-        """
-
-        /**
-         * Шлёт состояние плеера в приложение сразу при изменении нижней панели, без ожидания опроса.
-         * Ставится один раз на страницу; панель пересоздаётся при навигации, поэтому раз в секунду переподключаемся.
-         */
-        private const val STATE_OBSERVER = """
-          (function(){
-            if (window.__mssObserver) return;
-            const pick = () => document.querySelector('[data-testid="now-playing-bar"]') || document.querySelector('footer');
-            const isPause = (el) => /pause|пауз/i.test(el?.getAttribute('aria-label') || '');
-            const clock = (t) => (t || '').trim().split(':').reduce((a, p) => a * 60 + (Number(p) || 0), 0) * 1000;
-            const read = () => {
-              const g = (s) => document.querySelector(s);
-              const button = g('[data-testid="control-button-playpause"]');
-              const progress = g('[data-testid="playback-progressbar"] input[type="range"]');
-              const bar = pick();
-              const titleEl = bar?.querySelector('[data-testid="context-item-info-title"]') || g('[data-testid="context-item-info-title"]');
-              const title = (titleEl?.textContent || '').trim();
-              return {
-                ready: !!button,
-                title,
-                playing: isPause(button),
-                ad: !!g('[data-testid="ad-skip-button"], [data-testid="ad-cta-button"]') || /advertisement|реклама/i.test(title),
-                positionMs: clock(g('[data-testid="playback-position"]')?.textContent),
-                durationMs: Number(progress?.max) || clock(g('[data-testid="playback-duration"]')?.textContent),
-              };
-            };
-            let last = '';
-            let queued = false;
-            const push = () => {
-              queued = false;
-              const s = read();
-              const key = JSON.stringify(s);
-              if (key === last) return;
-              last = key;
-              try { MssSpotify.onState(key); } catch (_) {}
-            };
-            const schedule = () => {
-              if (queued) return;
-              queued = true;
-              setTimeout(push, 16);
-            };
-            let bar = null;
-            const obs = new MutationObserver(schedule);
-            const attach = () => {
-              const next = pick();
-              if (!next || next === bar) return;
-              obs.disconnect();
-              bar = next;
-              obs.observe(bar, { subtree: true, childList: true, characterData: true, attributes: true, attributeFilter: ['aria-label', 'value', 'max'] });
-              schedule();
-            };
-            window.__mssObserver = obs;
-            attach();
-            setInterval(attach, 1000);
-          })();
-        """
 
         private const val SCAN_OPERATIONS = """
           (async () => {
@@ -876,138 +713,6 @@ class SpotifyWebSession @Inject constructor(
               for (const m of text.matchAll(re)) if (!ops[m[1]]) ops[m[1]] = m[2];
             }
             MssSpotify.onHashes(JSON.stringify(ops));
-          })();
-        """
-
-        private fun deviceScript(action: String, targetLiteral: String, id: String): String {
-            return DEVICE_SCRIPT
-                .replace("%%ACTION%%", action)
-                .replace("%%TARGET%%", targetLiteral)
-                .replace("%%ID%%", id)
-        }
-
-        /** Общий код панели устройств: «This web browser» — это мы, «Playing on …» в нижней панели — чужое устройство. */
-        private const val DEVICE_HELPERS = """
-          const dSleep = (ms) => new Promise((r) => setTimeout(r, ms));
-          const LOCAL_RE = /this web browser|этот веб-браузер|этот браузер|this computer|этот компьютер|this device|это устройство/i;
-          const PLAYING_RE = /^(?:playing on|listening on|воспроизводится на|воспроизведение на|слушаете на|играет на)\s+/i;
-          const CONNECT_ROW_RE = /^(?:connect to this device|подключиться к этому устройству|подключить это устройство)[.…]?/i;
-          const isLocalName = (n) => LOCAL_RE.test(String(n || ''));
-          const remoteFromBar = () => {
-            const bar = document.querySelector('[data-testid="now-playing-bar"]') || document.querySelector('footer');
-            if (!bar) return null;
-            for (const el of bar.querySelectorAll('button, a, span, div')) {
-              if (el.childElementCount > 4) continue;
-              const t = String(el.innerText || el.textContent || '').replace(/\s+/g, ' ').trim();
-              if (!PLAYING_RE.test(t)) continue;
-              const name = t.replace(PLAYING_RE, '').trim();
-              if (name && !isLocalName(name)) return name;
-            }
-            return null;
-          };
-          const connectBtn = () =>
-            document.querySelector('[data-testid="connect-device-picker"], [data-testid="device-picker-icon-button"], [data-testid="control-button-connect"]')
-            || [...document.querySelectorAll('[data-testid="now-playing-bar"] button, footer button')]
-              .find((b) => /connect|device|устройств/i.test(b.getAttribute('aria-label') || '')) || null;
-          const pickerRows = () => [...document.querySelectorAll('[data-testid="device-picker-row-sidepanel"], [data-testid="device-picker-item"]')];
-          const openPicker = async () => {
-            if (pickerRows().length) return true;
-            const b = connectBtn();
-            if (!b) return false;
-            b.click();
-            for (let i = 0; i < 30 && !pickerRows().length; i++) await dSleep(100);
-            return pickerRows().length > 0;
-          };
-          const closePicker = async () => {
-            if (!pickerRows().length) return;
-            const close = document.querySelector('[data-testid="PanelHeader_CloseButton"] button, [data-testid="PanelHeader_CloseButton"]');
-            if (close) close.click(); else connectBtn()?.click();
-            for (let i = 0; i < 20 && pickerRows().length; i++) await dSleep(100);
-          };
-          const readPicker = () => {
-            const out = [];
-            const seen = new Set();
-            for (const row of pickerRows()) {
-              const titled = row.querySelector('[data-testid="list-row-title"]')?.textContent;
-              const lines = String(titled || row.innerText || '').split('\n').map((s) => s.trim()).filter((s) => s && !CONNECT_ROW_RE.test(s));
-              const name = lines[lines.length - 1] || '';
-              if (!name || name.length > 60) continue;
-              const inList = !!row.closest('ul, [role="list"]');
-              const key = name + (inList ? '|list' : '|current');
-              if (seen.has(key)) continue;
-              seen.add(key);
-              out.push({ name, active: !inList, local: isLocalName(name), el: row.querySelector('[role="button"]') || row });
-            }
-            return out;
-          };
-          const transferHere = async () => {
-            if (!remoteFromBar()) return true;
-            if (!(await openPicker())) return false;
-            const here = readPicker().find((d) => d.local && !d.active);
-            if (here) {
-              here.el.click();
-              for (let i = 0; i < 24 && remoteFromBar(); i++) await dSleep(250);
-            }
-            await closePicker();
-            return !remoteFromBar();
-          };
-        """
-
-        private const val DEVICE_SCRIPT = """
-          (async () => {
-            const action = '%%ACTION%%';
-            const target = %%TARGET%%;
-            const doneId = '%%ID%%';
-            const finish = (payload) => MssSpotify.onDeviceResult(doneId, JSON.stringify(payload));
-            try {
-              $DEVICE_HELPERS
-              const plain = (list) => list.map(({ name, active, local }) => ({ name, active, local }));
-              if (action === 'select') {
-                if (!(await openPicker())) {
-                  finish({ error: 'Кнопка устройств Spotify не найдена' });
-                  return;
-                }
-                const rows = readPicker();
-                const row = rows.find((d) => !d.active && d.name === target)
-                  || rows.find((d) => !d.active && target && d.name.includes(target))
-                  || rows.find((d) => d.name === target);
-                if (!row) {
-                  await closePicker();
-                  finish({ error: 'Устройство Spotify не найдено' });
-                  return;
-                }
-                if (!row.active) row.el.click();
-                for (let i = 0; i < 16; i++) {
-                  await dSleep(250);
-                  const r = remoteFromBar();
-                  if (row.local ? !r : r) break;
-                }
-                await closePicker();
-                const remoteName = remoteFromBar();
-                finish({
-                  remoteName,
-                  selectedLocal: row.local && !remoteName,
-                  devices: plain(rows),
-                });
-                return;
-              }
-              let remoteName = remoteFromBar();
-              let rows = [];
-              if (action === 'list') {
-                const wasOpen = pickerRows().length > 0;
-                if (await openPicker()) {
-                  rows = readPicker();
-                  if (!wasOpen) await closePicker();
-                }
-                if (!remoteName) {
-                  const current = rows.find((d) => d.active && !d.local);
-                  if (current && rows.some((d) => d.local && !d.active)) remoteName = current.name;
-                }
-              }
-              finish({ remoteName, devices: plain(rows) });
-            } catch (e) {
-              finish({ error: String(e && e.message || e) });
-            }
           })();
         """
     }

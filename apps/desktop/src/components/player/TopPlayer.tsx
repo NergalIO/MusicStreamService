@@ -117,12 +117,12 @@ export function TopPlayer() {
                 <SkipBack size={20} fill="currentColor" />
               </IconButton>
               <IconButton
-                label={playing ? 'Пауза' : 'Играть'}
+                label={loading ? 'Загрузка' : playing ? 'Пауза' : 'Играть'}
                 disabled={!hasTrack}
                 onClick={togglePlay}
                 className="h-10 w-10 text-foreground"
               >
-                {loading && playing ? (
+                {loading ? (
                   <Loader2 size={22} className="animate-spin" />
                 ) : playing ? (
                   <Pause size={26} fill="currentColor" />

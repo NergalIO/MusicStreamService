@@ -54,6 +54,7 @@ data class PlayerUiState(
     val sleepUntilTrackEnd: Boolean = false,
     val volume: Float = 1f,
     val liked: Boolean = false,
+    val buffering: Boolean = false,
 )
 
 enum class RepeatMode { OFF, ALL, ONE }
@@ -121,6 +122,8 @@ class PlayerController @Inject constructor(
     private var lastSpotifyPos = 0L
     private var foreignTitleTicks = 0
     private var lastTickPos = 0L
+    private var lastSpotifyMoveAt = 0L
+    private var lastSpotifyMovePos = 0L
     private var playbackServiceRunning = false
     private var lastSettings: PlaybackSettings? = null
     private val audioManager = context.getSystemService(Context.AUDIO_SERVICE) as AudioManager
@@ -184,6 +187,12 @@ class PlayerController @Inject constructor(
         }
         scope.launch {
             spotifyWeb.dom.collect { if (usingSpotify && tickJob?.isActive == true) safeTick() }
+        }
+        spotifyWeb.onTrackEnded = { trackId ->
+            if (usingSpotify && _state.value.current?.id == trackId && endedGen != playGen) {
+                endedGen = playGen
+                onEnded()
+            }
         }
     }
 
@@ -343,7 +352,7 @@ class PlayerController @Inject constructor(
         } else {
             active.pause()
         }
-        _state.value = _state.value.copy(playing = false)
+        _state.value = _state.value.copy(playing = false, buffering = false)
         session("info", "player", "pause")
     }
 
@@ -562,8 +571,29 @@ class PlayerController @Inject constructor(
         // Считаем прослушанное, а не максимум позиции: перемотка назад иначе завышала бы отчёт.
         val step = pos - lastTickPos
         if (step in 1..5_000 && playing) playedMs += step
-        lastTickPos = pos
-        _state.value = _state.value.copy(positionMs = pos, durationMs = dur, playing = playing)
+        val now = android.os.SystemClock.elapsedRealtime()
+        val nearEnd = dur > 0 && pos >= dur - 5_000
+        val ad = usingSpotify && spotifyWeb.dom.value.ad
+        if (usingSpotify && playing && !ad && !nearEnd && seekTarget == null) {
+            if (kotlin.math.abs(pos - lastSpotifyMovePos) >= 400) {
+                lastSpotifyMovePos = pos
+                lastSpotifyMoveAt = now
+            }
+        } else {
+            lastSpotifyMovePos = pos
+            lastSpotifyMoveAt = now
+        }
+        val stalled = usingSpotify && playing && !spotifyStarting && !awaitingStart && !ad && !nearEnd &&
+            seekTarget == null && now - lastSpotifyMoveAt > STALL_MS
+        val frozenPos = if (stalled) lastSpotifyMovePos else pos
+        lastTickPos = frozenPos
+        val buffering = usingSpotify && (spotifyStarting || awaitingStart || stalled)
+        _state.value = _state.value.copy(
+            positionMs = frozenPos,
+            durationMs = dur,
+            playing = playing,
+            buffering = buffering,
+        )
         val ends = _state.value.sleepEndsAt
         if (ends != null && System.currentTimeMillis() >= ends) {
             pauseSleep()
@@ -636,7 +666,7 @@ class PlayerController @Inject constructor(
         } else {
             active.pause()
         }
-        _state.value = _state.value.copy(sleepEndsAt = null, sleepUntilTrackEnd = false, playing = false)
+        _state.value = _state.value.copy(sleepEndsAt = null, sleepUntilTrackEnd = false, playing = false, buffering = false)
     }
 
     private fun playCurrent(crossfade: Boolean) {
@@ -644,18 +674,26 @@ class PlayerController @Inject constructor(
         val gen = ++playGen
         awaitingStart = true
         suppressExternalPauseUntil = android.os.SystemClock.elapsedRealtime() + SKIP_PAUSE_GUARD_MS
-        _state.value = _state.value.copy(current = track, queue = queue.toList(), index = index, playing = true)
+        _state.value = _state.value.copy(
+            current = track,
+            queue = queue.toList(),
+            index = index,
+            playing = true,
+            buffering = track.source == SourceId.SPOTIFY,
+        )
         session("info", "player", "play ${track.source} ${track.id} «${track.title}»")
         playedMs = 0
         lastTickPos = 0
         preloadedNext = false
         sawOwnSpotifyTitle = false
         lastSpotifyPos = 0
+        lastSpotifyMoveAt = android.os.SystemClock.elapsedRealtime()
+        lastSpotifyMovePos = 0
         foreignTitleTicks = 0
         // Пока трек резолвится, прошлый источник ещё доигрывает: его конец не должен засчитаться как наш.
         spotifyStarting = usingSpotify
         exoStarting = !usingSpotify
-        if (usingSpotify) _state.value = _state.value.copy(positionMs = 0)
+        if (track.source == SourceId.SPOTIFY) _state.value = _state.value.copy(positionMs = 0, buffering = true)
         ensurePlaybackService()
         startTicker()
         if (!track.playable) {
@@ -712,7 +750,7 @@ class PlayerController @Inject constructor(
                             awaitingStart = false
                             usingSpotify = false
                             restoreExoFocus()
-                            _state.value = _state.value.copy(playing = false)
+                            _state.value = _state.value.copy(playing = false, buffering = false)
                             session("error", "player", err.message ?: "Spotify play failed")
                             err.message?.let { onError?.invoke(it) }
                         }
@@ -747,7 +785,7 @@ class PlayerController @Inject constructor(
         awaitingStart = false
         if (usingSpotify) dropSpotifyFocus()
         active.pause()
-        _state.value = _state.value.copy(playing = false)
+        _state.value = _state.value.copy(playing = false, buffering = false)
     }
 
     private fun notifyWaveStarted(track: UnifiedTrack) {
@@ -882,8 +920,8 @@ class PlayerController @Inject constructor(
             while (true) {
                 safeTick()
                 if (usingSpotify) {
-                    spotifyWeb.pollState()
                     spotifyTicks += 1
+                    if (spotifyTicks % 8 == 0) spotifyWeb.pollState()
                     if (spotifyTicks % 20 == 0 && deviceProbe?.isActive != true && !awaitingStart && !_state.value.playing) {
                         deviceProbe = scope.launch { spotifyWeb.refreshDevices() }
                     }
@@ -1049,5 +1087,6 @@ class PlayerController @Inject constructor(
         const val SKIP_PAUSE_GUARD_MS = 2_500L
         const val SEEK_WAIT_MS = 10_000L
         const val AUTOPLAY_START_MS = 10_000L
+        const val STALL_MS = 4_000L
     }
 }

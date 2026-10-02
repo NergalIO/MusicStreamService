@@ -263,6 +263,7 @@ fun MiniPlayer(
     val settings by vm.playbackSettings.collectAsState()
     val track by remember { vm.playerState.map { it.current }.distinctUntilChanged() }.collectAsState(initial = vm.playerState.value.current)
     val playing by remember { vm.playerState.map { it.playing }.distinctUntilChanged() }.collectAsState(initial = vm.playerState.value.playing)
+    val buffering by remember { vm.playerState.map { it.buffering }.distinctUntilChanged() }.collectAsState(initial = vm.playerState.value.buffering)
     val liked by vm.likedIds.collectAsState()
     val scheme = MaterialTheme.colorScheme
     val currentTrack = track
@@ -336,10 +337,14 @@ fun MiniPlayer(
                     )
                 }
                 IconButton({ if (playing) vm.player.pause() else vm.player.resume() }) {
-                    Icon(
-                        if (playing) Icons.Default.Pause else Icons.Default.PlayArrow,
-                        if (playing) "Пауза" else "Играть",
-                    )
+                    if (buffering) {
+                        CircularProgressIndicator(Modifier.size(24.dp), strokeWidth = 2.dp)
+                    } else {
+                        Icon(
+                            if (playing) Icons.Default.Pause else Icons.Default.PlayArrow,
+                            if (playing) "Пауза" else "Играть",
+                        )
+                    }
                 }
             }
             below()
@@ -1034,12 +1039,16 @@ private fun NowPlayingControls(vm: MssViewModel, state: PlayerUiState) {
             Icon(Icons.Default.SkipPrevious, "Предыдущий", modifier = Modifier.size(32.dp), tint = scheme.onSurface.copy(alpha = 0.9f))
         }
         IconButton({ vm.player.toggle() }, modifier = Modifier.size(72.dp)) {
-            Icon(
-                if (state.playing) Icons.Default.Pause else Icons.Default.PlayArrow,
-                if (state.playing) "Пауза" else "Играть",
-                tint = scheme.onSurface,
-                modifier = Modifier.size(48.dp),
-            )
+            if (state.buffering) {
+                CircularProgressIndicator(Modifier.size(40.dp), strokeWidth = 3.dp, color = scheme.onSurface)
+            } else {
+                Icon(
+                    if (state.playing) Icons.Default.Pause else Icons.Default.PlayArrow,
+                    if (state.playing) "Пауза" else "Играть",
+                    tint = scheme.onSurface,
+                    modifier = Modifier.size(48.dp),
+                )
+            }
         }
         IconButton({ vm.player.next() }, modifier = Modifier.size(48.dp)) {
             Icon(Icons.Default.SkipNext, "Следующий", modifier = Modifier.size(32.dp), tint = scheme.onSurface.copy(alpha = 0.9f))

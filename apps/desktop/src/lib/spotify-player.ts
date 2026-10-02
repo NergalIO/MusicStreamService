@@ -14,8 +14,12 @@ let tick: ReturnType<typeof setInterval> | null = null;
 let fadingOut = false;
 let fadeToken = 0;
 let hold: { until: number; playing?: boolean; positionMs?: number } | null = null;
+let lastMovedPos = 0;
+let lastMovedAt = 0;
+let stalled = false;
 
 const HOLD_MS = 1500;
+const STALL_MS = 4000;
 
 export function ipcMessage(e: unknown): string {
   const m = e instanceof Error ? e.message : String(e);
@@ -51,13 +55,22 @@ function syncMediaPosition(position: number, duration: number): void {
 function startTick(): void {
   if (tick) return;
   tick = setInterval(() => {
-    if (!activeTrackId || !anchor.playing) return;
+    if (!activeTrackId || !anchor.playing || stalled) return;
     const duration = usePlaybackStore.getState().duration;
     const t = spotifyPositionSeconds();
     usePlaybackStore.setState({ currentTime: duration ? Math.min(t, duration) : t });
     syncMediaPosition(t, duration);
     maybeStartSpotifyFadeOut(duration, t);
   }, 250);
+}
+
+function markPositionMoved(positionMs: number): void {
+  lastMovedPos = positionMs;
+  lastMovedAt = Date.now();
+  if (stalled) {
+    stalled = false;
+    usePlaybackStore.setState({ loading: false });
+  }
 }
 
 function stopTick(): void {
@@ -110,8 +123,10 @@ export async function startSpotifyTrack(
   options: { fadeIn?: number } = {},
 ): Promise<void> {
   fadingOut = false;
+  stalled = false;
   activeTrackId = track.id;
   setAnchor(startAtSeconds * 1000, false);
+  markPositionMoved(startAtSeconds * 1000);
   holdLocal({ playing: true, positionMs: startAtSeconds * 1000 });
   usePlaybackStore.setState({
     preview: false,
@@ -122,6 +137,7 @@ export async function startSpotifyTrack(
     buffered: 0,
     currentTime: startAtSeconds,
     duration: (track.durationMs ?? 0) / 1000,
+    loading: true,
   });
   const { volume, muted } = usePlayerStore.getState();
   const fadeIn = options.fadeIn ?? 0;
@@ -138,6 +154,7 @@ export async function startSpotifyTrack(
   if (activeTrackId !== track.id) return;
   if (started?.remoteDevice) {
     setAnchor(started.positionMs || startAtSeconds * 1000, false);
+    stalled = false;
     usePlaybackStore.setState({ playing: false, loading: false });
     toast(`Spotify занят устройством «${started.remoteDevice}»`, {
       description: 'Выберите устройство воспроизведения.',
@@ -146,9 +163,11 @@ export async function startSpotifyTrack(
   }
   if (started?.ad) {
     setAnchor(started.positionMs, started.playing);
+    markPositionMoved(started.positionMs);
     holdLocal({ playing: started.playing, positionMs: started.positionMs });
     usePlaybackStore.setState({
       playing: started.playing,
+      loading: false,
       ad: true,
       adTitle: started.adTitle ?? 'Реклама',
       currentTime: started.positionMs / 1000,
@@ -156,8 +175,9 @@ export async function startSpotifyTrack(
     });
   } else {
     setAnchor(startAtSeconds * 1000, true);
+    markPositionMoved(startAtSeconds * 1000);
     holdLocal({ playing: true, positionMs: startAtSeconds * 1000 });
-    usePlaybackStore.setState({ playing: true, ad: false, adTitle: undefined });
+    usePlaybackStore.setState({ playing: true, loading: false, ad: false, adTitle: undefined });
     if (fadeIn > 0 && !muted) void fadeSpotifyVolume(0, volume * 100, fadeIn * 1000);
   }
   startTick();
@@ -168,10 +188,11 @@ export function stopSpotifyTrack(): void {
   if (!activeTrackId) return;
   activeTrackId = null;
   fadingOut = false;
+  stalled = false;
   hold = null;
   nextFadeToken();
   stopTick();
-  usePlaybackStore.setState({ ad: false, adTitle: undefined });
+  usePlaybackStore.setState({ ad: false, adTitle: undefined, loading: false });
   void window.electronAPI?.spotifyConnect.stop();
 }
 
@@ -182,6 +203,7 @@ export function applySpotifyState(state: {
   durationMs: number;
   ad: boolean;
   adTitle: string | null;
+  audible?: boolean;
 }): boolean {
   if (!activeTrackId || state.trackId !== activeTrackId) return false;
   if (state.ad) hold = null;
@@ -191,7 +213,7 @@ export function applySpotifyState(state: {
     const playingOk = hold.playing === undefined || state.playing === hold.playing;
     const positionOk = hold.positionMs === undefined || Math.abs(state.positionMs - hold.positionMs) < 2500;
     if (!playingOk || !positionOk) {
-      if (state.durationMs) usePlaybackStore.setState({ duration: state.durationMs / 1000, loading: false });
+      if (state.durationMs) usePlaybackStore.setState({ duration: state.durationMs / 1000 });
       syncMediaPosition(spotifyPositionSeconds(), state.durationMs / 1000 || usePlaybackStore.getState().duration);
       return true;
     }
@@ -200,10 +222,19 @@ export function applySpotifyState(state: {
     hold = null;
   }
 
-  setAnchor(state.positionMs, state.playing);
+  const nearEnd = state.durationMs > 0 && state.durationMs - state.positionMs < 5000;
+  if (!state.playing || state.ad || nearEnd || state.audible) {
+    markPositionMoved(state.positionMs);
+  } else if (Math.abs(state.positionMs - lastMovedPos) >= 400) {
+    markPositionMoved(state.positionMs);
+  } else if (now - lastMovedAt >= STALL_MS) {
+    stalled = true;
+  }
+
+  setAnchor(state.positionMs, state.playing && !stalled);
   const patch: Partial<ReturnType<typeof usePlaybackStore.getState>> = {
     playing: state.playing,
-    loading: false,
+    loading: stalled,
     currentTime: state.positionMs / 1000,
     ad: state.ad,
     adTitle: state.ad ? state.adTitle ?? 'Реклама' : undefined,
@@ -212,7 +243,7 @@ export function applySpotifyState(state: {
   else if (state.ad) patch.duration = 0;
   usePlaybackStore.setState(patch);
   syncMediaPosition(state.positionMs / 1000, patch.duration ?? usePlaybackStore.getState().duration);
-  if (state.playing) startTick();
+  if (state.playing && !stalled) startTick();
   return true;
 }
 
@@ -224,7 +255,9 @@ export function toggleSpotify(): void {
   const playing = usePlaybackStore.getState().playing;
   const position = spotifyPositionSeconds() * 1000;
   fadingOut = false;
+  stalled = false;
   restoreSpotifyVolume();
+  markPositionMoved(position);
   setAnchor(position, !playing);
   holdLocal({ playing: !playing, positionMs: position });
   usePlaybackStore.setState({ playing: !playing });
@@ -240,7 +273,9 @@ export function seekSpotify(seconds: number): void {
   if (usePlaybackStore.getState().ad) return;
   const target = Math.max(0, seconds);
   fadingOut = false;
+  stalled = false;
   restoreSpotifyVolume();
+  markPositionMoved(target * 1000);
   setAnchor(target * 1000, usePlaybackStore.getState().playing);
   holdLocal({ positionMs: target * 1000 });
   usePlaybackStore.setState({ currentTime: target });

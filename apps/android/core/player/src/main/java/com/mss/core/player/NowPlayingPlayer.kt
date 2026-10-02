@@ -50,6 +50,7 @@ class NowPlayingPlayer(
         val structural = !sameTrack ||
             restorePlayWhenReady ||
             state.playing != ui.playing ||
+            state.buffering != ui.buffering ||
             state.index != ui.index ||
             state.queue.size != ui.queue.size ||
             state.repeat != ui.repeat ||
@@ -62,7 +63,7 @@ class NowPlayingPlayer(
         if (!structural) return
         anchorPos = state.positionMs
         anchorAt = now
-        anchorPlaying = state.playing
+        anchorPlaying = state.playing && !state.buffering
         invalidateState()
     }
 
@@ -104,10 +105,10 @@ class NowPlayingPlayer(
         if (hasNext) {
             commands.add(Player.COMMAND_SEEK_TO_NEXT).add(Player.COMMAND_SEEK_TO_NEXT_MEDIA_ITEM)
         }
-        val speed = if (ui.playing) 1f else 0f
+        val speed = if (ui.playing && !ui.buffering) 1f else 0f
         return State.Builder()
             .setAvailableCommands(commands.build())
-            .setPlaybackState(Player.STATE_READY)
+            .setPlaybackState(if (ui.buffering) Player.STATE_BUFFERING else Player.STATE_READY)
             .setPlayWhenReady(ui.playing, Player.PLAY_WHEN_READY_CHANGE_REASON_USER_REQUEST)
             .setRepeatMode(
                 when (ui.repeat) {
