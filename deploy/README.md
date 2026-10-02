@@ -183,7 +183,7 @@ location /MusicStreamService/ {
 
 **systemd:** `systemctl restart mss-api mss-worker`.
 
-Панель без SSH: `https://ваш-домен/MusicStreamService/dashboard` (логин администратора из `MSS_BOOTSTRAP_ADMIN_EMAIL`).
+Панель без SSH: `https://ваш-домен/MusicStreamService/dashboard` (логин администратора из `MSS_BOOTSTRAP_ADMIN_EMAIL`). Существующий аккаунт: `./scripts/promote-admin.sh user@example.com`.
 
 ---
 

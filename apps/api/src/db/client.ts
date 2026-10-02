@@ -5,3 +5,4 @@ import * as schema from './schema.js';
 
 const pool = new pg.Pool({ connectionString: config.databaseUrl });
 export const db = drizzle(pool, { schema });
+export { pool };

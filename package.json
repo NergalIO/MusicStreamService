@@ -14,7 +14,8 @@
     "sync:downloads": "node scripts/sync-client-downloads.cjs",
     "build": "pnpm -r build",
     "db:migrate": "pnpm --filter @mss/api db:migrate",
-    "db:seed": "pnpm --filter @mss/api db:seed"
+    "db:seed": "pnpm --filter @mss/api db:seed",
+    "db:promote-admin": "pnpm --filter @mss/api db:promote-admin"
   },
   "packageManager": "pnpm@9.15.9",
   "engines": {
