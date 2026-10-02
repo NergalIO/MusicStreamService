@@ -25,6 +25,7 @@ import com.mss.core.model.UnifiedPlaylist
 import com.mss.core.model.UnifiedTrack
 import com.mss.core.model.UserSubscriptionDto
 import com.mss.core.model.audioContentType
+import com.mss.core.model.dedupeCatalogTracks
 import com.mss.core.model.freshCloudUrl
 import com.mss.core.model.toAlbumWithTracks
 import com.mss.core.model.toUnifiedAlbum
@@ -104,7 +105,7 @@ class MssRepository @Inject constructor(
     suspend fun setApiBase(url: String) = preferences.setApiBaseUrl(url)
 
     suspend fun mssTracks(query: String = "", limit: Int = 50): List<UnifiedTrack> =
-        api.searchTracks(query, limit).map { unify(it) }
+        dedupeCatalogTracks(api.searchTracks(query, limit).map { unify(it) })
 
     suspend fun getTrack(id: String): UnifiedTrack = unify(api.getTrack(id))
 
@@ -115,11 +116,13 @@ class MssRepository @Inject constructor(
 
     suspend fun playlistDetail(id: String): Pair<PlaylistDto, List<UnifiedTrack>> {
         val meta = api.getPlaylist(id)
-        val tracks = api.playlistTracks(id).mapNotNull { it.toUnifiedTrack(preferences.getApiBaseUrl())?.let(cloudUrls::mergeAndRemember) }
+        val tracks = dedupeCatalogTracks(
+            api.playlistTracks(id).mapNotNull { it.toUnifiedTrack(preferences.getApiBaseUrl())?.let(cloudUrls::mergeAndRemember) },
+        )
         return meta to tracks
     }
 
-    suspend fun mssLikes(): List<UnifiedTrack> = api.likedTracks().map { unify(it) }
+    suspend fun mssLikes(): List<UnifiedTrack> = dedupeCatalogTracks(api.likedTracks().map { unify(it) })
 
     suspend fun likedAlbums(): List<UnifiedAlbum> = api.likedAlbums()
 
@@ -146,7 +149,9 @@ class MssRepository @Inject constructor(
     }
 
     suspend fun playlistTracks(playlistId: String): List<UnifiedTrack> =
-        api.playlistTracks(playlistId).mapNotNull { it.toUnifiedTrack(preferences.getApiBaseUrl())?.let(cloudUrls::mergeAndRemember) }
+        dedupeCatalogTracks(
+            api.playlistTracks(playlistId).mapNotNull { it.toUnifiedTrack(preferences.getApiBaseUrl())?.let(cloudUrls::mergeAndRemember) },
+        )
 
     suspend fun searchAll(query: String, source: SourceId?, limit: Int = 30): List<UnifiedTrack> {
         preferences.addSearchQuery(query)
@@ -172,7 +177,7 @@ class MssRepository @Inject constructor(
 
     suspend fun subscription(): UserSubscriptionDto = api.subscription()
 
-    suspend fun uploads(): List<UnifiedTrack> = api.myUploads().map { unify(it) }
+    suspend fun uploads(): List<UnifiedTrack> = dedupeCatalogTracks(api.myUploads().map { unify(it) })
 
     suspend fun albums(query: String = ""): List<UnifiedAlbum> = api.listAlbums(query).map { it.toUnifiedAlbum() }
 
@@ -250,7 +255,8 @@ class MssRepository @Inject constructor(
     suspend fun artists(query: String = "", limit: Int = 40): List<CatalogArtistDto> =
         api.searchArtists(query, limit)
 
-    suspend fun artistTracks(name: String): List<UnifiedTrack> = api.artistTracks(name).map { unify(it) }
+    suspend fun artistTracks(name: String): List<UnifiedTrack> =
+        dedupeCatalogTracks(api.artistTracks(name).map { unify(it) })
 
     suspend fun registerLocalFile(
         uri: Uri,

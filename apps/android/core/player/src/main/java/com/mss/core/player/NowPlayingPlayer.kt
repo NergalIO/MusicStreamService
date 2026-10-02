@@ -37,12 +37,18 @@ class NowPlayingPlayer(
     private var anchorPos = 0L
     private var anchorAt = 0L
     private var anchorPlaying = false
+    private var ignorePauseUntil = 0L
+    private var restorePlayWhenReady = false
 
     fun publish(state: PlayerUiState) {
         val now = android.os.SystemClock.elapsedRealtime()
         val expected = if (anchorPlaying) anchorPos + (now - anchorAt) else anchorPos
         val sameTrack = ui.current?.id == state.current?.id && ui.current?.source == state.current?.source
+        if (!sameTrack && state.playing) {
+            ignorePauseUntil = now + 2_500L
+        }
         val structural = !sameTrack ||
+            restorePlayWhenReady ||
             state.playing != ui.playing ||
             state.index != ui.index ||
             state.queue.size != ui.queue.size ||
@@ -51,6 +57,7 @@ class NowPlayingPlayer(
             abs(state.durationMs - ui.durationMs) > 500 ||
             abs(state.positionMs - expected) > 2_000 ||
             anchorAt == 0L
+        restorePlayWhenReady = false
         ui = state
         if (!structural) return
         anchorPos = state.positionMs
@@ -118,7 +125,15 @@ class NowPlayingPlayer(
     }
 
     override fun handleSetPlayWhenReady(playWhenReady: Boolean): ListenableFuture<*> {
-        main.post { if (playWhenReady) controls.play() else controls.pause() }
+        main.post {
+            if (playWhenReady) {
+                controls.play()
+            } else if (android.os.SystemClock.elapsedRealtime() < ignorePauseUntil && ui.playing) {
+                restorePlayWhenReady = true
+            } else {
+                controls.pause()
+            }
+        }
         return Futures.immediateVoidFuture()
     }
 

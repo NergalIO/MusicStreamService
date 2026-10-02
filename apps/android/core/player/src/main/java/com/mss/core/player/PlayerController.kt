@@ -125,9 +125,23 @@ class PlayerController @Inject constructor(
     private var lastSettings: PlaybackSettings? = null
     private val audioManager = context.getSystemService(Context.AUDIO_SERVICE) as AudioManager
     private var focusRequest: AudioFocusRequest? = null
+    /** Повторный requestAudioFocus после play() забирает фокус у WebView и ставит трек на паузу. */
+    private var spotifyFocusHeld = false
+    /** Сразу после смены трека WebView и шторка шлют LOSS_TRANSIENT / pause — это не команда пользователя. */
+    private var suppressExternalPauseUntil = 0L
     private val focusListener = AudioManager.OnAudioFocusChangeListener { change ->
-        if (change == AudioManager.AUDIOFOCUS_LOSS || change == AudioManager.AUDIOFOCUS_LOSS_TRANSIENT) {
-            if (usingSpotify && _state.value.playing) pause()
+        when (change) {
+            AudioManager.AUDIOFOCUS_GAIN -> {
+                if (usingSpotify) spotifyFocusHeld = true
+            }
+            AudioManager.AUDIOFOCUS_LOSS -> {
+                spotifyFocusHeld = false
+                if (usingSpotify && _state.value.playing) pause()
+            }
+            AudioManager.AUDIOFOCUS_LOSS_TRANSIENT -> {
+                if (usingSpotify && ignoreExternalSpotifyPause()) return@OnAudioFocusChangeListener
+                if (usingSpotify && _state.value.playing) pause()
+            }
         }
     }
 
@@ -337,6 +351,8 @@ class PlayerController @Inject constructor(
         if (usingSpotify) {
             holdCommand()
             awaitingStart = true
+            suppressExternalPauseUntil = android.os.SystemClock.elapsedRealtime() + SKIP_PAUSE_GUARD_MS
+            holdSpotifyFocus()
             spotifyWeb.wake()
             spotifyWeb.resume()
         } else {
@@ -488,6 +504,7 @@ class PlayerController @Inject constructor(
         val pos = _state.value.positionMs
         usingSpotify = true
         silenceExo()
+        holdSpotifyFocus()
         scope.launch { spotifyWeb.play(track.id, pos, fast = preferences.loadPlaybackSettings().spotifyFastStart) }
     }
 
@@ -504,7 +521,12 @@ class PlayerController @Inject constructor(
             val seekLanded = target != null && kotlin.math.abs(d.positionMs - target) < 2_000
             if (target != null && (seekLanded || android.os.SystemClock.elapsedRealtime() >= seekDeadline)) seekTarget = null
             val ours = domIsOurTrack(d)
-            if (ours) sawOwnSpotifyTitle = true
+            if (ours && d.playing) {
+                sawOwnSpotifyTitle = true
+                spotifyStarting = false
+            } else if (ours) {
+                sawOwnSpotifyTitle = true
+            }
             // Сразу после команды в панели ещё прошлый трек: его позицию не берём, но и не ждём вечно.
             val trustDom = ours || sawOwnSpotifyTitle || !holding
             dur = (if (trustDom) d.durationMs.takeIf { it > 0 } else null) ?: fallbackDur
@@ -621,6 +643,7 @@ class PlayerController @Inject constructor(
         val track = queue.getOrNull(index) ?: return
         val gen = ++playGen
         awaitingStart = true
+        suppressExternalPauseUntil = android.os.SystemClock.elapsedRealtime() + SKIP_PAUSE_GUARD_MS
         _state.value = _state.value.copy(current = track, queue = queue.toList(), index = index, playing = true)
         session("info", "player", "play ${track.source} ${track.id} «${track.title}»")
         playedMs = 0
@@ -657,6 +680,7 @@ class PlayerController @Inject constructor(
                     usingSpotify = true
                     exoStarting = false
                     silenceExo()
+                    holdSpotifyFocus()
                     spotifyWeb.wake()
                     spotifyStarting = true
                     _state.value = _state.value.copy(positionMs = 0)
@@ -665,15 +689,18 @@ class PlayerController @Inject constructor(
                     if (gen == playGen) {
                         // Панель веб-плеера обновляется с задержкой: ещё немного верим своему состоянию.
                         holdCommand()
-                        spotifyStarting = false
+                        val d = spotifyWeb.dom.value
+                        spotifyStarting = !(d.playing && (domIsOurTrack(d) || d.ad))
                     }
                     result
                         .onSuccess {
                             if (gen != playGen) return@launch
-                            holdSpotifyFocus()
                             val d = spotifyWeb.dom.value
                             val ours = domIsOurTrack(d)
-                            if (d.playing && ours) awaitingStart = false
+                            if (d.playing && ours) {
+                                awaitingStart = false
+                                spotifyStarting = false
+                            }
                             _state.value = _state.value.copy(
                                 playing = true,
                                 durationMs = (if (ours) d.durationMs.takeIf { it > 0 } else null) ?: track.durationMs ?: 0,
@@ -950,7 +977,8 @@ class PlayerController @Inject constructor(
 
     /** Веб-плеер Spotify сам фокус не берёт — без этого другие приложения не затихают. */
     private fun holdSpotifyFocus() {
-        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
+        if (spotifyFocusHeld) return
+        val granted = if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
             val req = focusRequest ?: AudioFocusRequest.Builder(AudioManager.AUDIOFOCUS_GAIN)
                 .setAudioAttributes(
                     PlatformAudioAttributes.Builder()
@@ -959,6 +987,7 @@ class PlayerController @Inject constructor(
                         .build(),
                 )
                 .setOnAudioFocusChangeListener(focusListener)
+                .setAcceptsDelayedFocusGain(false)
                 .build()
                 .also { focusRequest = it }
             audioManager.requestAudioFocus(req)
@@ -966,15 +995,22 @@ class PlayerController @Inject constructor(
             @Suppress("DEPRECATION")
             audioManager.requestAudioFocus(focusListener, AudioManager.STREAM_MUSIC, AudioManager.AUDIOFOCUS_GAIN)
         }
+        spotifyFocusHeld = granted == AudioManager.AUDIOFOCUS_REQUEST_GRANTED
     }
 
     private fun dropSpotifyFocus() {
+        spotifyFocusHeld = false
         if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
             focusRequest?.let { audioManager.abandonAudioFocusRequest(it) }
         } else {
             @Suppress("DEPRECATION")
             audioManager.abandonAudioFocus(focusListener)
         }
+    }
+
+    private fun ignoreExternalSpotifyPause(): Boolean {
+        return spotifyStarting || awaitingStart ||
+            android.os.SystemClock.elapsedRealtime() < suppressExternalPauseUntil
     }
 
     private fun applySettings(settings: PlaybackSettings) {
@@ -1010,6 +1046,7 @@ class PlayerController @Inject constructor(
 
     private companion object {
         const val COMMAND_HOLD_MS = 1_500L
+        const val SKIP_PAUSE_GUARD_MS = 2_500L
         const val SEEK_WAIT_MS = 10_000L
         const val AUTOPLAY_START_MS = 10_000L
     }

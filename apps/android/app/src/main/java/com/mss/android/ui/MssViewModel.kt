@@ -36,6 +36,8 @@ import com.mss.core.localtracks.LocalTrackStore
 import com.mss.core.model.UnifiedTrack
 import com.mss.core.model.UserSubscriptionDto
 import com.mss.core.model.WaveSettings
+import com.mss.core.model.dedupeCatalogTracks
+import com.mss.core.model.sameCatalogTrack
 import com.mss.core.model.sourceFrom
 import com.mss.core.network.PlayReporter
 import com.mss.core.network.PresenceClient
@@ -780,7 +782,7 @@ class MssViewModel @Inject constructor(
     }
 
     private suspend fun loadMssArtist(name: String): ArtistBundle {
-        val tracks = dedupeMssTracks(runCatching { repo.artistTracks(name) }.getOrDefault(emptyList()))
+        val tracks = dedupeCatalogTracks(runCatching { repo.artistTracks(name) }.getOrDefault(emptyList()))
         val owned = runCatching { repo.albums(name) }.getOrDefault(emptyList())
             .filter { album ->
                 album.artist.contains(name, ignoreCase = true) ||
@@ -838,10 +840,13 @@ class MssViewModel @Inject constructor(
 
     private suspend fun mergeArtistTracks(name: String, preferredSource: SourceId?, preferredId: String?): List<UnifiedTrack> {
         val out = mutableListOf<UnifiedTrack>()
-        val seen = mutableSetOf<String>()
         fun add(list: List<UnifiedTrack>) {
             list.forEach { t ->
-                if (seen.add("${t.source}:${t.id}")) out += t
+                val idx = out.indexOfFirst { sameCatalogTrack(it, t) }
+                if (idx < 0) out += t
+                else if (preferredSource != null && t.source == preferredSource && out[idx].source != preferredSource) {
+                    out[idx] = t
+                }
             }
         }
         add(runCatching { repo.artistTracks(name) }.getOrDefault(emptyList()))
@@ -889,8 +894,10 @@ class MssViewModel @Inject constructor(
         val matches: (UnifiedTrack) -> Boolean = {
             it.albumId == idOrTitle || it.album.equals(idOrTitle, ignoreCase = true)
         }
-        val tracks = runCatching { repo.mssTracks(idOrTitle, 100) }.getOrDefault(emptyList()).filter(matches)
-            .ifEmpty { runCatching { repo.mssTracks("", 100) }.getOrDefault(emptyList()).filter(matches) }
+        val tracks = dedupeCatalogTracks(
+            runCatching { repo.mssTracks(idOrTitle, 100) }.getOrDefault(emptyList()).filter(matches)
+                .ifEmpty { runCatching { repo.mssTracks("", 100) }.getOrDefault(emptyList()).filter(matches) },
+        )
         if (tracks.isEmpty()) return null
         val seed = tracks.first()
         return AlbumWithTracks(
@@ -1846,36 +1853,6 @@ private fun mssCatalogArtists(dtos: List<CatalogArtistDto>, tracks: List<Unified
     return map.values
         .sortedByDescending { it.count }
         .map { UnifiedArtist(SourceId.LOCAL, it.name, it.name, imageUrl = it.cover, trackCount = it.count.takeIf { n -> n > 0 }) }
-}
-
-private fun foldArtistText(value: String): String =
-    value.trim().lowercase().replace('ё', 'е').replace(Regex("\\s+"), " ")
-
-private fun sameMssTrack(a: UnifiedTrack, b: UnifiedTrack): Boolean {
-    if (a.id == b.id) return true
-    val ha = a.contentHash?.lowercase()
-    val hb = b.contentHash?.lowercase()
-    if (!ha.isNullOrBlank() && ha == hb) return true
-    val durationOk = a.durationMs == null || b.durationMs == null ||
-        kotlin.math.abs((a.durationMs ?: 0) - (b.durationMs ?: 0)) <= 8000
-    return foldArtistText(a.title) == foldArtistText(b.title) &&
-        foldArtistText(a.artist) == foldArtistText(b.artist) &&
-        durationOk
-}
-
-private fun rankMssTrack(track: UnifiedTrack): Int =
-    (if (!track.coverUrl.isNullOrBlank()) 4 else 0) +
-        (if (track.userHolds == true) 2 else 0) +
-        (if (track.availability == "cached" || track.availability == "online") 1 else 0)
-
-private fun dedupeMssTracks(tracks: List<UnifiedTrack>): List<UnifiedTrack> {
-    val out = mutableListOf<UnifiedTrack>()
-    for (track in tracks) {
-        val idx = out.indexOfFirst { sameMssTrack(it, track) }
-        if (idx < 0) out += track
-        else if (rankMssTrack(track) > rankMssTrack(out[idx])) out[idx] = track
-    }
-    return out
 }
 
 private fun albumsFromTracks(tracks: List<UnifiedTrack>): List<UnifiedAlbum> {

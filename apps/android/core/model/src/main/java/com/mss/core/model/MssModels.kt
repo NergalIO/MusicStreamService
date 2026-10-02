@@ -183,8 +183,37 @@ data class UnifiedArtist(
     val trackCount: Int? = null,
 )
 
-fun localArtistLikeId(name: String): String =
-    name.trim().lowercase().replace('ё', 'е').replace(Regex("\\s+"), " ").take(200)
+fun localArtistLikeId(name: String): String = foldCatalogText(name).take(200)
+
+fun foldCatalogText(value: String): String =
+    value.trim().lowercase().replace('ё', 'е').replace(Regex("\\s+"), " ")
+
+fun sameCatalogTrack(a: UnifiedTrack, b: UnifiedTrack): Boolean {
+    if (a.id == b.id) return true
+    val ha = a.contentHash?.lowercase()
+    val hb = b.contentHash?.lowercase()
+    if (!ha.isNullOrBlank() && ha == hb) return true
+    val durationOk = a.durationMs == null || b.durationMs == null ||
+        kotlin.math.abs((a.durationMs ?: 0) - (b.durationMs ?: 0)) <= 8_000
+    return foldCatalogText(a.title) == foldCatalogText(b.title) &&
+        foldCatalogText(a.artist) == foldCatalogText(b.artist) &&
+        durationOk
+}
+
+fun rankCatalogTrack(track: UnifiedTrack): Int =
+    (if (!track.coverUrl.isNullOrBlank()) 4 else 0) +
+        (if (track.userHolds == true) 2 else 0) +
+        (if (track.availability == "cached" || track.availability == "online") 1 else 0)
+
+fun dedupeCatalogTracks(tracks: List<UnifiedTrack>): List<UnifiedTrack> {
+    val out = mutableListOf<UnifiedTrack>()
+    for (track in tracks) {
+        val idx = out.indexOfFirst { sameCatalogTrack(it, track) }
+        if (idx < 0) out += track
+        else if (rankCatalogTrack(track) > rankCatalogTrack(out[idx])) out[idx] = track
+    }
+    return out
+}
 
 @Serializable
 data class UnifiedAlbum(
@@ -624,14 +653,16 @@ fun AlbumDto.toUnifiedAlbum(): UnifiedAlbum = UnifiedAlbum(
 )
 
 fun AlbumDto.toAlbumWithTracks(apiBase: String): AlbumWithTracks {
-    val mapped = tracks.map { dto ->
-        val unified = dto.toUnifiedTrack(apiBase)
-        unified.copy(
-            albumId = dto.albumId ?: id,
-            album = dto.album ?: title,
-            coverUrl = unified.coverUrl ?: coverUrl,
-        )
-    }
+    val mapped = dedupeCatalogTracks(
+        tracks.map { dto ->
+            val unified = dto.toUnifiedTrack(apiBase)
+            unified.copy(
+                albumId = dto.albumId ?: id,
+                album = dto.album ?: title,
+                coverUrl = unified.coverUrl ?: coverUrl,
+            )
+        },
+    )
     return AlbumWithTracks(
         source = SourceId.LOCAL,
         id = id,
@@ -639,7 +670,7 @@ fun AlbumDto.toAlbumWithTracks(apiBase: String): AlbumWithTracks {
         artist = artist,
         year = year,
         coverUrl = coverUrl,
-        trackCount = trackCount.takeIf { it > 0 } ?: mapped.size,
+        trackCount = mapped.size,
         type = type,
         tracks = mapped,
         durationMs = mapped.mapNotNull { it.durationMs }.sum().takeIf { it > 0 },
