@@ -16,7 +16,11 @@ function generateCode(): string {
   return String(randomInt(0, 1_000_000)).padStart(6, '0');
 }
 
-export async function issueAndSendVerificationCode(userId: string, email: string): Promise<void> {
+export async function issueAndSendVerificationCode(
+  userId: string,
+  email: string,
+  opts?: { ignoreCooldown?: boolean },
+): Promise<void> {
   const [latest] = await db
     .select()
     .from(emailVerificationCodes)
@@ -24,9 +28,8 @@ export async function issueAndSendVerificationCode(userId: string, email: string
     .orderBy(desc(emailVerificationCodes.createdAt))
     .limit(1);
 
-  if (latest && Date.now() - latest.createdAt.getTime() < RESEND_COOLDOWN_MS) {
-    const err = new Error('RESEND_TOO_SOON');
-    throw err;
+  if (!opts?.ignoreCooldown && latest && Date.now() - latest.createdAt.getTime() < RESEND_COOLDOWN_MS) {
+    throw new Error('RESEND_TOO_SOON');
   }
 
   await db.delete(emailVerificationCodes).where(eq(emailVerificationCodes.userId, userId));
@@ -39,7 +42,12 @@ export async function issueAndSendVerificationCode(userId: string, email: string
     expiresAt,
   });
 
-  await sendVerificationCode(email, code);
+  try {
+    await sendVerificationCode(email, code);
+  } catch (e) {
+    await db.delete(emailVerificationCodes).where(eq(emailVerificationCodes.userId, userId));
+    throw e;
+  }
 }
 
 export type VerifyCodeResult = 'ok' | 'invalid' | 'expired' | 'too_many_attempts';
