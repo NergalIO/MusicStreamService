@@ -408,6 +408,7 @@ class SpotifyWebSession @Inject constructor(
         injectBridge()
         pageMutex.withLock {
             val first = awaitPlay(trackId, positionMs, fast)
+            if (first.optBoolean("cancelled")) return@withLock
             if (first.optBoolean("authFailed") && fast) {
                 invalidateHeaders()
                 runCatching { awaitHeaders() }
@@ -457,13 +458,16 @@ class SpotifyWebSession @Inject constructor(
         if (result.optBoolean("cancelled")) return result
         result.optString("deviceUrl").takeIf { it.isNotBlank() }?.let { ownDeviceUrl = it }
         runCatching {
+            val posted = result.optBoolean("posted")
+            val playing = result.optBoolean("playing") || posted
+            val title = result.optString("trackTitle").ifBlank { result.optString("title") }
             _dom.value = SpotifyDomState(
                 ready = result.optBoolean("ready"),
-                playing = result.optBoolean("playing"),
+                playing = playing,
                 ad = result.optBoolean("ad"),
                 positionMs = result.optLong("positionMs"),
                 durationMs = result.optLong("durationMs"),
-                title = result.optString("trackTitle").ifBlank { result.optString("title") },
+                title = if (posted && !result.optBoolean("playing")) _dom.value.title else title,
             )
         }
         result.opt("remoteName")

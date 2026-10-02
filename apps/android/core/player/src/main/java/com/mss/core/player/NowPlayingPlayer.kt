@@ -44,8 +44,8 @@ class NowPlayingPlayer(
         val now = android.os.SystemClock.elapsedRealtime()
         val expected = if (anchorPlaying) anchorPos + (now - anchorAt) else anchorPos
         val sameTrack = ui.current?.id == state.current?.id && ui.current?.source == state.current?.source
-        if (!sameTrack && state.playing) {
-            ignorePauseUntil = now + 2_500L
+        if (state.playing && (!ui.playing || !sameTrack || state.buffering)) {
+            ignorePauseUntil = now + 3_500L
         }
         val structural = !sameTrack ||
             restorePlayWhenReady ||

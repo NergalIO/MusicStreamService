@@ -1,6 +1,18 @@
 (function () {
-  var VERSION = 1;
+  var VERSION = 3;
   if (window.__mss && window.__mss.version === VERSION) return;
+  if (window.__mssObserver) {
+    try {
+      window.__mssObserver.disconnect();
+    } catch (e) {
+      /* old observer */
+    }
+    window.__mssObserver = null;
+  }
+  if (window.__mssTimers) {
+    for (var ti = 0; ti < window.__mssTimers.length; ti++) clearInterval(window.__mssTimers[ti]);
+    window.__mssTimers = [];
+  }
 
   function q(sel, root) {
     return (root || document).querySelector(sel);
@@ -111,6 +123,11 @@
     return LOCAL_RE.test(String(n || ''));
   }
 
+  /** «Web Player (Chrome)» — и этот плеер, и чужой. После своей команды play это мы, не колонка. */
+  function isLikelySelfName(n) {
+    return isLocalName(n) || /web player|веб-плеер/i.test(String(n || ''));
+  }
+
   function remoteFromBar() {
     var bar = q('[data-testid="now-playing-bar"]') || q('footer');
     if (!bar) return null;
@@ -121,7 +138,7 @@
       var t = String(el.innerText || el.textContent || '').replace(/\s+/g, ' ').trim();
       if (!PLAYING_RE.test(t)) continue;
       var name = t.replace(PLAYING_RE, '').trim();
-      if (name && !isLocalName(name)) return name;
+      if (name && !isLikelySelfName(name)) return name;
     }
     return null;
   }
@@ -288,7 +305,7 @@
       }
       if (res.status === 401 || res.status === 403) return { ok: false, authFailed: true };
       if (!res.ok) return { ok: false };
-      for (var t = 0; t < 800; t += 80) {
+      for (var t = 0; t < 400; t += 80) {
         if (gen !== mss.gen) return { cancelled: true };
         var s = readState();
         var remote = remoteFromBar();
@@ -300,7 +317,7 @@
         }
         await sleep(80);
       }
-      return { ok: false };
+      return { ok: true, posted: true, deviceUrl: dev.url, state: readState() };
     })();
   }
 
@@ -347,6 +364,7 @@
   var armed = false;
 
   function pushState(s) {
+    s.trackId = mss.lastTrackId;
     var key = s.playing + '|' + s.ad + '|' + s.title + '|' + Math.round((s.positionMs || 0) / 250) + '|' + s.durationMs;
     if (key === lastPush) return;
     lastPush = key;
@@ -397,11 +415,14 @@
       pushState(readState());
     }
     window.__mssObserver = obs;
+    window.__mssTimers = window.__mssTimers || [];
     attach();
-    setInterval(attach, 1000);
-    setInterval(function () {
-      pushState(readState());
-    }, 250);
+    window.__mssTimers.push(setInterval(attach, 1000));
+    window.__mssTimers.push(
+      setInterval(function () {
+        pushState(readState());
+      }, 250),
+    );
   }
 
   var mss = {
@@ -428,7 +449,9 @@
       return run;
     },
     state: function () {
-      return readState();
+      var s = readState();
+      s.trackId = this.lastTrackId;
+      return s;
     },
     pause: function () {
       var gen = ++this.gen;
@@ -439,8 +462,8 @@
       });
     },
     resume: function () {
-      var gen = ++this.gen;
       var self = this;
+      var gen = this.gen;
       return this.enqueue(function () {
         if (gen !== self.gen) return false;
         return clickPlayPause(true);
@@ -566,10 +589,12 @@
             positionMs: state.positionMs,
             durationMs: state.durationMs,
             trackTitle: extra.trackTitle || state.title,
+            trackId: self.lastTrackId,
             remoteName: remote || null,
             deviceUrl: extra.deviceUrl || (self.ownDevice && self.ownDevice.url) || null,
             cancelled: false,
             authFailed: !!extra.authFailed,
+            posted: !!extra.posted,
             error: extra.error || '',
           };
         }
@@ -587,13 +612,18 @@
         }
 
         var path = '/track/' + trackId;
-        var alreadyHere = location.pathname.indexOf(trackId) >= 0 || self.lastTrackId === trackId;
+        var alreadyHere = location.pathname.indexOf(trackId) >= 0;
         if (alreadyHere) {
           var hereState = readState();
-          if (!hereState.playing) clickPlayPause(true);
+          if (hereState.playing || hereState.ad) {
+            if (target > 0 && Math.abs(hereState.positionMs - target) > 2000) applySeek(target);
+            self.lastTrackId = trackId;
+            return pack(readState());
+          }
+          clickPlayPause(true);
           if (target > 0 && Math.abs(hereState.positionMs - target) > 2000) applySeek(target);
           await waitFor(
-            8000,
+            4000,
             function () {
               var s = readState();
               return s.playing || s.ad;
@@ -614,7 +644,7 @@
             if (fast.deviceUrl) self.ownDevice = parseDeviceUrl(fast.deviceUrl);
             self.lastTrackId = trackId;
             var fs = fast.state || readState();
-            return pack(fs, { deviceUrl: fast.deviceUrl, trackTitle: fs.title });
+            return pack(fs, { deviceUrl: fast.deviceUrl, trackTitle: fs.title, posted: fast.posted });
           }
         }
 
@@ -671,6 +701,11 @@
           });
         }
 
+        var bar = readState();
+        if (bar.playing || bar.ad) {
+          self.lastTrackId = trackId;
+          return pack(bar, { trackTitle: heading || bar.title });
+        }
         if (!isPauseLabel(actionButton)) actionButton.click();
         await waitFor(
           10000,

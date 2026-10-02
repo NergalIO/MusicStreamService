@@ -20,6 +20,17 @@ let stalled = false;
 
 const HOLD_MS = 1500;
 const STALL_MS = 4000;
+const PAUSE_GUARD_MS = 3500;
+
+let ignorePauseUntil = 0;
+
+export function armSpotifyPauseGuard(ms = PAUSE_GUARD_MS): void {
+  ignorePauseUntil = Date.now() + ms;
+}
+
+export function shouldIgnoreSpotifyExternalPause(): boolean {
+  return Date.now() < ignorePauseUntil || usePlaybackStore.getState().loading;
+}
 
 export function ipcMessage(e: unknown): string {
   const m = e instanceof Error ? e.message : String(e);
@@ -125,6 +136,7 @@ export async function startSpotifyTrack(
   fadingOut = false;
   stalled = false;
   activeTrackId = track.id;
+  armSpotifyPauseGuard();
   setAnchor(startAtSeconds * 1000, false);
   markPositionMoved(startAtSeconds * 1000);
   holdLocal({ playing: true, positionMs: startAtSeconds * 1000 });
@@ -152,7 +164,11 @@ export async function startSpotifyTrack(
     useSettingsStore.getState().spotifyFastStart,
   );
   if (activeTrackId !== track.id) return;
-  if (started?.remoteDevice) {
+  if (!started) {
+    usePlaybackStore.setState({ playing: false, loading: false });
+    return;
+  }
+  if (started.remoteDevice) {
     setAnchor(started.positionMs || startAtSeconds * 1000, false);
     stalled = false;
     usePlaybackStore.setState({ playing: false, loading: false });
@@ -174,10 +190,17 @@ export async function startSpotifyTrack(
       duration: started.durationMs / 1000,
     });
   } else {
+    const confirmed = !!started.playing && !started.posted;
     setAnchor(startAtSeconds * 1000, true);
     markPositionMoved(startAtSeconds * 1000);
     holdLocal({ playing: true, positionMs: startAtSeconds * 1000 });
-    usePlaybackStore.setState({ playing: true, loading: false, ad: false, adTitle: undefined });
+    armSpotifyPauseGuard();
+    usePlaybackStore.setState({
+      playing: true,
+      loading: !confirmed,
+      ad: false,
+      adTitle: undefined,
+    });
     if (fadeIn > 0 && !muted) void fadeSpotifyVolume(0, volume * 100, fadeIn * 1000);
   }
   startTick();
@@ -207,6 +230,20 @@ export function applySpotifyState(state: {
 }): boolean {
   if (!activeTrackId || state.trackId !== activeTrackId) return false;
   if (state.ad) hold = null;
+
+  if (!state.playing && !state.ad && shouldIgnoreSpotifyExternalPause() && hold?.playing !== false) {
+    if (state.audible) {
+      setAnchor(state.positionMs || anchor.positionMs, true);
+      usePlaybackStore.setState({
+        playing: true,
+        loading: false,
+        duration: state.durationMs ? state.durationMs / 1000 : usePlaybackStore.getState().duration,
+      });
+    } else if (state.durationMs) {
+      usePlaybackStore.setState({ duration: state.durationMs / 1000 });
+    }
+    return true;
+  }
 
   const now = Date.now();
   if (hold && now < hold.until) {
@@ -260,7 +297,8 @@ export function toggleSpotify(): void {
   markPositionMoved(position);
   setAnchor(position, !playing);
   holdLocal({ playing: !playing, positionMs: position });
-  usePlaybackStore.setState({ playing: !playing });
+  if (!playing) armSpotifyPauseGuard();
+  usePlaybackStore.setState({ playing: !playing, loading: false });
   const call = playing ? window.electronAPI.spotifyConnect.pause() : window.electronAPI.spotifyConnect.resume();
   call.catch((e) => {
     setAnchor(position, playing);

@@ -39,6 +39,7 @@ export interface SpotifyPlayResult {
   positionMs: number;
   durationMs: number;
   remoteDevice: string | null;
+  posted?: boolean;
 }
 
 export interface SpotifyDevice {
@@ -61,10 +62,12 @@ interface PageState {
   positionMs: number;
   durationMs: number;
   trackTitle?: string;
+  trackId?: string | null;
   remoteName?: string | null;
   deviceUrl?: string | null;
   cancelled?: boolean;
   authFailed?: boolean;
+  posted?: boolean;
   error?: string;
 }
 
@@ -108,7 +111,7 @@ function emitEnded(): void {
 }
 
 function toConnectState(s: PageState): SpotifyConnectState {
-  const ours = !!expectedTitle && s.title === expectedTitle;
+  const ours = (expectedTrackId && s.trackId === expectedTrackId) || (!!expectedTitle && s.title === expectedTitle);
   const ad = !!s.ad;
   return {
     trackId: (ours || ad) && expectedTrackId ? expectedTrackId : null,
@@ -135,7 +138,7 @@ function leftPrevNearEnd(prev: PageState): boolean {
 function handleState(s: PageState): number {
   const prev = lastState;
   lastState = s;
-  const ours = !!expectedTitle && s.title === expectedTitle;
+  const ours = (expectedTrackId && s.trackId === expectedTrackId) || (!!expectedTitle && s.title === expectedTitle);
   const left = s.durationMs - s.positionMs;
   if (ours && s.durationMs > 0 && left > endLeadMs) armed = true;
   if (!s.ad && armed && !starting) {
@@ -157,7 +160,7 @@ function onPageMessage(message: string): void {
     emitEnded();
     return;
   }
-  if (!expectedTitle || !message.startsWith('__mss:state:')) return;
+  if (!expectedTrackId || !message.startsWith('__mss:state:')) return;
   try {
     handleState(JSON.parse(message.slice('__mss:state:'.length)) as PageState);
   } catch {
@@ -195,9 +198,9 @@ function publishDevices(status: SpotifyDeviceStatus): SpotifyDeviceStatus {
   return status;
 }
 
-async function readDevices(): Promise<SpotifyDeviceStatus> {
+async function readDevices(action: 'list' | 'peek' = 'list'): Promise<SpotifyDeviceStatus> {
   try {
-    const status = await spotifyWebExec<SpotifyDeviceStatus>('window.__mss.devices("list")');
+    const status = await spotifyWebExec<SpotifyDeviceStatus>(`window.__mss.devices(${JSON.stringify(action)})`);
     const remoteName = status?.remoteName && !isSpotifyWebAudible() ? status.remoteName : null;
     return publishDevices({
       remoteName,
@@ -254,7 +257,12 @@ async function play(trackId: string, positionMs = 0, fast = false): Promise<Spot
     if (state?.cancelled) return;
     if (state?.deviceUrl) markSpotifyOwnDevice(state.deviceUrl);
     if (state?.error && !state.remoteName && !state.ad) throw new Error(state.error);
-    expectedTitle = state.trackTitle || state.title;
+    if (!state.posted || state.playing || state.ad) {
+      expectedTitle = state.trackTitle || state.title;
+    }
+    if (state.posted && !state.playing && !state.ad && !state.remoteName) {
+      state.playing = true;
+    }
     lastState = state;
     const sent = emitConnectState(state);
     if (state.playing && !state.remoteName && isSpotifyWebAudible()) {
@@ -269,12 +277,13 @@ async function play(trackId: string, positionMs = 0, fast = false): Promise<Spot
         positionMs: sent.positionMs,
         durationMs: sent.durationMs,
         remoteDevice: null,
+        posted: !!state.posted,
       },
       state.remoteName,
     );
   } catch (e) {
     if (seq !== playSeq) return;
-    const status = await readDevices();
+    const status = await readDevices('peek');
     if (status.remoteName) {
       schedulePoll(POLL_WATCHDOG_MS);
       return {

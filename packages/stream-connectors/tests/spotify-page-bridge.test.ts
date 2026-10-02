@@ -38,5 +38,8 @@ describe('SPOTIFY_PAGE_BRIDGE', () => {
     expect(SPOTIFY_PAGE_BRIDGE).toContain('cancel:');
     expect(SPOTIFY_PAGE_BRIDGE).toContain('fadeVolume:');
     expect(SPOTIFY_PAGE_BRIDGE).toContain('location.assign');
+    expect(SPOTIFY_PAGE_BRIDGE).toContain('posted: true');
+    expect(SPOTIFY_PAGE_BRIDGE).toContain('web player|веб-плеер');
+    expect(SPOTIFY_PAGE_BRIDGE).toContain('trackId: self.lastTrackId');
   });
 });

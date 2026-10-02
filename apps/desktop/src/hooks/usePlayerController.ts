@@ -25,6 +25,7 @@ import {
   fadeSpotifyOutAndPause,
   isActiveSpotifyTrack,
   isSpotifyControlled,
+  shouldIgnoreSpotifyExternalPause,
   spotifyPositionSeconds,
   startSpotifyTrack,
   stopSpotifyTrack,
@@ -466,7 +467,10 @@ export function usePlayerController(): void {
     if ('mediaSession' in navigator) {
       const ms = navigator.mediaSession;
       ms.setActionHandler('play', () => setPlaying(true));
-      ms.setActionHandler('pause', () => setPlaying(false));
+      ms.setActionHandler('pause', () => {
+        if (isSpotifyControlled() && shouldIgnoreSpotifyExternalPause()) return;
+        setPlaying(false);
+      });
       ms.setActionHandler('nexttrack', () => skipNext());
       ms.setActionHandler('previoustrack', () => skipPrev());
       ms.setActionHandler('seekto', (d) => {

@@ -138,6 +138,7 @@ class PlayerController @Inject constructor(
                 if (usingSpotify) spotifyFocusHeld = true
             }
             AudioManager.AUDIOFOCUS_LOSS -> {
+                if (usingSpotify && ignoreExternalSpotifyPause()) return@OnAudioFocusChangeListener
                 spotifyFocusHeld = false
                 if (usingSpotify && _state.value.playing) pause()
             }
@@ -733,6 +734,7 @@ class PlayerController @Inject constructor(
                     result
                         .onSuccess {
                             if (gen != playGen) return@launch
+                            suppressExternalPauseUntil = android.os.SystemClock.elapsedRealtime() + SKIP_PAUSE_GUARD_MS
                             val d = spotifyWeb.dom.value
                             val ours = domIsOurTrack(d)
                             if (d.playing && ours) {
@@ -1084,7 +1086,7 @@ class PlayerController @Inject constructor(
 
     private companion object {
         const val COMMAND_HOLD_MS = 1_500L
-        const val SKIP_PAUSE_GUARD_MS = 2_500L
+        const val SKIP_PAUSE_GUARD_MS = 3_500L
         const val SEEK_WAIT_MS = 10_000L
         const val AUTOPLAY_START_MS = 10_000L
         const val STALL_MS = 4_000L

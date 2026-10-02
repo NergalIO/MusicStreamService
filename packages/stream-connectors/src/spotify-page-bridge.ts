@@ -2,7 +2,7 @@ import { readFileSync } from 'node:fs';
 import { dirname, join } from 'node:path';
 import { fileURLToPath } from 'node:url';
 
-export const SPOTIFY_PAGE_BRIDGE_VERSION = 1;
+export const SPOTIFY_PAGE_BRIDGE_VERSION = 3;
 
 const CONNECT_DEVICE_RE = /(https:\/\/[^/]+)\/connect-state\/v1\/devices\/(hobs_[0-9a-f]{16,})/;
 
