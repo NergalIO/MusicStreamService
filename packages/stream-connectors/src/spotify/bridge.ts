@@ -1356,16 +1356,27 @@ export function installBridge(): void {
     explicitPlaying = typeof explicitPaused === "boolean" ? !explicitPaused : null;
     const paused = explicitPaused ?? readPaused(state);
     let position = readPositionMs(state);
+    let positionIsLive = false;
     const getPos = pickMethod(playerApi, ["getProgress", "getPosition", "getCurrentPosition"]);
     if (getPos) {
       try {
         const value = getPos();
-        if (typeof value === "number" && Number.isFinite(value) && value >= 0) position = value;
+        if (typeof value === "number" && Number.isFinite(value) && value >= 0) {
+          position = value;
+          positionIsLive = true;
+        }
       } catch {
         // ignore
       }
     }
     const timestamp = readTimestamp(state);
+    const playingNow = explicitPlaying ?? (typeof paused === "boolean" ? !paused : domPlaying);
+    // Cosmo stores positionAsOfTimestamp — advance it to "now" so callers don't sit on a stale 0–3s lag.
+    // Skip when getProgress already returned a live clock.
+    if (!positionIsLive && playingNow && timestamp > 0 && timestamp < Date.now() + 5_000) {
+      const drift = Date.now() - timestamp;
+      if (drift > 0 && drift < 30_000) position = Math.max(0, position + drift);
+    }
     const listedRec = listed;
     let volume =
       readVolume(listedRec) ??
@@ -1410,15 +1421,32 @@ export function installBridge(): void {
       album: track?.album ?? null,
       durationMs: track?.durationMs ?? asNumber(state.duration) ?? asNumber(state.durationMs),
       positionMs: position,
-      isPlaying: explicitPlaying ?? (typeof paused === "boolean" ? !paused : domPlaying),
+      isPlaying: playingNow,
       liked: readLikedFromRecord(listedRec) ?? readLikedFromRecord(state),
       volume: knownVolume(volume, lastApiVolume) ?? null,
       shuffle: shuffle ?? "Unavailable",
       repeat: knownRepeat(readRepeat(listedRec), readRepeat(state)) ?? "Unavailable",
       muted: readMuted(listedRec) ?? readMuted(state) ?? readMuted(asRecord(playbackApi)) ?? null,
-      sampledAt: timestamp,
+      // Already extrapolated to wall clock — prevent pollState from adding drift twice.
+      sampledAt: Date.now(),
       source: "player",
     };
+  }
+
+  function mediaElementPositionMs(): number | null {
+    try {
+      const nodes = document.querySelectorAll("audio, video");
+      let best: number | null = null;
+      for (const node of nodes) {
+        if (!(node instanceof HTMLMediaElement)) continue;
+        if (node.paused || !Number.isFinite(node.currentTime) || node.currentTime <= 0) continue;
+        const ms = Math.round(node.currentTime * 1000);
+        if (best == null || ms > best) best = ms;
+      }
+      return best;
+    } catch {
+      return null;
+    }
   }
 
   function parseClock(text: string | null): number | null {
@@ -1880,6 +1908,8 @@ export function installBridge(): void {
     else if (current != null) {
       positionMs = progressToMs(current, max, durationMs);
     }
+    const mediaPos = mediaElementPositionMs();
+    if (mediaPos != null && mediaPos > positionMs) positionMs = mediaPos;
 
     const fromButton = readPlayingFromControls();
     const mediaState = navigator.mediaSession?.playbackState;
@@ -1931,6 +1961,7 @@ export function installBridge(): void {
     const fromPlayer = readPlayerState();
     const fromDom = lastDomSample ?? sampleDom();
     const fromTree = lastTreeTrack;
+    const mediaPos = mediaElementPositionMs();
     const uri = fromPlayer?.uri ?? fromTree?.uri ?? fromDom.uri;
     const title = fromPlayer?.title ?? fromTree?.title ?? fromDom.title;
     const artists =
@@ -1939,6 +1970,11 @@ export function installBridge(): void {
         : fromTree && fromTree.artists.length > 0
           ? fromTree.artists
           : fromDom.artists;
+    const positionMs = Math.max(
+      fromPlayer?.positionMs ?? 0,
+      fromDom.positionMs,
+      mediaPos ?? 0,
+    );
     return {
       ready: Boolean(uri || title || fromPlayer?.ready),
       uri,
@@ -1947,14 +1983,14 @@ export function installBridge(): void {
       artists,
       album: fromPlayer?.album ?? fromTree?.album ?? fromDom.album,
       durationMs: fromPlayer?.durationMs ?? fromTree?.durationMs ?? fromDom.durationMs,
-      positionMs: Math.max(fromPlayer?.positionMs ?? 0, fromDom.positionMs),
+      positionMs,
       isPlaying: readPlayingFromControls() ?? explicitPlaying ?? fromDom.isPlaying,
       liked: readLikedFromDom() ?? fromPlayer?.liked ?? null,
       volume: knownVolume(fromPlayer?.volume, lastApiVolume, lastTreeVolume, fromDom.volume) ?? null,
       shuffle: knownBoolean(fromPlayer?.shuffle, lastApiShuffle, fromDom.shuffle) ?? "Unavailable",
       repeat: knownRepeat(fromPlayer?.repeat, fromDom.repeat) ?? "Unavailable",
       muted: fromPlayer?.muted ?? fromDom.muted,
-      sampledAt: fromPlayer?.sampledAt ?? fromDom.sampledAt,
+      sampledAt: Date.now(),
       source: fromPlayer ? "player" : fromTree?.uri ? "player" : "dom",
     };
   }
@@ -2086,6 +2122,9 @@ export function installBridge(): void {
         ) {
           return true;
         }
+        // Don't pause while Cosmo is still buffering the requested start — softPause
+        // here used to cancel a play that would have succeeded a moment later.
+        if (!state.isPlaying) continue;
         await softPausePlayers();
       } catch {
         // try next signature
@@ -2124,11 +2163,41 @@ export function installBridge(): void {
       }
       return null;
     };
+    const softOpenTrack = async (): Promise<void> => {
+      if (!id || !location.href.includes("open.spotify.com")) return;
+      if (location.pathname.includes(`/track/${id}`)) return;
+      try {
+        history.pushState({}, "", `/track/${id}`);
+        window.dispatchEvent(new PopStateEvent("popstate"));
+      } catch {
+        /* ignore */
+      }
+      for (let i = 0; i < 12; i += 1) {
+        if (location.pathname.includes(`/track/${id}`)) break;
+        await sleep(150);
+      }
+      await sleep(500);
+    };
+    if (id) await softOpenTrack(); 
     if (id && location.pathname.includes(`/track/${id}`)) {
-      const header = trackHeaderPlayButton(id);
-      if (clickElement(header)) {
-        const mapped = await mapOutcome(await playingRequested(requested));
-        if (mapped) return mapped;
+      for (let i = 0; i < 16; i += 1) {
+        if (playRejected()) return { ok: false, error: "track_unavailable" };
+        const header = trackHeaderPlayButton(id);
+        if (clickElement(header)) {
+          const mapped = await mapOutcome(await playingRequested(requested));
+          if (mapped) return mapped;
+          break;
+        }
+        await sleep(150);
+      }
+      // Audible start can outrun Cosmo metadata after a header click.
+      for (let i = 0; i < 8; i += 1) {
+        const state = mergeState();
+        if (state.isPlaying && (!state.id || state.id === id || state.uri === requested)) {
+          return { ok: true };
+        }
+        if (playRejected()) return { ok: false, error: "track_unavailable" };
+        await sleep(250);
       }
       return { ok: false, error: playRejected() ? "track_unavailable" : "player_method_missing" };
     }
@@ -2363,6 +2432,14 @@ export function installBridge(): void {
       }
     },
     async play(opts: PlayCommand) {
+      const requested = opts.offsetUri ?? opts.uri;
+      const requestedId = idFromUri(requested);
+      const alreadyOurs = (): boolean => {
+        const state = mergeState();
+        if (!state.isPlaying) return false;
+        if (!requestedId) return true;
+        return !state.id || state.id === requestedId || state.uri === requested;
+      };
       try {
         await waitForPlayApi();
         // Do not dismiss toasts before attempts — we need «track unavailable» banners.
@@ -2377,6 +2454,10 @@ export function installBridge(): void {
           await softPausePlayers();
           return { ok: false, error: "track_unavailable" };
         }
+        if (alreadyOurs()) {
+          dismissPlayToasts();
+          return { ok: true };
+        }
         const viaDom = await playViaDom(opts);
         if (viaDom.ok) {
           dismissPlayToasts();
@@ -2386,12 +2467,20 @@ export function installBridge(): void {
           await softPausePlayers();
           return { ok: false, error: "track_unavailable" };
         }
+        // Cosmo metadata often lags the audible start — prefer ok over false method_missing.
+        for (let i = 0; i < 8; i += 1) {
+          if (alreadyOurs()) {
+            dismissPlayToasts();
+            return { ok: true };
+          }
+          await sleep(250);
+        }
         return viaDom;
       } catch (err) {
         const viaDom = await playViaDom(opts).catch(() => ({ ok: false, error: "play_failed" }) as CommandResult);
-        if (viaDom.ok) {
+        if (viaDom.ok || alreadyOurs()) {
           dismissPlayToasts();
-          return viaDom;
+          return viaDom.ok ? viaDom : { ok: true };
         }
         if (playRejected()) {
           await softPausePlayers();

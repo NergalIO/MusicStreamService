@@ -516,14 +516,14 @@ class SpotifyWebSession @Inject constructor(
         WebCookies.clear(WebCookies.SPOTIFY_URLS, WebCookies.SPOTIFY_DOMAINS, SESSION_COOKIES)
     }
 
-    suspend fun play(trackId: String, positionMs: Long = 0) {
+    /** @return результат play (позиция/состояние) или cancelled; бросает при жёсткой ошибке. */
+    suspend fun play(trackId: String, positionMs: Long = 0, albumId: String? = null): JSONObject {
         if (!TRACK_ID_RE.matches(trackId)) throw ConnectorException("Некорректный id трека Spotify")
         wake()
         if (webView == null) throw ConnectorException("Веб-плеер Spotify не запущен — откройте Spotify в приложении")
         cancelActivePlay()
         ensureBridge()
-        val first = awaitPlay(trackId, positionMs)
-        if (first.optBoolean("cancelled")) return
+        return awaitPlay(trackId, positionMs, albumId?.takeIf { TRACK_ID_RE.matches(it) })
     }
 
     fun cancelActivePlay() {
@@ -537,11 +537,12 @@ class SpotifyWebSession @Inject constructor(
         eval("window.__spotifyBridge && window.__spotifyBridge.pause()")
     }
 
-    private suspend fun awaitPlay(trackId: String, positionMs: Long): JSONObject {
+    private suspend fun awaitPlay(trackId: String, positionMs: Long, albumId: String?): JSONObject {
         val id = httpIds.incrementAndGet().toString()
         val done = CompletableDeferred<JSONObject>()
         playWaiters[id] = done
-        // bridge.play first; never full-navigate (location.href kills the callback and yields «не ответил»).
+        val albumUri = albumId?.let { "spotify:album:$it" }
+        // Soft-nav + album scrape + bridge.play; never location.href (full reload drops the callback).
         eval(
             """
             (async () => {
@@ -549,121 +550,186 @@ class SpotifyWebSession @Inject constructor(
               const trackId = ${JSONObject.quote(trackId)};
               const positionMs = ${positionMs.coerceAtLeast(0)};
               const uri = 'spotify:track:' + trackId;
+              let albumUri = ${if (albumUri != null) JSONObject.quote(albumUri) else "null"};
               let finished = false;
+              let firstPlayingAt = 0;
               const finish = (payload) => {
                 if (finished) return;
                 finished = true;
                 try { MssSpotify.onPlayDone(waiterId, JSON.stringify(payload)); } catch (e) {}
               };
+              const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
               const toastUnavailable = () => {
-                const nodes = document.querySelectorAll('[role="alert"], [role="status"], [data-testid*="toast"]');
+                const nodes = document.querySelectorAll('[role="alert"], [role="status"], [data-testid*="toast"], [data-encore-id="banner"]');
                 for (const el of nodes) {
-                  if (/этот трек недоступен|this track is unavailable|isn't available/i.test(el.textContent || '')) return true;
+                  if (/этот трек недоступен|this track is unavailable|isn't available|недоступен в вашем/i.test(el.textContent || '')) return true;
                 }
                 return false;
               };
               const snapshot = () => {
-                try { return window.__spotifyBridge && window.__spotifyBridge.getState && window.__spotifyBridge.getState(); }
+                try { return window.__spotifyBridge?.getState?.() ?? null; }
                 catch (e) { return null; }
               };
               const matches = (s) => !!(s && (s.id === trackId || s.uri === uri));
               const foreignPlaying = (s) => !!(s && s.isPlaying && s.id && s.id !== trackId && s.uri && String(s.uri).indexOf(':ad:') < 0);
-              const confirmPlaying = async () => {
-                for (let i = 0; i < 20; i += 1) {
-                  if (toastUnavailable()) return false;
-                  const state = snapshot();
-                  if (matches(state) && state.isPlaying) return true;
-                  // Audible start often precedes metadata — accept playing without foreign id.
-                  if (state && state.isPlaying && !foreignPlaying(state) && (!state.id || matches(state))) {
-                    if (i >= 4) return true;
-                  }
-                  await new Promise((r) => setTimeout(r, 200));
-                }
-                const last = snapshot();
-                return !!(last && last.isPlaying && !foreignPlaying(last));
+              const oursPlaying = (s) => !!(s && s.isPlaying && !foreignPlaying(s) && (!s.id || matches(s)));
+              const notePlaying = (s) => {
+                if (firstPlayingAt || !s || !s.isPlaying || foreignPlaying(s)) return;
+                firstPlayingAt = Date.now();
+              };
+              const estimatedPos = (cur) => {
+                const reported = typeof cur.positionMs === 'number' ? cur.positionMs : 0;
+                const heard = firstPlayingAt > 0 ? (Date.now() - firstPlayingAt) : 0;
+                return Math.max(reported, heard, positionMs);
               };
               const doneOk = (s) => {
                 const cur = s || snapshot() || {};
+                notePlaying(cur);
                 finish({
                   ready: !!cur.ready,
-                  playing: cur.isPlaying !== false,
-                  positionMs: cur.positionMs || positionMs,
+                  playing: true,
+                  positionMs: estimatedPos(cur),
                   durationMs: cur.durationMs || 0,
                   title: cur.title || '',
                   trackId: cur.id || trackId,
                   cancelled: false,
                 });
               };
+              const waitOurs = async (ms) => {
+                const deadline = Date.now() + ms;
+                while (Date.now() < deadline) {
+                  if (toastUnavailable()) return false;
+                  const s = snapshot();
+                  notePlaying(s);
+                  if (oursPlaying(s)) return true;
+                  await sleep(200);
+                }
+                const last = snapshot();
+                notePlaying(last);
+                return oursPlaying(last);
+              };
+              const scrapeAlbum = () => {
+                const main = document.querySelector('main') ?? document.body;
+                const links = main.querySelectorAll('a[href*="/album/"]');
+                for (const link of links) {
+                  const href = link.getAttribute('href') || '';
+                  const m = href.match(/\/album\/([0-9A-Za-z]{22})/);
+                  if (m) return 'spotify:album:' + m[1];
+                }
+                return null;
+              };
+              const softOpenTrack = async () => {
+                if (!location.href.includes('open.spotify.com')) return;
+                if (location.pathname.includes('/track/' + trackId)) return;
+                try {
+                  history.pushState({}, '', '/track/' + trackId);
+                  window.dispatchEvent(new PopStateEvent('popstate'));
+                } catch (e) {}
+                for (let i = 0; i < 12; i++) {
+                  if (location.pathname.includes('/track/' + trackId)) break;
+                  await sleep(150);
+                }
+                await sleep(600);
+              };
+              const headerPlay = () => {
+                const main = document.querySelector('main') ?? document.body;
+                const buttons = main.querySelectorAll('[data-testid="play-button"], [data-testid="entity-action-play"], [data-testid="action-bar-row"] button');
+                for (const el of buttons) {
+                  if (!(el instanceof HTMLElement)) continue;
+                  const label = (el.getAttribute('aria-label') || '').toLowerCase();
+                  if (/pause|пауза/.test(label)) continue;
+                  const rect = el.getBoundingClientRect();
+                  if (rect.width >= 24 && rect.height >= 24) return el;
+                }
+                return null;
+              };
+              const clickHeaderPlay = async () => {
+                const deadline = Date.now() + 5000;
+                while (Date.now() < deadline) {
+                  if (toastUnavailable()) return 'track_unavailable';
+                  const btn = headerPlay();
+                  if (btn) {
+                    try { btn.click(); } catch (e) {}
+                    if (await waitOurs(2800)) return 'ok';
+                    if (toastUnavailable()) return 'track_unavailable';
+                    return 'miss';
+                  }
+                  await sleep(150);
+                }
+                return 'miss';
+              };
               try {
                 const bridge = window.__spotifyBridge;
                 if (!bridge) throw new Error('bridge_missing');
-                try {
-                  const play = await bridge.play({ uri: uri, positionMs: positionMs });
-                  if (play && play.ok) {
-                    if (await confirmPlaying()) { doneOk(bridge.getState()); return; }
-                    // play.ok but metadata lag — still succeed if not clearly foreign/unavailable
-                    if (!toastUnavailable() && !foreignPlaying(snapshot())) { doneOk(bridge.getState()); return; }
+                await softOpenTrack();
+                if (!albumUri) {
+                  for (let i = 0; i < 10 && !albumUri; i++) {
+                    albumUri = scrapeAlbum();
+                    if (!albumUri) await sleep(200);
                   }
-                  if ((play && play.error === 'track_unavailable') || toastUnavailable()) {
-                    throw new Error('track_unavailable');
-                  }
-                } catch (bridgeErr) {
-                  if (String(bridgeErr && bridgeErr.message || bridgeErr) === 'track_unavailable') throw bridgeErr;
                 }
-                if (await confirmPlaying()) { doneOk(snapshot()); return; }
+                const attempts = [];
+                // Album/context first — Cosmo rejects bare track URIs as «unavailable».
+                if (albumUri) attempts.push({ uri: albumUri, offsetUri: uri, positionMs: positionMs });
+                attempts.push({ uri: uri, positionMs: positionMs });
+                let lastError = null;
+                for (const args of attempts) {
+                  try {
+                    const play = await bridge.play(args);
+                    if (play && play.ok) { doneOk(bridge.getState()); return; }
+                    if (play && play.error === 'track_unavailable') lastError = 'track_unavailable';
+                    else if (play && play.error) lastError = play.error;
+                    if (await waitOurs(1500)) { doneOk(snapshot()); return; }
+                  } catch (bridgeErr) {
+                    const msg = String(bridgeErr && bridgeErr.message || bridgeErr);
+                    if (msg === 'track_unavailable') throw bridgeErr;
+                    lastError = msg;
+                  }
+                }
+                if (toastUnavailable() || lastError === 'track_unavailable') throw new Error('track_unavailable');
+                const clicked = await clickHeaderPlay();
+                if (clicked === 'ok') { doneOk(snapshot()); return; }
+                if (clicked === 'track_unavailable' || toastUnavailable()) throw new Error('track_unavailable');
+                if (await waitOurs(2000)) { doneOk(snapshot()); return; }
                 const capture = window.__spotifyAuthCapture;
                 const token = capture && capture.accessToken;
                 if (token) {
                   try {
+                    const body = albumUri
+                      ? { context_uri: albumUri, offset: { uri: uri }, position_ms: positionMs }
+                      : { uris: [uri], position_ms: positionMs };
                     const res = await fetch('https://api.spotify.com/v1/me/player/play', {
                       method: 'PUT',
                       headers: Object.assign({
                         Authorization: 'Bearer ' + token,
                         'Content-Type': 'application/json',
                       }, capture.clientToken ? { 'client-token': capture.clientToken } : {}),
-                      body: JSON.stringify({ uris: [uri], position_ms: positionMs }),
+                      body: JSON.stringify(body),
                     });
-                    if ((res.ok || res.status === 204) && await confirmPlaying()) {
+                    if ((res.ok || res.status === 204) && await waitOurs(3000)) {
                       doneOk(snapshot());
                       return;
                     }
                   } catch (_publicErr) {}
                 }
-                // DOM click only — do NOT assign location.href (reloads WebView and drops this callback).
-                const headerPlay = () => {
-                  const main = document.querySelector('main') || document.body;
-                  const buttons = main.querySelectorAll('[data-testid="play-button"], [data-testid="entity-action-play"]');
-                  for (const el of buttons) {
-                    if (!(el instanceof HTMLElement)) continue;
-                    const label = (el.getAttribute('aria-label') || '').toLowerCase();
-                    if (/pause|пауза/.test(label)) continue;
-                    const rect = el.getBoundingClientRect();
-                    if (rect.width >= 24 && rect.height >= 24) return el;
-                  }
-                  return null;
-                };
-                const btn = headerPlay();
-                if (btn) {
-                  btn.click();
-                  if (await confirmPlaying()) { doneOk(snapshot()); return; }
-                }
-                if (await confirmPlaying()) { doneOk(snapshot()); return; }
-                throw new Error(toastUnavailable() ? 'track_unavailable' : 'player_method_missing');
+                if (await waitOurs(2000)) { doneOk(snapshot()); return; }
+                throw new Error(lastError === 'player_method_missing' ? 'play_failed' : (lastError || 'play_failed'));
               } catch (e) {
-                finish({ error: String(e && e.message || e) });
+                if (oursPlaying(snapshot())) { doneOk(snapshot()); return; }
+                const msg = String(e && e.message || e);
+                finish({ error: msg === 'player_method_missing' ? 'play_failed' : msg });
               }
             })();
             """.trimIndent(),
         )
-        // Resolve early from Kotlin-side DOM polls while JS is still confirming.
         val result = try {
             coroutineScope {
                 val pollJob = launch {
-                    repeat(40) {
-                        delay(500)
+                    repeat(50) {
+                        delay(400)
                         if (done.isCompleted) return@launch
                         val d = _dom.value
-                        if (d.playing && (d.trackId == trackId || (d.trackId.isBlank() && d.ready))) {
+                        if (d.playing && (d.trackId == trackId || d.trackId.isBlank())) {
                             done.complete(
                                 JSONObject()
                                     .put("ready", d.ready)
@@ -679,7 +745,7 @@ class SpotifyWebSession @Inject constructor(
                     }
                 }
                 try {
-                    withTimeoutOrNull(25_000) { done.await() }
+                    withTimeoutOrNull(30_000) { done.await() }
                         ?: throw ConnectorException("Spotify не ответил")
                 } finally {
                     pollJob.cancel()
@@ -691,14 +757,20 @@ class SpotifyWebSession @Inject constructor(
         if (result.optBoolean("cancelled")) return result
         runCatching {
             val title = jsonText(result, "trackTitle").ifBlank { jsonText(result, "title") }
+            val nextId = jsonText(result, "trackId").ifBlank { trackId }
+            // Don't clobber a fresher poll sample with a stale play result position.
+            val prev = _dom.value
+            val pos = result.optLong("positionMs").let { reported ->
+                if (prev.trackId == nextId && prev.playing && prev.positionMs > reported) prev.positionMs else reported
+            }
             _dom.value = SpotifyDomState(
-                ready = result.optBoolean("ready"),
-                playing = result.optBoolean("playing"),
+                ready = result.optBoolean("ready") || prev.ready,
+                playing = result.optBoolean("playing") || prev.playing,
                 ad = result.optBoolean("ad"),
-                positionMs = result.optLong("positionMs"),
-                durationMs = result.optLong("durationMs"),
-                title = title,
-                trackId = jsonText(result, "trackId"),
+                positionMs = pos,
+                durationMs = result.optLong("durationMs").takeIf { it > 0 } ?: prev.durationMs,
+                title = title.ifBlank { prev.title },
+                trackId = nextId,
             )
         }
         result.opt("remoteName")
@@ -706,11 +778,29 @@ class SpotifyWebSession @Inject constructor(
             ?.toString()
             ?.let { _remoteDevice.value = it.takeIf { name -> name.isNotBlank() && name != "null" } }
         val error = result.optString("error")
-        if (error.isNotBlank() && !result.optBoolean("authFailed") && result.opt("remoteName") == JSONObject.NULL) {
-            throw ConnectorException(error)
-        }
-        if (error.isNotBlank() && !result.optBoolean("authFailed") && result.optString("remoteName").isBlank()) {
-            throw ConnectorException(error)
+        if (error.isNotBlank()) {
+            if (result.optBoolean("playing")) return result
+            fun oursPlaying(): Boolean {
+                val d = _dom.value
+                return d.playing && (d.trackId == trackId || d.trackId.isBlank())
+            }
+            if (oursPlaying()) return result
+            // Metadata often lags audible start after Cosmo play / header click.
+            if (error == "player_method_missing" || error == "play_failed" || error.contains("method_missing")) {
+                repeat(12) {
+                    delay(350)
+                    if (oursPlaying()) return result
+                }
+            }
+            if (!result.optBoolean("authFailed") && result.optString("remoteName").isBlank()) {
+                val message = when (error) {
+                    "track_unavailable" -> "Этот трек недоступен в Spotify"
+                    "bridge_missing" -> "Веб-плеер Spotify ещё загружается"
+                    "player_method_missing", "play_failed" -> "Spotify не запустил трек"
+                    else -> error
+                }
+                throw ConnectorException(message)
+            }
         }
         return result
     }
@@ -901,11 +991,18 @@ class SpotifyWebSession @Inject constructor(
             (function () {
               const s = window.__spotifyBridge?.getState?.();
               if (!s) return;
+              // Extrapolate while playing so 4s poll gaps don't yank the UI backward.
+              let positionMs = Number(s.positionMs) || 0;
+              const sampledAt = Number(s.sampledAt) || 0;
+              if (s.isPlaying && sampledAt > 0) {
+                positionMs = Math.max(0, positionMs + (Date.now() - sampledAt));
+                if (s.durationMs > 0) positionMs = Math.min(positionMs, s.durationMs);
+              }
               MssSpotify.onState(JSON.stringify({
                 ready: s.ready,
                 playing: s.isPlaying,
                 ad: false,
-                positionMs: s.positionMs,
+                positionMs: positionMs,
                 durationMs: s.durationMs || 0,
                 title: s.title || '',
                 trackId: s.id || '',

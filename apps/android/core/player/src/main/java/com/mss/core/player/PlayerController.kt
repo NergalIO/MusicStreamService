@@ -123,6 +123,10 @@ class PlayerController @Inject constructor(
     private var lastSpotifyMovePos = 0L
     private var lastSpotifySeenAt = 0L
     private var lastSpotifySeenPos = 0L
+    /** Когда отправили spotify play — чтобы после ok не крутить buffering и сразу завести часы. */
+    private var spotifyPlayArmedAt = 0L
+    /** После старта короткое окно жёсткого ресинка позиции (как после seek по тексту). */
+    private var spotifyHardSyncUntil = 0L
     private var playbackServiceRunning = false
     private var lastSettings: PlaybackSettings? = null
 
@@ -488,7 +492,7 @@ class PlayerController @Inject constructor(
         val pos = _state.value.positionMs
         usingSpotify = true
         silenceExo()
-        scope.launch { spotifyWeb.play(track.id, pos) }
+        scope.launch { spotifyWeb.play(track.id, pos, track.albumId) }
     }
 
     fun tickProgress() {
@@ -504,29 +508,37 @@ class PlayerController @Inject constructor(
             val seekLanded = target != null && kotlin.math.abs(d.positionMs - target) < 2_000
             if (target != null && (seekLanded || android.os.SystemClock.elapsedRealtime() >= seekDeadline)) seekTarget = null
             val ours = domIsOurTrack(d)
+            // Audio often starts before Cosmo fills track id/title — blank id while playing counts after arm.
+            val audioLikelyOurs = d.playing && (ours || d.ad || (d.trackId.isBlank() && spotifyPlayArmedAt > 0L))
             if (ours && d.playing) {
                 sawOwnSpotifyTitle = true
+                spotifyStarting = false
+                awaitingStart = false
+            } else if (audioLikelyOurs) {
                 spotifyStarting = false
                 awaitingStart = false
             } else if (ours) {
                 sawOwnSpotifyTitle = true
             }
             // Сразу после команды в панели ещё прошлый трек: его позицию и длительность не берём, но и не ждём вечно.
-            val trustDom = ours || sawOwnSpotifyTitle || !holding
-            dur = (if (ours) d.durationMs.takeIf { it > 0 } else null) ?: fallbackDur
-            if (spotifyStarting || !trustDom) {
+            val trustDom = ours || audioLikelyOurs || sawOwnSpotifyTitle || !holding
+            dur = (if (ours || audioLikelyOurs) d.durationMs.takeIf { it > 0 } else null) ?: fallbackDur
+            if (spotifyStarting && !audioLikelyOurs) {
+                pos = _state.value.positionMs
+                playing = true
+            } else if (!trustDom) {
                 pos = _state.value.positionMs
                 playing = true
             } else if (awaitingStart && !d.playing) {
                 pos = d.positionMs.takeIf { it > 0 } ?: _state.value.positionMs
                 playing = true
-            } else if (holding && d.playing != wanted) {
+            } else if (holding && d.playing != wanted && !audioLikelyOurs) {
                 pos = _state.value.positionMs
                 playing = wanted
             } else {
-                if (d.playing && ours) awaitingStart = false
+                if (d.playing && (ours || audioLikelyOurs)) awaitingStart = false
                 pos = if (seekTarget != null) _state.value.positionMs else d.positionMs
-                playing = d.playing
+                playing = d.playing || audioLikelyOurs
             }
             if (spotifyLeftTrack(d, dur, holding)) {
                 endedGen = playGen
@@ -548,16 +560,22 @@ class PlayerController @Inject constructor(
         } else {
             pos
         }
+        val hardSync = usingSpotify && now < spotifyHardSyncUntil
         if (usingSpotify && playing && !ad && !nearEnd && seekTarget == null && !spotifyStarting) {
             if (kotlin.math.abs(pos - lastSpotifySeenPos) >= 400) {
                 lastSpotifySeenPos = pos
                 lastSpotifySeenAt = now
             }
-            if (kotlin.math.abs(pos - interpolated) >= POSITION_SLACK_MS) {
-                lastSpotifyMovePos = pos
+            val delta = pos - interpolated
+            // During hard-sync (post-start), always prefer the higher of clock/DOM — same effect as a lyrics seek.
+            val needsAnchor = lastSpotifyMovePos <= 0L && pos > 200L
+            val jumpForward = delta >= SPOTIFY_CATCHUP_MS || (hardSync && delta > 0)
+            val jumpBack = delta <= -SPOTIFY_BACK_SNAP_MS
+            if (needsAnchor || jumpForward || jumpBack || (hardSync && pos > lastSpotifyMovePos)) {
+                lastSpotifyMovePos = if (hardSync) maxOf(pos, interpolated) else pos
                 lastSpotifyMoveAt = now
             }
-        } else {
+        } else if (!(usingSpotify && spotifyStarting)) {
             lastSpotifyMovePos = pos
             lastSpotifyMoveAt = now
             lastSpotifySeenPos = pos
@@ -569,14 +587,15 @@ class PlayerController @Inject constructor(
             stalled -> lastSpotifyMovePos
             usingSpotify && playing && !ad && seekTarget == null && !spotifyStarting && lastSpotifyMoveAt > 0L -> {
                 val guessed = lastSpotifyMovePos + (now - lastSpotifyMoveAt)
-                if (dur > 0) guessed.coerceIn(0L, dur) else guessed.coerceAtLeast(0L)
+                val synced = if (hardSync) maxOf(guessed, pos) else guessed
+                if (dur > 0) synced.coerceIn(0L, dur) else synced.coerceAtLeast(0L)
             }
             else -> pos
         }
         val step = frozenPos - lastTickPos
         if (step in 1..5_000 && playing) playedMs += step
         lastTickPos = frozenPos
-        val buffering = usingSpotify && (spotifyStarting || awaitingStart || stalled)
+        val buffering = usingSpotify && ((spotifyStarting && awaitingStart) || stalled)
         _state.value = _state.value.copy(
             positionMs = frozenPos,
             durationMs = dur,
@@ -722,32 +741,49 @@ class PlayerController @Inject constructor(
                     silenceExo()
                     spotifyWeb.wake()
                     spotifyStarting = true
-                    _state.value = _state.value.copy(positionMs = 0)
-                    val result = runCatching { spotifyWeb.play(resolved.trackId) }
-                    if (gen == playGen) {
-                        // Панель веб-плеера обновляется с задержкой: ещё немного верим своему состоянию.
-                        holdCommand()
-                        val d = spotifyWeb.dom.value
-                        spotifyStarting = !(d.playing && (domIsOurTrack(d) || d.ad))
+                    awaitingStart = true
+                    spotifyPlayArmedAt = android.os.SystemClock.elapsedRealtime()
+                    lastSpotifyMovePos = 0
+                    lastSpotifyMoveAt = spotifyPlayArmedAt
+                    _state.value = _state.value.copy(positionMs = 0, buffering = true)
+                    val result = runCatching {
+                        spotifyWeb.play(resolved.trackId, 0L, track.albumId)
                     }
                     result
-                        .onSuccess {
+                        .onSuccess { playResult ->
                             if (gen != playGen) return@launch
+                            if (playResult.optBoolean("cancelled")) return@launch
+                            holdCommand()
                             val d = spotifyWeb.dom.value
-                            val ours = domIsOurTrack(d) || d.ad
-                            if (d.playing && ours) {
-                                awaitingStart = false
-                                spotifyStarting = false
-                            } else {
-                                spotifyStarting = true
-                            }
+                            val ours = domIsOurTrack(d) || d.ad || (d.playing && d.trackId.isBlank())
+                            val now = android.os.SystemClock.elapsedRealtime()
+                            // Play resolved — stop spinner even if Cosmo metadata still lags.
+                            awaitingStart = false
+                            spotifyStarting = false
+                            val reported = playResult.optLong("positionMs")
+                            val seed = maxOf(
+                                reported,
+                                if (d.playing) d.positionMs else 0L,
+                            ).coerceAtLeast(0L)
+                            lastSpotifyMovePos = seed
+                            lastSpotifyMoveAt = now
+                            lastSpotifySeenPos = seed
+                            lastSpotifySeenAt = now
+                            lastTickPos = seed
+                            spotifyHardSyncUntil = now + SPOTIFY_HARD_SYNC_MS
                             _state.value = _state.value.copy(
                                 playing = true,
-                                buffering = !d.playing || !ours,
+                                buffering = false,
                                 durationMs = (if (ours) d.durationMs.takeIf { it > 0 } else null) ?: track.durationMs ?: 0,
-                                positionMs = if (ours && d.playing) d.positionMs else 0,
+                                positionMs = seed,
                             )
-                            if (spotifyStarting && !d.ad && spotifyWeb.remoteDevice.value == null) {
+                            // Lyrics-tap fix: Cosmo's clock often lags 2–3s after play; a seek snaps it.
+                            if (seed >= 800L && d.positionMs + 700L < seed) {
+                                awaitSeek(seed)
+                                spotifyWeb.seek(seed)
+                            }
+                            if (!d.playing && !d.ad && spotifyWeb.remoteDevice.value == null) {
+                                spotifyStarting = true
                                 confirmSpotifyStarted(gen)
                             }
                         }
@@ -977,7 +1013,10 @@ class PlayerController @Inject constructor(
                 safeTick()
                 if (usingSpotify) {
                     spotifyTicks += 1
-                    if (spotifyTicks % 16 == 0) spotifyWeb.pollState()
+                    // Poll every tick while starting / hard-syncing; ~1s once stable.
+                    val hardSync = android.os.SystemClock.elapsedRealtime() < spotifyHardSyncUntil
+                    val pollEvery = if (spotifyStarting || awaitingStart || hardSync) 1 else 4
+                    if (spotifyTicks % pollEvery == 0) spotifyWeb.pollState()
                     if (spotifyTicks % 40 == 0 && deviceProbe?.isActive != true && !awaitingStart && !_state.value.playing) {
                         deviceProbe = scope.launch { spotifyWeb.refreshDevices() }
                     }
@@ -1102,7 +1141,12 @@ class PlayerController @Inject constructor(
     private companion object {
         const val COMMAND_HOLD_MS = 1_500L
         const val SEEK_WAIT_MS = 10_000L
-        const val POSITION_SLACK_MS = 2_000L
+        /** Resync when DOM is ahead of our clock (we're lagging behind real audio). */
+        const val SPOTIFY_CATCHUP_MS = 600L
+        /** Ignore typical Spotify DOM clock regressions smaller than this. */
+        const val SPOTIFY_BACK_SNAP_MS = 4_000L
+        /** After play, force catch-up like a lyrics seek for this long. */
+        const val SPOTIFY_HARD_SYNC_MS = 5_000L
         const val STALL_MS = 4_000L
     }
 }
