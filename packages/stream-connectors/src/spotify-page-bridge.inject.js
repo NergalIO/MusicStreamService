@@ -1985,6 +1985,7 @@
      */
     async function playingRequested(uri) {
         const id = idFromUri(uri);
+        let sawPlayingWithoutId = false;
         for (let i = 0; i < 16; i += 1) {
             if (playRejected())
                 return "unavailable";
@@ -1999,7 +2000,16 @@
                 !state.uri.includes(":ad:")) {
                 return "mismatch";
             }
+            // Metadata often lags behind audible start — keep waiting, do not pause yet.
+            if (state.isPlaying && !state.id)
+                sawPlayingWithoutId = true;
             await sleep(200);
+        }
+        // Still playing with no foreign id after wait → treat as success (DOM/player lag).
+        if (sawPlayingWithoutId) {
+            const state = mergeState();
+            if (state.isPlaying && (!state.id || state.id === id || state.uri === uri))
+                return "ok";
         }
         return "timeout";
     }
@@ -2008,6 +2018,7 @@
         if (!fn)
             return false;
         const requested = opts.offsetUri ?? opts.uri;
+        const requestedId = idFromUri(requested);
         for (const args of playArgLists(opts)) {
             try {
                 await fn(...args);
@@ -2023,7 +2034,12 @@
                     await softPausePlayers();
                     return false;
                 }
-                // timeout — try next signature, but stop whatever started
+                // timeout: only pause if nothing useful is playing / foreign track
+                const state = mergeState();
+                if (state.isPlaying &&
+                    (!state.id || state.id === requestedId || state.uri === requested)) {
+                    return true;
+                }
                 await softPausePlayers();
             }
             catch {

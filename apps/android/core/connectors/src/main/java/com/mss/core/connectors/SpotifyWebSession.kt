@@ -15,9 +15,11 @@ import javax.inject.Singleton
 import java.util.concurrent.ConcurrentHashMap
 import java.util.concurrent.atomic.AtomicInteger
 import kotlinx.coroutines.CompletableDeferred
+import kotlinx.coroutines.coroutineScope
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
+import kotlinx.coroutines.launch
 import kotlinx.coroutines.sync.Mutex
 import kotlinx.coroutines.sync.withLock
 import kotlinx.coroutines.withTimeout
@@ -539,8 +541,7 @@ class SpotifyWebSession @Inject constructor(
         val id = httpIds.incrementAndGet().toString()
         val done = CompletableDeferred<JSONObject>()
         playWaiters[id] = done
-        // Same fallback chain as packages/stream-connectors playWithFallbacksScript:
-        // bridge.play → public player API → track-page header play.
+        // bridge.play first; never full-navigate (location.href kills the callback and yields «не ответил»).
         eval(
             """
             (async () => {
@@ -548,6 +549,12 @@ class SpotifyWebSession @Inject constructor(
               const trackId = ${JSONObject.quote(trackId)};
               const positionMs = ${positionMs.coerceAtLeast(0)};
               const uri = 'spotify:track:' + trackId;
+              let finished = false;
+              const finish = (payload) => {
+                if (finished) return;
+                finished = true;
+                try { MssSpotify.onPlayDone(waiterId, JSON.stringify(payload)); } catch (e) {}
+              };
               const toastUnavailable = () => {
                 const nodes = document.querySelectorAll('[role="alert"], [role="status"], [data-testid*="toast"]');
                 for (const el of nodes) {
@@ -555,34 +562,47 @@ class SpotifyWebSession @Inject constructor(
                 }
                 return false;
               };
+              const snapshot = () => {
+                try { return window.__spotifyBridge && window.__spotifyBridge.getState && window.__spotifyBridge.getState(); }
+                catch (e) { return null; }
+              };
+              const matches = (s) => !!(s && (s.id === trackId || s.uri === uri));
+              const foreignPlaying = (s) => !!(s && s.isPlaying && s.id && s.id !== trackId && s.uri && String(s.uri).indexOf(':ad:') < 0);
               const confirmPlaying = async () => {
-                for (let i = 0; i < 12; i += 1) {
+                for (let i = 0; i < 20; i += 1) {
                   if (toastUnavailable()) return false;
-                  const state = window.__spotifyBridge && window.__spotifyBridge.getState && window.__spotifyBridge.getState();
-                  if (state && (state.id === trackId || state.uri === uri) && state.isPlaying) return true;
+                  const state = snapshot();
+                  if (matches(state) && state.isPlaying) return true;
+                  // Audible start often precedes metadata — accept playing without foreign id.
+                  if (state && state.isPlaying && !foreignPlaying(state) && (!state.id || matches(state))) {
+                    if (i >= 4) return true;
+                  }
                   await new Promise((r) => setTimeout(r, 200));
                 }
-                return false;
+                const last = snapshot();
+                return !!(last && last.isPlaying && !foreignPlaying(last));
               };
               const doneOk = (s) => {
-                MssSpotify.onPlayDone(waiterId, JSON.stringify({
-                  ready: !!(s && s.ready),
-                  playing: !!(s && s.isPlaying),
-                  positionMs: (s && s.positionMs) || positionMs,
-                  durationMs: (s && s.durationMs) || 0,
-                  title: (s && s.title) || '',
-                  trackId: (s && s.id) || trackId,
+                const cur = s || snapshot() || {};
+                finish({
+                  ready: !!cur.ready,
+                  playing: cur.isPlaying !== false,
+                  positionMs: cur.positionMs || positionMs,
+                  durationMs: cur.durationMs || 0,
+                  title: cur.title || '',
+                  trackId: cur.id || trackId,
                   cancelled: false,
-                }));
+                });
               };
               try {
                 const bridge = window.__spotifyBridge;
                 if (!bridge) throw new Error('bridge_missing');
                 try {
                   const play = await bridge.play({ uri: uri, positionMs: positionMs });
-                  if (play && play.ok && await confirmPlaying()) {
-                    doneOk(bridge.getState());
-                    return;
+                  if (play && play.ok) {
+                    if (await confirmPlaying()) { doneOk(bridge.getState()); return; }
+                    // play.ok but metadata lag — still succeed if not clearly foreign/unavailable
+                    if (!toastUnavailable() && !foreignPlaying(snapshot())) { doneOk(bridge.getState()); return; }
                   }
                   if ((play && play.error === 'track_unavailable') || toastUnavailable()) {
                     throw new Error('track_unavailable');
@@ -590,6 +610,7 @@ class SpotifyWebSession @Inject constructor(
                 } catch (bridgeErr) {
                   if (String(bridgeErr && bridgeErr.message || bridgeErr) === 'track_unavailable') throw bridgeErr;
                 }
+                if (await confirmPlaying()) { doneOk(snapshot()); return; }
                 const capture = window.__spotifyAuthCapture;
                 const token = capture && capture.accessToken;
                 if (token) {
@@ -603,16 +624,12 @@ class SpotifyWebSession @Inject constructor(
                       body: JSON.stringify({ uris: [uri], position_ms: positionMs }),
                     });
                     if ((res.ok || res.status === 204) && await confirmPlaying()) {
-                      doneOk(bridge.getState());
+                      doneOk(snapshot());
                       return;
                     }
                   } catch (_publicErr) {}
                 }
-                if (!location.pathname.includes('/track/' + trackId)) {
-                  location.href = 'https://open.spotify.com/track/' + trackId;
-                  await new Promise((r) => setTimeout(r, 800));
-                }
-                const deadline = Date.now() + 4000;
+                // DOM click only — do NOT assign location.href (reloads WebView and drops this callback).
                 const headerPlay = () => {
                   const main = document.querySelector('main') || document.body;
                   const buttons = main.querySelectorAll('[data-testid="play-button"], [data-testid="entity-action-play"]');
@@ -625,28 +642,49 @@ class SpotifyWebSession @Inject constructor(
                   }
                   return null;
                 };
-                while (Date.now() < deadline) {
-                  const btn = headerPlay();
-                  if (btn) {
-                    btn.click();
-                    if (await confirmPlaying()) {
-                      doneOk(bridge.getState());
-                      return;
-                    }
-                    throw new Error(toastUnavailable() ? 'track_unavailable' : 'player_method_missing');
-                  }
-                  await new Promise((r) => setTimeout(r, 150));
+                const btn = headerPlay();
+                if (btn) {
+                  btn.click();
+                  if (await confirmPlaying()) { doneOk(snapshot()); return; }
                 }
-                throw new Error('player_method_missing');
+                if (await confirmPlaying()) { doneOk(snapshot()); return; }
+                throw new Error(toastUnavailable() ? 'track_unavailable' : 'player_method_missing');
               } catch (e) {
-                MssSpotify.onPlayDone(waiterId, JSON.stringify({ error: String(e && e.message || e) }));
+                finish({ error: String(e && e.message || e) });
               }
             })();
             """.trimIndent(),
         )
+        // Resolve early from Kotlin-side DOM polls while JS is still confirming.
         val result = try {
-            withTimeoutOrNull(20_000) { done.await() }
-                ?: throw ConnectorException("Spotify не ответил")
+            coroutineScope {
+                val pollJob = launch {
+                    repeat(40) {
+                        delay(500)
+                        if (done.isCompleted) return@launch
+                        val d = _dom.value
+                        if (d.playing && (d.trackId == trackId || (d.trackId.isBlank() && d.ready))) {
+                            done.complete(
+                                JSONObject()
+                                    .put("ready", d.ready)
+                                    .put("playing", true)
+                                    .put("positionMs", d.positionMs)
+                                    .put("durationMs", d.durationMs)
+                                    .put("title", d.title)
+                                    .put("trackId", d.trackId.ifBlank { trackId })
+                                    .put("cancelled", false),
+                            )
+                            return@launch
+                        }
+                    }
+                }
+                try {
+                    withTimeoutOrNull(25_000) { done.await() }
+                        ?: throw ConnectorException("Spotify не ответил")
+                } finally {
+                    pollJob.cancel()
+                }
+            }
         } finally {
             playWaiters.remove(id)
         }
