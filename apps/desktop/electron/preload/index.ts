@@ -174,12 +174,16 @@ const api = {
     pause: () => ipcRenderer.invoke('spotify-session:pause') as Promise<void>,
     logout: () => ipcRenderer.invoke('spotify-session:logout') as Promise<void>,
     loggedIn: () => ipcRenderer.invoke('spotify-session:loggedIn') as Promise<boolean>,
+    auth: () => ipcRenderer.invoke('spotify-session:auth') as Promise<import('@mss/stream-connectors').AuthResult>,
+    login: (body: { email: string; password?: string; code?: string }) =>
+      ipcRenderer.invoke('spotify-session:login', body) as Promise<import('@mss/stream-connectors').AuthResult>,
     onLoggedIn: (cb: (loggedIn: boolean) => void) => subscribe('spotify-session:loggedIn', cb),
     onMedia: (cb: (state: { playing: boolean }) => void) => subscribe('spotify-session:media', cb),
   },
   spotifyConnect: {
-    play: (trackId: string, positionMs?: number, fast?: boolean) =>
-      ipcRenderer.invoke('spotify-connect:play', trackId, positionMs, fast) as Promise<{
+    play: (trackId: string, positionMs?: number, albumId?: string) =>
+      ipcRenderer.invoke('spotify-connect:play', trackId, positionMs, albumId) as Promise<{
+        trackId: string | null;
         ad: boolean;
         adTitle: string | null;
         playing: boolean;

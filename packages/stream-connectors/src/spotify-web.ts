@@ -29,6 +29,7 @@ export interface SpotifyWebConnectorOptions {
   loggedIn: () => boolean;
   connect: () => Promise<void>;
   disconnect: () => Promise<void>;
+  setLike?: (uri: string, liked: boolean) => Promise<{ ok: boolean; error?: string }>;
 }
 
 // Ответы pathfinder — глубокие и меняющиеся структуры; читаем их по одному полю.
@@ -397,8 +398,14 @@ export function createSpotifyWebConnector(opts: SpotifyWebConnectorOptions): Str
     getSavedTracks: savedTracks,
     getHomeTracks: (limit: number) => savedTracks(limit),
     async setSavedTrack(track: UnifiedTrack, saved: boolean): Promise<void> {
+      const uri = `spotify:track:${track.id}`;
+      if (opts.setLike) {
+        const result = await opts.setLike(uri, saved);
+        if (!result.ok) throw new Error(result.error === 'auth_missing' ? 'Войдите в Spotify' : 'Не удалось сохранить трек');
+        return;
+      }
       await query(saved ? 'addToLibrary' : 'removeFromLibrary', {
-        libraryItemUris: [`spotify:track:${track.id}`],
+        libraryItemUris: [uri],
       });
     },
     async resolvePlayback(track: UnifiedTrack): Promise<PlaybackHandle> {

@@ -4,6 +4,7 @@ import { useQueryClient } from '@tanstack/react-query';
 import { Crown, FolderOpen, Loader2, LogOut } from 'lucide-react';
 import { Fragment, useEffect, useState, type ReactNode } from 'react';
 import { useNavigate } from 'react-router-dom';
+import { SpotifyLoginDialog } from '@/components/connectors/SpotifyLoginDialog';
 import { AppLogo } from '@/components/layout/AppLogo';
 import { OutputDeviceSelect } from '@/components/player/sound-controls';
 import { AccentPicker, THEME_OPTIONS } from '@/components/settings/appearance-controls';
@@ -19,7 +20,7 @@ import {
   useYandexAccount,
   type ConnectorStatus,
 } from '@/lib/connectors';
-import { useSpotifySessionLoggedIn } from '@/lib/spotify-session';
+import { useSpotifyAuth, useSpotifySessionLoggedIn } from '@/lib/spotify-session';
 import { SPOTIFY_HOME, SPOTIFY_WEB } from '@/lib/service-routes';
 import { clearSession, loadSession } from '@/lib/api';
 import { leaveCurrentLobby } from '@/lib/lobby-session';
@@ -613,39 +614,69 @@ function YandexStatus({ status }: { status: string }) {
   );
 }
 
+function SpotifyStatus() {
+  const loggedIn = useSpotifySessionLoggedIn();
+  const { data: auth, isLoading } = useSpotifyAuth();
+  if (!loggedIn) return <>Не подключено</>;
+  if (isLoading && !auth) return <>Проверяем аккаунт…</>;
+  return (
+    <span className="inline-flex flex-wrap items-center gap-2">
+      {auth?.email ? <span>{auth.email}</span> : null}
+      {auth?.hasPremium ? (
+        <span className="inline-flex items-center gap-1 rounded-full bg-emerald-400/15 px-2 py-0.5 text-[11px] font-medium text-emerald-300">
+          <Crown size={11} /> Premium
+        </span>
+      ) : (
+        <span className="rounded-full bg-foreground/10 px-2 py-0.5 text-[11px] font-medium">Free</span>
+      )}
+    </span>
+  );
+}
+
 function SpotifySessionRow() {
   const loggedIn = useSpotifySessionLoggedIn();
   const navigate = useNavigate();
   const queryClient = useQueryClient();
   const [busy, setBusy] = useState(false);
+  const [loginOpen, setLoginOpen] = useState(false);
   if (!window.electronAPI) return null;
+
   return (
-    <Row
-      title="Spotify"
-      subtitle={
-        loggedIn
-          ? 'Вход выполнен в веб-плеере (Premium или бесплатно с рекламой Spotify)'
-          : 'Обычный аккаунт встроенного веб-плеера. Developer Dashboard не нужен.'
-      }
-    >
-      <Button size="sm" onClick={() => navigate(loggedIn ? SPOTIFY_HOME : SPOTIFY_WEB)}>
-        {loggedIn ? 'Открыть' : 'Войти'}
-      </Button>
-      {loggedIn && (
-        <Button
-          variant="secondary"
-          size="sm"
-          disabled={busy}
-          onClick={() => {
-            setBusy(true);
-            void disconnectSource('spotify', queryClient).finally(() => setBusy(false));
-          }}
-        >
-          {busy && <Loader2 size={14} className="animate-spin" />}
-          Выйти
-        </Button>
-      )}
-    </Row>
+    <>
+      <Row title="Spotify" subtitle={<SpotifyStatus />}>
+        {loggedIn ? (
+          <>
+            <Button size="sm" onClick={() => navigate(SPOTIFY_HOME)}>
+              Открыть
+            </Button>
+            <Button
+              variant="secondary"
+              size="sm"
+              disabled={busy}
+              onClick={() => {
+                setBusy(true);
+                void disconnectSource('spotify', queryClient).finally(() => setBusy(false));
+              }}
+            >
+              {busy && <Loader2 size={14} className="animate-spin" />}
+              Выйти
+            </Button>
+          </>
+        ) : (
+          <Button size="sm" disabled={busy} onClick={() => setLoginOpen(true)}>
+            Войти
+          </Button>
+        )}
+      </Row>
+      <SpotifyLoginDialog
+        open={loginOpen}
+        onClose={() => setLoginOpen(false)}
+        onSuccess={() => {
+          void queryClient.invalidateQueries({ queryKey: ['connectors'] });
+          void queryClient.invalidateQueries({ queryKey: ['spotify-session', 'auth'] });
+        }}
+      />
+    </>
   );
 }
 
@@ -756,16 +787,6 @@ export function SettingsPage() {
       <DownloadsSection />
 
       <CacheSection />
-
-      <Section title="Тестовые функции" footer="Могут работать нестабильно — при сбое отключите.">
-        <Row title="Быстрый старт Spotify" subtitle="Трек запускается одной командой Spotify, без переходов в веб-плеере">
-          <Switch
-            checked={settings.spotifyFastStart}
-            onChange={settings.setSpotifyFastStart}
-            label="Быстрый старт Spotify"
-          />
-        </Row>
-      </Section>
 
       <SystemSection />
 

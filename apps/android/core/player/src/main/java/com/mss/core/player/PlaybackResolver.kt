@@ -35,13 +35,10 @@ class PlaybackResolver @Inject constructor(
         downloads.fileFor(track)?.let { return ResolvedPlayback.Url(Uri.fromFile(it).toString()) }
         when (track.source) {
             SourceId.SPOTIFY -> {
-                // Каталог уже работает через веб-плеер, когда есть сохранённая сессия: иначе сразу
-                // после запуска трек играл бы 30-секундным превью вместо полной версии.
                 if (spotifyWeb.loggedIn.value || spotifyWeb.hasPersistedSession()) {
                     return ResolvedPlayback.SpotifyWeb(track.id)
                 }
-                val url = connectors.spotify.resolvePlaybackUrl(track)
-                return ResolvedPlayback.Url(url)
+                throw com.mss.core.connectors.ConnectorException("Войдите в Spotify")
             }
             SourceId.YANDEX -> return ResolvedPlayback.Url(connectors.yandex.resolvePlaybackUrl(track))
             SourceId.VK -> {

@@ -8,7 +8,7 @@ import { downloadPathFor } from './downloads.js';
 import { readSidecarLyrics, writeSidecarFromLyrics } from './lyrics-sidecar.js';
 import { resolveLocalTrackPath } from './local-tracks.js';
 import { listOffline } from './offline-store.js';
-import { spotifySpclient } from './spotify-pathfinder.js';
+import { spotifySpclient } from './spotify-session.js';
 
 const LYRICS_SOURCES = new Set<SourceId>(['yandex', 'spotify', 'local']);
 

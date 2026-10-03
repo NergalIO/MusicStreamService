@@ -1,0 +1,108 @@
+:root {
+  color-scheme: dark;
+  --bg: #121212;
+  --panel: #181818;
+  --line: #2a2a2a;
+  --text: #f2f2f2;
+  --muted: #9a9a9a;
+  --accent: #1ed760;
+  --danger: #f87171;
+  --ok: #4ade80;
+}
+
+* {
+  box-sizing: border-box;
+}
+
+html,
+body {
+  margin: 0;
+  height: 100%;
+  background: var(--bg);
+  color: var(--text);
+  font: 13px/1.4 ui-sans-serif, system-ui, Segoe UI, sans-serif;
+}
+
+body {
+  display: grid;
+  grid-template-rows: auto auto 1fr;
+  gap: 8px;
+  padding: 10px 12px;
+}
+
+header {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+}
+
+.meta {
+  margin-left: auto;
+  color: var(--muted);
+  font-size: 12px;
+}
+
+.badge {
+  display: inline-flex;
+  align-items: center;
+  padding: 2px 8px;
+  border-radius: 999px;
+  border: 1px solid var(--line);
+  background: var(--panel);
+  font-size: 12px;
+}
+
+.badge.ok {
+  color: var(--ok);
+  border-color: rgba(74, 222, 128, 0.35);
+}
+
+.badge.bad {
+  color: var(--danger);
+  border-color: rgba(248, 113, 113, 0.35);
+}
+
+.badge.muted {
+  color: var(--muted);
+}
+
+nav {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+}
+
+button {
+  appearance: none;
+  border: 1px solid var(--line);
+  background: var(--panel);
+  color: var(--text);
+  border-radius: 8px;
+  padding: 6px 10px;
+  cursor: pointer;
+}
+
+button:hover {
+  border-color: #444;
+}
+
+button.primary {
+  background: color-mix(in srgb, var(--accent) 18%, var(--panel));
+  border-color: color-mix(in srgb, var(--accent) 45%, var(--line));
+}
+
+button.ghost {
+  color: var(--muted);
+}
+
+pre {
+  margin: 0;
+  overflow: auto;
+  padding: 10px 12px;
+  border: 1px solid var(--line);
+  border-radius: 10px;
+  background: #0d0d0d;
+  color: #d7d7d7;
+  white-space: pre-wrap;
+  word-break: break-word;
+}

@@ -4,6 +4,7 @@ import { sessionEvent } from '@/lib/logger';
 import { SPOTIFY_WEB } from '@/lib/service-routes';
 
 const QUERY_KEY = ['spotify-session', 'loggedIn'] as const;
+const AUTH_QUERY_KEY = ['spotify-session', 'auth'] as const;
 
 export function useSpotifySessionLoggedIn(): boolean {
   const { data } = useQuery({
@@ -19,11 +20,22 @@ export function useSpotifySessionLoggedIn(): boolean {
       if (was === loggedIn) return;
       sessionEvent('info', 'auth', loggedIn ? 'spotify connected' : 'spotify disconnected');
       void queryClient.invalidateQueries({ queryKey: ['connectors'] });
+      void queryClient.invalidateQueries({ queryKey: AUTH_QUERY_KEY });
       if (loggedIn) void queryClient.invalidateQueries({ queryKey: ['spotify'] });
       else queryClient.removeQueries({ queryKey: ['spotify'] });
     });
   }, [queryClient]);
   return data ?? false;
+}
+
+export function useSpotifyAuth() {
+  const loggedIn = useSpotifySessionLoggedIn();
+  return useQuery({
+    queryKey: AUTH_QUERY_KEY,
+    queryFn: () => window.electronAPI!.spotifySession.auth(),
+    enabled: loggedIn && Boolean(window.electronAPI),
+    staleTime: 60_000,
+  });
 }
 
 export async function logoutSpotifySession(): Promise<void> {

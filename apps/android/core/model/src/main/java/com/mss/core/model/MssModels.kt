@@ -553,8 +553,7 @@ data class PlaybackSettings(
     val crossfadeMs: Int = 0,
     val playbackRate: Float = 1f,
     val accent: String = "violet",
-    /** Тестовая функция: запуск трека Spotify одним запросом к Web API вместо кликов по веб-плееру. */
-    val spotifyFastStart: Boolean = true,
+    val spotifyFastStart: Boolean = false,
 )
 
 fun TrackDto.toUnifiedTrack(apiBase: String): UnifiedTrack {

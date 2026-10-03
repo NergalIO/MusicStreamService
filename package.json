@@ -6,6 +6,7 @@
     "dev:api": "pnpm --filter @mss/api dev",
     "dev:worker": "pnpm --filter @mss/worker dev",
     "dev:desktop": "pnpm --filter @mss/desktop dev",
+    "dev:spotify-injector": "pnpm --filter @mss/spotify-injector start",
     "dev:android": "cd apps/android && gradlew.bat :app:installDebug",
     "build:android": "cd apps/android && gradlew.bat :app:assembleDebug",
     "docker:up": "docker compose -f docker-compose.yml -f docker-compose.app.yml up -d --build",

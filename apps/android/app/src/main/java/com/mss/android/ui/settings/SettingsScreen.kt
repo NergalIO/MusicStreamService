@@ -105,11 +105,6 @@ fun SettingsScreen(vm: SettingsViewModel = hiltViewModel()) {
                 }
             }
         }
-        SettingsSection("Тестовые функции", "Могут работать нестабильно — при сбое отключите") {
-            SettingsRow("Быстрый старт Spotify", "Трек запускается одним запросом к Spotify, без переходов в веб-плеере") {
-                Switch(settings.spotifyFastStart, { vm.savePlayback(settings.copy(spotifyFastStart = it)) })
-            }
-        }
         SettingsSection("Сервер") {
             SettingsRow("Адрес сервера") {}
             MssField(api, { api = it }, placeholder = "https://…", label = "URL API", modifier = Modifier.fillMaxWidth().padding(horizontal = 16.dp))

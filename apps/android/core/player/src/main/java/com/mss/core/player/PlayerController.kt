@@ -121,6 +121,8 @@ class PlayerController @Inject constructor(
     private var lastTickPos = 0L
     private var lastSpotifyMoveAt = 0L
     private var lastSpotifyMovePos = 0L
+    private var lastSpotifySeenAt = 0L
+    private var lastSpotifySeenPos = 0L
     private var playbackServiceRunning = false
     private var lastSettings: PlaybackSettings? = null
 
@@ -486,7 +488,7 @@ class PlayerController @Inject constructor(
         val pos = _state.value.positionMs
         usingSpotify = true
         silenceExo()
-        scope.launch { spotifyWeb.play(track.id, pos, fast = preferences.loadPlaybackSettings().spotifyFastStart) }
+        scope.launch { spotifyWeb.play(track.id, pos) }
     }
 
     fun tickProgress() {
@@ -509,9 +511,9 @@ class PlayerController @Inject constructor(
             } else if (ours) {
                 sawOwnSpotifyTitle = true
             }
-            // Сразу после команды в панели ещё прошлый трек: его позицию не берём, но и не ждём вечно.
+            // Сразу после команды в панели ещё прошлый трек: его позицию и длительность не берём, но и не ждём вечно.
             val trustDom = ours || sawOwnSpotifyTitle || !holding
-            dur = (if (trustDom) d.durationMs.takeIf { it > 0 } else null) ?: fallbackDur
+            dur = (if (ours) d.durationMs.takeIf { it > 0 } else null) ?: fallbackDur
             if (spotifyStarting || !trustDom) {
                 pos = _state.value.positionMs
                 playing = true
@@ -540,17 +542,29 @@ class PlayerController @Inject constructor(
         val now = android.os.SystemClock.elapsedRealtime()
         val nearEnd = dur > 0 && pos >= dur - 5_000
         val ad = usingSpotify && spotifyWeb.dom.value.ad
-        if (usingSpotify && playing && !ad && !nearEnd && seekTarget == null) {
-            if (kotlin.math.abs(pos - lastSpotifyMovePos) >= 400) {
+        val interpolated = if (usingSpotify && playing && lastSpotifyMoveAt > 0L) {
+            val guessed = lastSpotifyMovePos + (now - lastSpotifyMoveAt)
+            if (dur > 0) guessed.coerceIn(0L, dur) else guessed.coerceAtLeast(0L)
+        } else {
+            pos
+        }
+        if (usingSpotify && playing && !ad && !nearEnd && seekTarget == null && !spotifyStarting) {
+            if (kotlin.math.abs(pos - lastSpotifySeenPos) >= 400) {
+                lastSpotifySeenPos = pos
+                lastSpotifySeenAt = now
+            }
+            if (kotlin.math.abs(pos - interpolated) >= POSITION_SLACK_MS) {
                 lastSpotifyMovePos = pos
                 lastSpotifyMoveAt = now
             }
         } else {
             lastSpotifyMovePos = pos
             lastSpotifyMoveAt = now
+            lastSpotifySeenPos = pos
+            lastSpotifySeenAt = now
         }
         val stalled = usingSpotify && playing && !spotifyStarting && !awaitingStart && !ad && !nearEnd &&
-            seekTarget == null && now - lastSpotifyMoveAt > STALL_MS
+            seekTarget == null && now - lastSpotifySeenAt > STALL_MS
         val frozenPos = when {
             stalled -> lastSpotifyMovePos
             usingSpotify && playing && !ad && seekTarget == null && !spotifyStarting && lastSpotifyMoveAt > 0L -> {
@@ -598,8 +612,11 @@ class PlayerController @Inject constructor(
         }
         val wrapped = sawOwnSpotifyTitle && dur > 0 && lastPos >= dur - 15_000 && d.positionMs < 5_000
         if (wrapped) return true
-        // Автоплей начинает новый трек с нуля; чужое название посреди трека — не переключение.
-        if (!sawOwnSpotifyTitle || d.title.isBlank() || d.positionMs >= AUTOPLAY_START_MS) {
+        if (!sawOwnSpotifyTitle) return false
+        val cur = _state.value.current
+        val foreignId = d.trackId.isNotBlank() && cur != null && d.trackId != cur.id
+        val foreignTitle = d.title.isNotBlank() && cur != null && !spotifyTitleMatches(d.title, cur.title)
+        if (!foreignId && !foreignTitle) {
             foreignTitleTicks = 0
             return false
         }
@@ -672,6 +689,8 @@ class PlayerController @Inject constructor(
         lastSpotifyPos = 0
         lastSpotifyMoveAt = android.os.SystemClock.elapsedRealtime()
         lastSpotifyMovePos = 0
+        lastSpotifySeenAt = lastSpotifyMoveAt
+        lastSpotifySeenPos = 0
         foreignTitleTicks = 0
         // Пока трек резолвится, прошлый источник ещё доигрывает: его конец не должен засчитаться как наш.
         spotifyStarting = usingSpotify
@@ -704,8 +723,7 @@ class PlayerController @Inject constructor(
                     spotifyWeb.wake()
                     spotifyStarting = true
                     _state.value = _state.value.copy(positionMs = 0)
-                    val fast = preferences.loadPlaybackSettings().spotifyFastStart
-                    val result = runCatching { spotifyWeb.play(resolved.trackId, fast = fast) }
+                    val result = runCatching { spotifyWeb.play(resolved.trackId) }
                     if (gen == playGen) {
                         // Панель веб-плеера обновляется с задержкой: ещё немного верим своему состоянию.
                         holdCommand()
@@ -729,20 +747,13 @@ class PlayerController @Inject constructor(
                                 durationMs = (if (ours) d.durationMs.takeIf { it > 0 } else null) ?: track.durationMs ?: 0,
                                 positionMs = if (ours && d.playing) d.positionMs else 0,
                             )
-                            if (spotifyStarting && !d.playing && !d.ad && spotifyWeb.remoteDevice.value == null) {
+                            if (spotifyStarting && !d.ad && spotifyWeb.remoteDevice.value == null) {
                                 confirmSpotifyStarted(gen)
                             }
                         }
                         .onFailure { err ->
                             if (gen != playGen) return@launch
-                            awaitingStart = false
-                            spotifyStarting = false
-                            usingSpotify = false
-                            spotifyWeb.stopPlayback()
-                            restoreExoFocus()
-                            _state.value = _state.value.copy(playing = false, buffering = false)
-                            session("error", "player", err.message ?: "Spotify play failed")
-                            err.message?.let { onError?.invoke(it) }
+                            abortSpotifyStart(gen, err.message ?: "Spotify play failed")
                         }
                 }
                 is ResolvedPlayback.Url -> {
@@ -763,9 +774,10 @@ class PlayerController @Inject constructor(
         maybeLoadWave()
     }
 
-    /** Ждём панель веб-плеера. Играющий наш id не гасим — только если звука так и нет. */
+    /** Ждём панель веб-плеера. Чужой играющий трек — это провал, а не «уже стартануло». */
     private fun confirmSpotifyStarted(gen: Int) {
         scope.launch {
+            var foreign = 0
             repeat(24) {
                 delay(500)
                 if (gen != playGen || !usingSpotify) return@launch
@@ -775,21 +787,40 @@ class PlayerController @Inject constructor(
                     awaitingStart = false
                     return@launch
                 }
+                if (d.playing && !d.ad && d.ready && (d.trackId.isNotBlank() || d.title.isNotBlank()) && !domIsOurTrack(d)) {
+                    foreign += 1
+                    if (foreign >= 2) {
+                        abortSpotifyStart(gen, "Spotify не запустил трек")
+                        return@launch
+                    }
+                } else {
+                    foreign = 0
+                }
             }
             if (gen != playGen || !usingSpotify || !spotifyStarting) return@launch
             spotifyWeb.resume()
             delay(2_000)
             if (gen != playGen || !usingSpotify) return@launch
             val d = spotifyWeb.dom.value
-            if (d.playing) {
+            if (d.ad || (d.playing && (domIsOurTrack(d) || d.trackId == _state.value.current?.id))) {
                 spotifyStarting = false
                 awaitingStart = false
                 return@launch
             }
-            session("error", "player", "Spotify не запустил трек")
-            onError?.invoke("Spotify не запустил трек")
-            _state.value = _state.value.copy(buffering = false)
+            abortSpotifyStart(gen, "Spotify не запустил трек")
         }
+    }
+
+    private fun abortSpotifyStart(gen: Int, message: String) {
+        if (gen != playGen) return
+        awaitingStart = false
+        spotifyStarting = false
+        usingSpotify = false
+        spotifyWeb.stopPlayback()
+        restoreExoFocus()
+        _state.value = _state.value.copy(playing = false, buffering = false)
+        session("error", "player", message)
+        onError?.invoke(message)
     }
 
     /** Битый файл волны не должен оставлять плеер на паузе: берём следующий трек. */
@@ -1071,7 +1102,7 @@ class PlayerController @Inject constructor(
     private companion object {
         const val COMMAND_HOLD_MS = 1_500L
         const val SEEK_WAIT_MS = 10_000L
-        const val AUTOPLAY_START_MS = 10_000L
+        const val POSITION_SLACK_MS = 2_000L
         const val STALL_MS = 4_000L
     }
 }

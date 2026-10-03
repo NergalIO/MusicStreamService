@@ -17,10 +17,12 @@ let hold: { until: number; playing?: boolean; positionMs?: number } | null = nul
 let lastMovedPos = 0;
 let lastMovedAt = 0;
 let stalled = false;
+let foreignAudibleSince: number | null = null;
 
 const HOLD_MS = 1500;
 const STALL_MS = 4000;
 const PAUSE_GUARD_MS = 3500;
+const ANCHOR_SLACK_MS = 2000;
 
 let ignorePauseUntil = 0;
 
@@ -161,7 +163,7 @@ export async function startSpotifyTrack(
   const started = await window.electronAPI.spotifyConnect.play(
     track.id,
     startAtSeconds * 1000,
-    useSettingsStore.getState().spotifyFastStart,
+    track.albumId ?? undefined,
   );
   if (activeTrackId !== track.id) return;
   if (!started) {
@@ -190,18 +192,25 @@ export async function startSpotifyTrack(
       duration: started.durationMs / 1000,
     });
   } else {
-    const confirmed = !!started.playing;
-    setAnchor(startAtSeconds * 1000, true);
+    const sameTrack = !started.trackId || started.trackId === track.id;
+    const confirmed = !!started.playing && sameTrack;
+    if (!sameTrack) {
+      stopSpotifyTrack();
+      usePlaybackStore.setState({ playing: false, loading: false });
+      toast.error('Этот трек недоступен в Spotify');
+      return;
+    }
+    setAnchor(startAtSeconds * 1000, confirmed);
     markPositionMoved(startAtSeconds * 1000);
-    holdLocal({ playing: true, positionMs: startAtSeconds * 1000 });
-    armSpotifyPauseGuard();
+    holdLocal({ playing: confirmed, positionMs: startAtSeconds * 1000 });
+    if (confirmed) armSpotifyPauseGuard();
     usePlaybackStore.setState({
-      playing: true,
+      playing: confirmed,
       loading: !confirmed,
       ad: false,
       adTitle: undefined,
     });
-    if (fadeIn > 0 && !muted) void fadeSpotifyVolume(0, volume * 100, fadeIn * 1000);
+    if (confirmed && fadeIn > 0 && !muted) void fadeSpotifyVolume(0, volume * 100, fadeIn * 1000);
   }
   startTick();
 }
@@ -210,6 +219,7 @@ export async function startSpotifyTrack(
 export function stopSpotifyTrack(): void {
   if (!activeTrackId) return;
   activeTrackId = null;
+  foreignAudibleSince = null;
   fadingOut = false;
   stalled = false;
   hold = null;
@@ -228,7 +238,22 @@ export function applySpotifyState(state: {
   adTitle: string | null;
   audible?: boolean;
 }): boolean {
-  if (!activeTrackId || state.trackId !== activeTrackId) return false;
+  if (!activeTrackId) return false;
+  // Web player audible on a different/unknown track — stop so MSS does not keep the wrong title.
+  if (state.trackId !== activeTrackId) {
+    if (state.audible && state.playing && !state.ad) {
+      if (foreignAudibleSince == null) foreignAudibleSince = Date.now();
+      else if (Date.now() - foreignAudibleSince >= 1500) {
+        foreignAudibleSince = null;
+        stopSpotifyTrack();
+        usePlaybackStore.setState({ playing: false, loading: false });
+      }
+    } else {
+      foreignAudibleSince = null;
+    }
+    return false;
+  }
+  foreignAudibleSince = null;
   if (state.ad) hold = null;
 
   if (!state.playing && !state.ad && shouldIgnoreSpotifyExternalPause() && hold?.playing !== false) {
@@ -268,18 +293,26 @@ export function applySpotifyState(state: {
     stalled = true;
   }
 
-  setAnchor(state.positionMs, state.playing && !stalled);
+  const playingNow = state.playing && !stalled;
+  const interpolated = spotifyPositionSeconds() * 1000;
+  const snap = !state.playing || state.ad || Math.abs(state.positionMs - interpolated) >= ANCHOR_SLACK_MS;
+  if (snap) {
+    setAnchor(state.positionMs, playingNow);
+  } else if (anchor.playing !== playingNow) {
+    setAnchor(interpolated, playingNow);
+  }
+  const shownMs = snap ? state.positionMs : interpolated;
   const patch: Partial<ReturnType<typeof usePlaybackStore.getState>> = {
     playing: state.playing,
     loading: stalled,
-    currentTime: state.positionMs / 1000,
+    currentTime: shownMs / 1000,
     ad: state.ad,
     adTitle: state.ad ? state.adTitle ?? 'Реклама' : undefined,
   };
   if (state.durationMs) patch.duration = state.durationMs / 1000;
   else if (state.ad) patch.duration = 0;
   usePlaybackStore.setState(patch);
-  syncMediaPosition(state.positionMs / 1000, patch.duration ?? usePlaybackStore.getState().duration);
+  syncMediaPosition(shownMs / 1000, patch.duration ?? usePlaybackStore.getState().duration);
   if (state.playing && !stalled) startTick();
   return true;
 }

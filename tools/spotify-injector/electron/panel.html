@@ -1,0 +1,27 @@
+<!doctype html>
+<html lang="ru">
+  <head>
+    <meta charset="utf-8" />
+    <meta http-equiv="Content-Security-Policy" content="default-src 'self'; connect-src http://127.0.0.1:* ws://127.0.0.1:*; style-src 'self' 'unsafe-inline'; script-src 'self'" />
+    <title>SpotifyInjector</title>
+    <link rel="stylesheet" href="./panel.css" />
+  </head>
+  <body>
+    <header>
+      <strong>SpotifyInjector</strong>
+      <span id="status" class="badge muted">ожидание API…</span>
+      <span id="api" class="meta"></span>
+    </header>
+    <nav>
+      <button type="button" data-action="health">/health</button>
+      <button type="button" data-action="state">/state</button>
+      <button type="button" data-action="auth">/auth</button>
+      <button type="button" data-action="like-get">GET /like</button>
+      <button type="button" data-action="like-post" class="primary">POST /like</button>
+      <button type="button" data-action="like-unlike">unlike</button>
+      <button type="button" data-action="clear" class="ghost">очистить</button>
+    </nav>
+    <pre id="out">Нажми кнопку после загрузки Spotify.</pre>
+    <script src="./panel.js"></script>
+  </body>
+</html>

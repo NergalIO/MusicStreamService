@@ -28,8 +28,8 @@ export function LoginPage() {
   const [submitting, setSubmitting] = useState(false);
   const [info, setInfo] = useState<string | null>(null);
 
-  const syncServerUrl = async () => {
-    if (import.meta.env.DEV) return;
+  const syncServerUrl = async (): Promise<boolean> => {
+    if (import.meta.env.DEV) return true;
     const base = serverUrl.trim();
     if (!base) {
       setError('Укажите URL сервера (как на лендинге, с /MusicStreamService)');

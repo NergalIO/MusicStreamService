@@ -22,7 +22,6 @@ import kotlinx.coroutines.sync.Mutex
 import kotlinx.coroutines.sync.withLock
 import kotlinx.coroutines.withTimeout
 import kotlinx.coroutines.withTimeoutOrNull
-import org.json.JSONArray
 import org.json.JSONObject
 
 data class SpotifyWebHeaders(
@@ -35,6 +34,7 @@ data class SpotifyDevice(
     val name: String,
     val active: Boolean,
     val local: Boolean,
+    val id: String = "",
 )
 
 data class SpotifyDomState(
@@ -65,11 +65,14 @@ class SpotifyWebSession @Inject constructor(
 
     @Volatile var headers: SpotifyWebHeaders? = null
         private set
+    @Volatile private var connectionId: String? = null
+    @Volatile private var spclientHosts: List<String>? = null
+    private val observerDeviceId = java.util.UUID.randomUUID().toString().replace("-", "").take(16)
 
     private val _visibleForLogin = MutableStateFlow(false)
     val visibleForLogin: StateFlow<Boolean> = _visibleForLogin
 
-    @Volatile private var hashes: Map<String, String> = emptyMap()
+    private val hashes = java.util.concurrent.ConcurrentHashMap<String, String>()
     /** Пока true, живые cookie веб-плеера не считаются новым входом. */
     @Volatile private var signedOut = false
     private var loginAgent = false
@@ -79,13 +82,11 @@ class SpotifyWebSession @Inject constructor(
     private val playWaiters = ConcurrentHashMap<String, CompletableDeferred<JSONObject>>()
     private val imageWaiters = ConcurrentHashMap<String, CompletableDeferred<String>>()
     private val pageMutex = Mutex()
-    /** id этого веб-плеера в Spotify Connect (из адресов connect-state), нужен для быстрого старта. */
-    private val deviceIds = java.util.Collections.synchronizedSet(linkedSetOf<String>())
-    @Volatile private var ownDeviceUrl: String? = null
     @Volatile var onTrackEnded: ((String) -> Unit)? = null
     @Volatile private var bridgeScript: String? = null
 
     init {
+        DEFAULT_QUERY_HASHES.forEach { (name, hash) -> hashes[name] = hash }
         runCatching {
             CookieManager.getInstance().setAcceptCookie(true)
             restorePersistedCookies()
@@ -119,10 +120,9 @@ class SpotifyWebSession @Inject constructor(
 
     fun operationHash(name: String): String? = hashes[name]
 
-    fun invalidateHashes() {
-        hashes = emptyMap()
-        injectBridge()
-        eval(SCAN_OPERATIONS)
+    fun rememberOperationHash(name: String, hash: String) {
+        if (name.isBlank() || !HASH_RE.matches(hash)) return
+        hashes.putIfAbsent(name, hash)
     }
 
     fun invalidateHeaders() {
@@ -160,9 +160,9 @@ class SpotifyWebSession @Inject constructor(
                 val auth = h.entries.find { it.key.equals("authorization", true) }?.value
                 val client = h.entries.find { it.key.equals("client-token", true) }?.value
                 val ver = h.entries.find { it.key.equals("spotify-app-version", true) }?.value
-                request.url?.toString()?.let { url ->
-                    DEVICE_ID_RE.find(url)?.value?.let { deviceIds.add(it) }
-                }
+                val conn = h.entries.find { it.key.equals("x-spotify-connection-id", true) }?.value
+                request.url?.toString()?.let { url -> rememberPathfinderUrl(url) }
+                if (!conn.isNullOrBlank()) connectionId = conn
                 if (!signedOut && auth?.startsWith("Bearer ") == true && !client.isNullOrBlank()) {
                     headers = SpotifyWebHeaders(auth, client, ver.orEmpty())
                     if (!_loggedIn.value && hasLoginCookies()) markLoggedIn()
@@ -174,7 +174,6 @@ class SpotifyWebSession @Inject constructor(
                 if (url?.startsWith(HOME) == true || hasLoginCookies()) syncLoginState()
                 if (loginAgent) eval(FIT_MOBILE)
                 injectBridge()
-                if (_loggedIn.value && !loginAgent) eval(SCAN_OPERATIONS)
             }
         }
         restorePersistedCookies()
@@ -229,20 +228,18 @@ class SpotifyWebSession @Inject constructor(
             val url = view.url.orEmpty()
             if (url.isBlank() || url.contains("accounts.spotify.com") || url == "about:blank") {
                 view.loadUrl(HOME)
-            } else if (_loggedIn.value) {
-                eval(SCAN_OPERATIONS)
             }
         }
     }
 
     suspend fun awaitHeaders(timeoutMs: Long = 20_000): SpotifyWebHeaders {
-        headers?.let { if (hashes.isNotEmpty()) return it }
+        headers?.let { return it }
         ensurePlayer()
         val deadline = android.os.SystemClock.elapsedRealtime() + timeoutMs
         var found: SpotifyWebHeaders? = headers
         while (android.os.SystemClock.elapsedRealtime() < deadline) {
             found = headers
-            if (found != null && hashes.isNotEmpty()) return found
+            if (found != null) return found
             delay(250)
         }
         return found ?: throw ConnectorException("Веб-плеер Spotify ещё загружается. Подождите пару секунд и повторите")
@@ -299,6 +296,15 @@ class SpotifyWebSession @Inject constructor(
         }
     }
 
+    suspend fun resolveSpclient(): List<String> {
+        spclientHosts?.let { return it }
+        val (_, text) = browserFetch("GET", APRESOLVE_URL, null)
+        val hosts = parseSpclientHosts(text)
+        val resolved = if (hosts.isNotEmpty()) hosts else FALLBACK_SPCLIENT
+        spclientHosts = resolved
+        return resolved
+    }
+
     /**
      * Скачивает картинку через страницу веб-плеера: у Chromium своя сеть, и она доходит до CDN Spotify там,
      * где прямой запрос приложения не проходит. i.scdn.co отдаёт CORS `*`, так что fetch читает тело.
@@ -345,8 +351,6 @@ class SpotifyWebSession @Inject constructor(
         _remoteDevice.value = null
         loginAgent = false
         headers = null
-        hashes = emptyMap()
-        ownDeviceUrl = null
         vault.delete(COOKIE_KEY)
         vault.delete(FLAG_KEY)
         main.post {
@@ -397,64 +401,132 @@ class SpotifyWebSession @Inject constructor(
         WebCookies.clear(WebCookies.SPOTIFY_URLS, WebCookies.SPOTIFY_DOMAINS, SESSION_COOKIES)
     }
 
-    /**
-     * @param fast быстрый старт: команда play в connect-state этого веб-плеера; при ошибке — страница трека.
-     */
-    suspend fun play(trackId: String, positionMs: Long = 0, fast: Boolean = false) {
+    suspend fun play(trackId: String, positionMs: Long = 0) {
         if (!TRACK_ID_RE.matches(trackId)) throw ConnectorException("Некорректный id трека Spotify")
         wake()
         if (webView == null) throw ConnectorException("Веб-плеер Spotify не запущен — откройте Spotify в приложении")
         cancelActivePlay()
         ensureBridge()
-        val first = awaitPlay(trackId, positionMs, fast)
+        val first = awaitPlay(trackId, positionMs)
         if (first.optBoolean("cancelled")) return
-        if (first.optBoolean("authFailed") && fast) {
-            invalidateHeaders()
-            runCatching { awaitHeaders() }
-            awaitPlay(trackId, positionMs, true)
-        }
     }
 
     fun cancelActivePlay() {
         val cancelled = JSONObject().put("cancelled", true)
         playWaiters.values.forEach { it.complete(cancelled) }
         playWaiters.clear()
-        eval("window.__mss && window.__mss.cancel()")
     }
 
     fun stopPlayback() {
         cancelActivePlay()
-        eval("window.__mss && window.__mss.stop()")
+        eval("window.__spotifyBridge && window.__spotifyBridge.pause()")
     }
 
-    private fun deviceListForFastPlay(): List<String> {
-        val own = ownDeviceUrl
-        if (own.isNullOrBlank()) return deviceIds.toList()
-        return listOf(own) + deviceIds.filter { it != own }
-    }
-
-    private suspend fun awaitPlay(trackId: String, positionMs: Long, fast: Boolean): JSONObject {
+    private suspend fun awaitPlay(trackId: String, positionMs: Long): JSONObject {
         val id = httpIds.incrementAndGet().toString()
         val done = CompletableDeferred<JSONObject>()
         playWaiters[id] = done
-        val auth = headers
-        val fastAuth = JSONObject()
-            .put("authorization", if (fast) auth?.authorization.orEmpty() else "")
-            .put("clientToken", auth?.clientToken.orEmpty())
-            .put("appVersion", auth?.appVersion.orEmpty())
-            .put("devices", JSONArray(deviceListForFastPlay()))
-            .toString()
+        // Same fallback chain as packages/stream-connectors playWithFallbacksScript:
+        // bridge.play → public player API → track-page header play.
         eval(
             """
             (async () => {
-              const id = ${JSONObject.quote(id)};
+              const waiterId = ${JSONObject.quote(id)};
+              const trackId = ${JSONObject.quote(trackId)};
+              const positionMs = ${positionMs.coerceAtLeast(0)};
+              const uri = 'spotify:track:' + trackId;
+              const toastUnavailable = () => {
+                const nodes = document.querySelectorAll('[role="alert"], [role="status"], [data-testid*="toast"]');
+                for (const el of nodes) {
+                  if (/этот трек недоступен|this track is unavailable|isn't available/i.test(el.textContent || '')) return true;
+                }
+                return false;
+              };
+              const confirmPlaying = async () => {
+                for (let i = 0; i < 12; i += 1) {
+                  if (toastUnavailable()) return false;
+                  const state = window.__spotifyBridge && window.__spotifyBridge.getState && window.__spotifyBridge.getState();
+                  if (state && (state.id === trackId || state.uri === uri) && state.isPlaying) return true;
+                  await new Promise((r) => setTimeout(r, 200));
+                }
+                return false;
+              };
+              const doneOk = (s) => {
+                MssSpotify.onPlayDone(waiterId, JSON.stringify({
+                  ready: !!(s && s.ready),
+                  playing: !!(s && s.isPlaying),
+                  positionMs: (s && s.positionMs) || positionMs,
+                  durationMs: (s && s.durationMs) || 0,
+                  title: (s && s.title) || '',
+                  trackId: (s && s.id) || trackId,
+                  cancelled: false,
+                }));
+              };
               try {
-                if (!window.__mss) throw new Error('Веб-плеер Spotify не загрузился');
-                const auth = JSON.parse(${JSONObject.quote(fastAuth)});
-                const r = await window.__mss.play(${JSONObject.quote(trackId)}, ${positionMs.coerceAtLeast(0)}, auth);
-                MssSpotify.onPlayDone(id, JSON.stringify(r || { cancelled: true }));
+                const bridge = window.__spotifyBridge;
+                if (!bridge) throw new Error('bridge_missing');
+                try {
+                  const play = await bridge.play({ uri: uri, positionMs: positionMs });
+                  if (play && play.ok && await confirmPlaying()) {
+                    doneOk(bridge.getState());
+                    return;
+                  }
+                  if ((play && play.error === 'track_unavailable') || toastUnavailable()) {
+                    throw new Error('track_unavailable');
+                  }
+                } catch (bridgeErr) {
+                  if (String(bridgeErr && bridgeErr.message || bridgeErr) === 'track_unavailable') throw bridgeErr;
+                }
+                const capture = window.__spotifyAuthCapture;
+                const token = capture && capture.accessToken;
+                if (token) {
+                  try {
+                    const res = await fetch('https://api.spotify.com/v1/me/player/play', {
+                      method: 'PUT',
+                      headers: Object.assign({
+                        Authorization: 'Bearer ' + token,
+                        'Content-Type': 'application/json',
+                      }, capture.clientToken ? { 'client-token': capture.clientToken } : {}),
+                      body: JSON.stringify({ uris: [uri], position_ms: positionMs }),
+                    });
+                    if ((res.ok || res.status === 204) && await confirmPlaying()) {
+                      doneOk(bridge.getState());
+                      return;
+                    }
+                  } catch (_publicErr) {}
+                }
+                if (!location.pathname.includes('/track/' + trackId)) {
+                  location.href = 'https://open.spotify.com/track/' + trackId;
+                  await new Promise((r) => setTimeout(r, 800));
+                }
+                const deadline = Date.now() + 4000;
+                const headerPlay = () => {
+                  const main = document.querySelector('main') || document.body;
+                  const buttons = main.querySelectorAll('[data-testid="play-button"], [data-testid="entity-action-play"]');
+                  for (const el of buttons) {
+                    if (!(el instanceof HTMLElement)) continue;
+                    const label = (el.getAttribute('aria-label') || '').toLowerCase();
+                    if (/pause|пауза/.test(label)) continue;
+                    const rect = el.getBoundingClientRect();
+                    if (rect.width >= 24 && rect.height >= 24) return el;
+                  }
+                  return null;
+                };
+                while (Date.now() < deadline) {
+                  const btn = headerPlay();
+                  if (btn) {
+                    btn.click();
+                    if (await confirmPlaying()) {
+                      doneOk(bridge.getState());
+                      return;
+                    }
+                    throw new Error(toastUnavailable() ? 'track_unavailable' : 'player_method_missing');
+                  }
+                  await new Promise((r) => setTimeout(r, 150));
+                }
+                throw new Error('player_method_missing');
               } catch (e) {
-                MssSpotify.onPlayDone(id, JSON.stringify({ error: String(e && e.message || e) }));
+                MssSpotify.onPlayDone(waiterId, JSON.stringify({ error: String(e && e.message || e) }));
               }
             })();
             """.trimIndent(),
@@ -466,9 +538,8 @@ class SpotifyWebSession @Inject constructor(
             playWaiters.remove(id)
         }
         if (result.optBoolean("cancelled")) return result
-        result.optString("deviceUrl").takeIf { it.isNotBlank() }?.let { ownDeviceUrl = it }
         runCatching {
-            val title = result.optString("trackTitle").ifBlank { result.optString("title") }
+            val title = jsonText(result, "trackTitle").ifBlank { jsonText(result, "title") }
             _dom.value = SpotifyDomState(
                 ready = result.optBoolean("ready"),
                 playing = result.optBoolean("playing"),
@@ -476,7 +547,7 @@ class SpotifyWebSession @Inject constructor(
                 positionMs = result.optLong("positionMs"),
                 durationMs = result.optLong("durationMs"),
                 title = title,
-                trackId = result.optString("trackId"),
+                trackId = jsonText(result, "trackId"),
             )
         }
         result.opt("remoteName")
@@ -523,46 +594,131 @@ class SpotifyWebSession @Inject constructor(
     private suspend fun queryDevices(action: String, target: String): DeviceQuery {
         if (webView == null) return DeviceQuery(null, emptyList(), false)
         ensureBridge()
-        val id = httpIds.incrementAndGet().toString()
-        val done = CompletableDeferred<String>()
-        deviceWaiters[id] = done
-        eval(
-            """
-            (async () => {
-              const id = ${JSONObject.quote(id)};
-              try {
-                if (!window.__mss) throw new Error('Веб-плеер Spotify не загрузился');
-                const r = await window.__mss.devices(${JSONObject.quote(action)}, ${JSONObject.quote(target)});
-                MssSpotify.onDeviceResult(id, JSON.stringify(r || {}));
-              } catch (e) {
-                MssSpotify.onDeviceResult(id, JSON.stringify({ error: String(e && e.message || e) }));
-              }
-            })();
-            """.trimIndent(),
-        )
-        val json = try {
-            withTimeoutOrNull(8_000) { done.await() }
-        } finally {
-            deviceWaiters.remove(id)
-        } ?: return DeviceQuery(_remoteDevice.value, emptyList(), false)
-        val obj = runCatching { JSONObject(json) }.getOrNull()
-            ?: return DeviceQuery(_remoteDevice.value, emptyList(), false)
-        val err = obj.optString("error")
-        if (err.isNotBlank()) throw ConnectorException(err)
-        val remote = obj.opt("remoteName")
-            ?.takeUnless { it == org.json.JSONObject.NULL }
-            ?.toString()
-            ?.takeIf { it.isNotBlank() && it != "null" }
-        val arr = obj.optJSONArray("devices") ?: JSONArray()
-        val devices = buildList {
-            for (i in 0 until arr.length()) {
-                val d = arr.optJSONObject(i) ?: continue
-                val name = d.optString("name")
-                if (name.isBlank()) continue
-                add(SpotifyDevice(name, d.optBoolean("active"), d.optBoolean("local")))
+        val listed = fetchConnectDevices()
+        val devices = listed.map { d ->
+            SpotifyDevice(d.name, d.active, LOCAL_DEVICE_RE.containsMatchIn(d.name), d.id)
+        }
+        var remoteName = devices.firstOrNull { it.active && !it.local }?.name
+        var selectedLocal = false
+        if (action == "select" && target.isNotBlank()) {
+            val pick = devices.firstOrNull { it.name == target }
+                ?: throw ConnectorException("Устройство Spotify не найдено")
+            if (pick.local) {
+                selectedLocal = true
+                remoteName = null
+            } else {
+                transferPlayback(pick.id)
+                remoteName = pick.name
             }
         }
-        return DeviceQuery(remote, devices, obj.optBoolean("selectedLocal"))
+        return DeviceQuery(remoteName, devices, selectedLocal)
+    }
+
+    private data class RawDevice(val id: String, val name: String, val active: Boolean)
+
+    private suspend fun fetchConnectDevices(): List<RawDevice> {
+        val hosts = resolveSpclient()
+        val observer = if (observerDeviceId.startsWith("hobs_")) observerDeviceId else "hobs_$observerDeviceId"
+        val clusterBody = """{"member_type":"CONNECT_STATE","device":{"device_info":{"capabilities":{"can_be_player":false,"hidden":true,"needs_full_player_state":true,"is_observable":true}}}}"""
+        for (host in hosts) {
+            val base = host.trimEnd('/')
+            val cluster = browserFetch("PUT", "$base/connect-state/v1/devices/$observer", clusterBody)
+            parseConnectDevices(cluster.second).takeIf { it.isNotEmpty() }?.let { return it }
+            val listed = browserFetch("GET", "$base/connect-state/v1/devices", null)
+            parseConnectDevices(listed.second).takeIf { it.isNotEmpty() }?.let { return it }
+        }
+        val rest = browserFetch("GET", "https://api.spotify.com/v1/me/player/devices", null)
+        return parseConnectDevices(rest.second)
+    }
+
+    private suspend fun transferPlayback(deviceId: String) {
+        val fromId = connectionId
+        val hosts = resolveSpclient()
+        if (!fromId.isNullOrBlank()) {
+            val body = """{"command":{"endpoint":"transfer","options":{"restore_paused":"error"}}}"""
+            for (host in hosts) {
+                val base = host.trimEnd('/')
+                val encodedFrom = java.net.URLEncoder.encode(fromId, Charsets.UTF_8)
+                val encodedTo = java.net.URLEncoder.encode(deviceId, Charsets.UTF_8)
+                val command = browserFetch(
+                    "POST",
+                    "$base/connect-state/v1/player/command/from/$encodedFrom/to/$encodedTo",
+                    body,
+                )
+                if (command.first in 200..299) return
+                val transfer = browserFetch(
+                    "POST",
+                    "$base/connect-state/v1/connect/transfer/from/$encodedFrom/to/$encodedTo",
+                    """{"play":true}""",
+                )
+                if (transfer.first in 200..299) return
+            }
+        }
+        val rest = browserFetch(
+            "PUT",
+            "https://api.spotify.com/v1/me/player",
+            """{"device_ids":[${JSONObject.quote(deviceId)}],"play":true}""",
+        )
+        if (rest.first !in 200..299 && rest.first != 204) throw ConnectorException("Не удалось переключить устройство")
+    }
+
+    private fun parseConnectDevices(raw: String): List<RawDevice> {
+        val root = runCatching { JSONObject(raw) }.getOrNull() ?: return emptyList()
+        val cluster = root.optJSONObject("cluster")
+        if (cluster != null && cluster !== root) {
+            val nested = parseConnectDevices(cluster.toString())
+            if (nested.isNotEmpty()) return nested
+        }
+        val out = mutableListOf<RawDevice>()
+        val seen = mutableSetOf<String>()
+        fun add(id: String, name: String, active: Boolean) {
+            if (id.isBlank() || !seen.add(id) || id == observerDeviceId || id == "hobs_$observerDeviceId") return
+            out.add(RawDevice(id, name.ifBlank { id }, active))
+        }
+        val arr = root.optJSONArray("devices")
+        if (arr != null) {
+            for (i in 0 until arr.length()) {
+                val rec = arr.optJSONObject(i) ?: continue
+                val info = rec.optJSONObject("device_info") ?: rec.optJSONObject("deviceInfo") ?: rec
+                add(
+                    info.optString("id").ifBlank { rec.optString("id") },
+                    info.optString("name").ifBlank { info.optString("device_name") },
+                    info.optBoolean("is_active") || info.optBoolean("isActive") || rec.optBoolean("is_active"),
+                )
+            }
+            return out
+        }
+        val map = root.optJSONObject("devices") ?: root.optJSONObject("device")
+        if (map != null) {
+            val keys = map.keys()
+            while (keys.hasNext()) {
+                val key = keys.next()
+                val nested = map.optJSONObject(key) ?: continue
+                val info = nested.optJSONObject("device_info") ?: nested.optJSONObject("deviceInfo") ?: nested
+                add(
+                    info.optString("id").ifBlank { info.optString("device_id") }.ifBlank { key },
+                    info.optString("name").ifBlank { info.optString("device_name") },
+                    info.optBoolean("is_active") || info.optBoolean("isActive"),
+                )
+            }
+        }
+        val activeId = root.optString("active_device_id").ifBlank { root.optString("activeDeviceId") }
+        if (activeId.isNotBlank()) {
+            return out.map { if (it.id == activeId) it.copy(active = true) else it }
+        }
+        return out
+    }
+
+    private fun parseSpclientHosts(raw: String): List<String> {
+        val rec = runCatching { JSONObject(raw) }.getOrNull() ?: return emptyList()
+        val list = rec.optJSONArray("spclient") ?: return emptyList()
+        return buildList {
+            for (i in 0 until list.length()) {
+                val host = list.optString(i).trim()
+                if (host.isBlank()) continue
+                add(if (host.startsWith("http")) host.trimEnd('/') else "https://$host")
+            }
+        }
     }
 
     private data class DeviceQuery(
@@ -573,27 +729,43 @@ class SpotifyWebSession @Inject constructor(
 
     fun pause() {
         cancelActivePlay()
-        eval("window.__mss && window.__mss.pause()")
+        eval("window.__spotifyBridge && window.__spotifyBridge.pause()")
     }
 
     fun resume() = playCurrent()
 
     fun seek(positionMs: Long) {
-        eval("window.__mss && window.__mss.seek($positionMs)")
+        eval("window.__spotifyBridge && window.__spotifyBridge.seek($positionMs)")
     }
 
     fun setVolume(volume: Float) {
         val fraction = volume.coerceIn(0f, 1f)
-        eval("window.__mss && window.__mss.setVolume($fraction)")
+        eval("window.__spotifyBridge && window.__spotifyBridge.setVolume($fraction)")
     }
 
     fun pollState() {
         if (pageMutex.isLocked) return
-        eval("window.__mss && MssSpotify.onState(JSON.stringify(window.__mss.state()))")
+        eval(
+            """
+            (function () {
+              const s = window.__spotifyBridge?.getState?.();
+              if (!s) return;
+              MssSpotify.onState(JSON.stringify({
+                ready: s.ready,
+                playing: s.isPlaying,
+                ad: false,
+                positionMs: s.positionMs,
+                durationMs: s.durationMs || 0,
+                title: s.title || '',
+                trackId: s.id || '',
+              }));
+            })();
+            """.trimIndent(),
+        )
     }
 
     private fun playCurrent() {
-        eval("window.__mss && window.__mss.resume()")
+        eval("window.__spotifyBridge && window.__spotifyBridge.resume()")
     }
 
     private fun injectBridge() {
@@ -602,8 +774,12 @@ class SpotifyWebSession @Inject constructor(
         main.post {
             view.onResume()
             view.resumeTimers()
-            view.evaluateJavascript("!!(window.__mss && window.__mss.version === $BRIDGE_VERSION)") { ready ->
-                if (ready != "true") view.evaluateJavascript(js, null)
+            view.evaluateJavascript("!!window.__spotifyBridge") { ready ->
+                if (ready != "true") {
+                    view.evaluateJavascript(js) { eval(PATHFINDER_HOOK) }
+                } else {
+                    eval(PATHFINDER_HOOK)
+                }
             }
         }
     }
@@ -615,11 +791,13 @@ class SpotifyWebSession @Inject constructor(
         main.post {
             view.onResume()
             view.resumeTimers()
-            view.evaluateJavascript("!!(window.__mss && window.__mss.version === $BRIDGE_VERSION)") { ready ->
+            view.evaluateJavascript("!!window.__spotifyBridge") { ready ->
                 if (ready == "true") {
+                    eval(PATHFINDER_HOOK)
                     if (!done.isCompleted) done.complete(Unit)
                 } else {
                     view.evaluateJavascript(js) {
+                        eval(PATHFINDER_HOOK)
                         if (!done.isCompleted) done.complete(Unit)
                     }
                 }
@@ -628,11 +806,37 @@ class SpotifyWebSession @Inject constructor(
         withTimeoutOrNull(4_000) { done.await() }
     }
 
+    private fun rememberPathfinderUrl(url: String) {
+        if (!url.contains("api-partner.spotify.com/pathfinder")) return
+        runCatching {
+            val parsed = android.net.Uri.parse(url)
+            val operationName = parsed.getQueryParameter("operationName") ?: return
+            val extensions = parsed.getQueryParameter("extensions") ?: return
+            val obj = JSONObject(extensions)
+            val hash = obj.optJSONObject("persistedQuery")?.optString("sha256Hash") ?: return
+            rememberOperationHash(operationName, hash)
+        }
+    }
+
+    private fun rememberPathfinderPost(raw: String) {
+        runCatching {
+            val obj = JSONObject(raw)
+            val operationName = obj.optString("operationName")
+            val hash = obj.optJSONObject("extensions")?.optJSONObject("persistedQuery")?.optString("sha256Hash")
+            if (operationName.isNotBlank() && !hash.isNullOrBlank()) rememberOperationHash(operationName, hash)
+        }
+    }
+
     private fun loadBridgeScript(): String? {
         val view = webView ?: return null
         return runCatching {
             view.context.assets.open(BRIDGE_ASSET).bufferedReader().use { it.readText() }
         }.getOrNull()?.also { bridgeScript = it }
+    }
+
+    private fun jsonText(obj: JSONObject, key: String): String {
+        if (!obj.has(key) || obj.isNull(key)) return ""
+        return obj.optString(key).takeUnless { it.isBlank() || it == "null" || it == "undefined" }.orEmpty()
     }
 
     private fun eval(script: String) {
@@ -646,11 +850,8 @@ class SpotifyWebSession @Inject constructor(
 
     inner class JsBridge {
         @JavascriptInterface
-        fun onHashes(json: String) {
-            val parsed = runCatching { org.json.JSONObject(json) }.getOrNull() ?: return
-            val next = mutableMapOf<String, String>()
-            parsed.keys().forEach { key -> next[key] = parsed.optString(key) }
-            hashes = next
+        fun onPathfinder(body: String) {
+            rememberPathfinderPost(body)
         }
 
         @JavascriptInterface
@@ -696,8 +897,8 @@ class SpotifyWebSession @Inject constructor(
                     ad = obj.optBoolean("ad"),
                     positionMs = obj.optLong("positionMs"),
                     durationMs = obj.optLong("durationMs"),
-                    title = obj.optString("title"),
-                    trackId = obj.optString("trackId"),
+                    title = jsonText(obj, "title"),
+                    trackId = jsonText(obj, "trackId"),
                 )
             }
         }
@@ -705,8 +906,20 @@ class SpotifyWebSession @Inject constructor(
 
     companion object {
         private const val BRIDGE_ASSET = "spotify-page-bridge.inject.js"
-        private const val BRIDGE_VERSION = 9
+        private val HASH_RE = Regex("""[a-f0-9]{64}""", RegexOption.IGNORE_CASE)
+        private val DEFAULT_QUERY_HASHES = mapOf(
+            "searchDesktop" to "2aea208278ba99da84ae7401453e819af4e07769c3c23c11d38127955c6860ba",
+            "searchTracks" to "1d021289df50166c61630e02f002ec91182b518e56bcd681ac6b0640390c0245",
+            "addToLibrary" to "896ebcb47815681340860d121cb5d494e157e2a78d3950385cd54e0393c67148",
+            "removeFromLibrary" to "896ebcb47815681340860d121cb5d494e157e2a78d3950385cd54e0393c67148",
+            "isInLibrary" to "d410781eb8ea7e1edce7c51368d5d2b6dca3c5391bd26b9ebca1cc9e1fadaddc",
+            "areEntitiesInLibrary" to "134337999233cc6fdd6b1e6dbf94841409f04a946c5c7b744b09ba0dfe5a85ed",
+        )
         private const val HOME = "https://open.spotify.com/"
+        private const val APRESOLVE_URL = "https://apresolve.spotify.com/?type=spclient"
+        private val FALLBACK_SPCLIENT = listOf("https://gew1-spclient.spotify.com", "https://spclient.wg.spotify.com")
+        private val LOCAL_DEVICE_RE =
+            Regex("this web browser|этот веб-браузер|этот браузер|this computer|этот компьютер|web player|веб-плеер", RegexOption.IGNORE_CASE)
         private const val COOKIE_KEY = "spotify_web_cookies"
         private const val FLAG_KEY = "spotify_web_logged_in"
         /** Гасим и те cookie входа, которых может не оказаться в заголовке текущего домена. */
@@ -727,30 +940,23 @@ class SpotifyWebSession @Inject constructor(
           })();
         """
 
-        private val DEVICE_ID_RE = Regex("""https://[^/]+/connect-state/v1/devices/hobs_[0-9a-f]{16,}""")
         private val TRACK_ID_RE = Regex("""[A-Za-z0-9]{10,40}""")
 
-        private const val SCAN_OPERATIONS = """
-          (async () => {
-            const urls = new Set(
-              [...document.querySelectorAll('script[src]')].map((s) => s.src)
-                .concat(performance.getEntriesByType('resource').map((e) => e.name))
-                .filter((u) => /\/cdn\/build\/web-player\/[^/]+\.js${'$'}/.test(u)),
-            );
-            const main = [...urls].find((u) => /\/web-player\.[0-9a-f]+\.js${'$'}/.test(u));
-            if (!main) return;
-            const mainText = await (await fetch(main)).text();
-            const name = 'xpui-routes-search';
-            const id = mainText.match(new RegExp('(\\d+):"' + name + '"'))?.[1];
-            const hash = id && mainText.match(new RegExp('[,{]' + id + ':"([0-9a-f]{8})"'))?.[1];
-            if (hash) urls.add(main.replace(/[^/]+${'$'}/, name + '.' + hash + '.js'));
-            const ops = {};
-            const re = /"([A-Za-z0-9_]+)","(?:query|mutation)","([0-9a-f]{64})"/g;
-            for (const u of urls) {
-              const text = u === main ? mainText : await fetch(u).then((r) => r.text()).catch(() => '');
-              for (const m of text.matchAll(re)) if (!ops[m[1]]) ops[m[1]] = m[2];
-            }
-            MssSpotify.onHashes(JSON.stringify(ops));
+        private const val PATHFINDER_HOOK = """
+          (function () {
+            if (window.__mssPathfinderHook) return;
+            window.__mssPathfinderHook = true;
+            const orig = window.fetch.bind(window);
+            window.fetch = function (input, init) {
+              try {
+                const url = typeof input === 'string' ? input : (input && input.url) || '';
+                if (url.indexOf('api-partner.spotify.com/pathfinder') >= 0 && init && init.body) {
+                  const body = typeof init.body === 'string' ? init.body : null;
+                  if (body) MssSpotify.onPathfinder(body);
+                }
+              } catch (e) {}
+              return orig(input, init);
+            };
           })();
         """
     }

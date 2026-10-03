@@ -1,0 +1,25 @@
+{
+  "name": "@mss/spotify-injector",
+  "version": "1.0.0",
+  "private": true,
+  "type": "module",
+  "main": "electron/main.mjs",
+  "engines": {
+    "node": ">=20"
+  },
+  "scripts": {
+    "start": "electron .",
+    "electron": "electron ."
+  },
+  "dependencies": {
+    "@mss/stream-connectors": "workspace:*",
+    "ws": "^8.18.3"
+  },
+  "devDependencies": {
+    "@types/node": "^24.5.2",
+    "@types/ws": "^8.18.1",
+    "electron": "^35.7.5",
+    "tsx": "^4.20.5",
+    "typescript": "^5.9.2"
+  }
+}

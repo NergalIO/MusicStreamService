@@ -51,7 +51,7 @@ import {
 } from './offline-store.js';
 import { initLocalTracks, registerLocalTracksIpc } from './local-tracks-ipc.js';
 import { registerSpotifyConnectIpc } from './spotify-connect.js';
-import { initSpotifyWebSession } from './spotify-web-session.js';
+import { initSpotifyWebSession } from './spotify-session.js';
 import { registerLobbyIpc } from './lobby-ipc.js';
 import { registerRelayBridge } from './relay-bridge.js';
 import { ensureRendererServer, rendererPageUrl } from './renderer-server.js';

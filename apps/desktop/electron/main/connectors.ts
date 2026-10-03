@@ -8,8 +8,13 @@ import {
   type YandexConnector,
 } from '@mss/stream-connectors';
 import { clientSecret } from './client-secrets.js';
-import { spotifyPathfinder, spotifySpclient } from './spotify-pathfinder.js';
-import { isSpotifyLoggedIn, spotifyWebLogout } from './spotify-web-session.js';
+import {
+  getSpotifyInjectorSession,
+  isSpotifyLoggedIn,
+  spotifyPathfinder,
+  spotifySpclient,
+  spotifyWebLogout,
+} from './spotify-session.js';
 import { yandexCustomOAuthEnabled } from './user-client-secrets.js';
 import { tokenVault } from './token-vault.js';
 import { clearVkLoginSession, openKateOAuthWindow, showVkLoginWindow } from './vk-oauth.js';
@@ -107,9 +112,12 @@ function registerSpotify(): void {
       timeZone: Intl.DateTimeFormat().resolvedOptions().timeZone,
       loggedIn: isSpotifyLoggedIn,
       connect: async () => {
-        throw new Error('Войдите в Spotify во встроенном веб-плеере: боковая панель → Spotify → Веб-плеер');
+        if (!isSpotifyLoggedIn()) {
+          throw new Error('Войдите в Spotify: Настройки → Сервисы → email и пароль или код из письма');
+        }
       },
       disconnect: spotifyWebLogout,
+      setLike: (uri, liked) => getSpotifyInjectorSession().setLike(uri, liked),
     }),
   );
 }

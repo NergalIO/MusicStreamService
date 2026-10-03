@@ -354,44 +354,59 @@ class SpotifyPathfinder @Inject constructor(
 
     suspend fun trackRadio(trackId: String): PlaylistWithTracks {
         val path = "/inspiredby-mix/v2/seed_to_playlist/spotify:track:${java.net.URLEncoder.encode(trackId, Charsets.UTF_8)}?response-format=json"
-        val (status, text) = exchange("GET", "https://spclient.wg.spotify.com$path", null)
-        if (status !in 200..299) {
-            throw ConnectorException(if (status == 429) "Spotify просит подождать — повторите через минуту" else "У этого трека нет радио в Spotify")
+        val hosts = web.resolveSpclient()
+        var lastStatus = 0
+        for (host in hosts) {
+            val (status, text) = exchange("GET", "${host.trimEnd('/')}$path", null)
+            lastStatus = status
+            if (status !in 200..299) continue
+            val seed = json.parseToJsonElement(text).jsonObject
+            val uri = seed.arr("mediaItems")?.firstOrNull()?.jsonObject?.str("uri")
+            if (uri.isNullOrBlank() || !uri.startsWith("spotify:playlist:")) continue
+            return playlist(idFromUri(uri) ?: throw ConnectorException("У этого трека нет радио в Spotify"))
         }
-        val seed = json.parseToJsonElement(text).jsonObject
-        val uri = seed.arr("mediaItems")?.firstOrNull()?.jsonObject?.str("uri")
-        if (uri.isNullOrBlank() || !uri.startsWith("spotify:playlist:")) {
-            throw ConnectorException("У этого трека нет радио в Spotify")
-        }
-        return playlist(idFromUri(uri) ?: throw ConnectorException("У этого трека нет радио в Spotify"))
+        throw ConnectorException(if (lastStatus == 429) "Spotify просит подождать — повторите через минуту" else "У этого трека нет радио в Spotify")
     }
 
     suspend fun lyrics(trackId: String): TrackLyrics? {
         val id = trackId.substringAfterLast(':').trim()
         if (id.isEmpty()) return null
         val encoded = java.net.URLEncoder.encode(id, Charsets.UTF_8).replace("+", "%20")
-        val (status, text) = exchange(
-            "GET",
-            "https://spclient.wg.spotify.com/color-lyrics/v2/track/$encoded?format=json&vocalRemoval=false&market=from_token",
-            null,
-        )
-        if (status == 404 || status == 403) return null
-        if (status !in 200..299) {
-            throw ConnectorException(
-                if (status == 429) "Spotify просит подождать — повторите через минуту" else "Spotify $status",
+        val hosts = web.resolveSpclient()
+        for (host in hosts) {
+            val (status, text) = exchange(
+                "GET",
+                "${host.trimEnd('/')}/color-lyrics/v2/track/$encoded?format=json&vocalRemoval=false&market=from_token",
+                null,
             )
+            if (status == 401 || status == 403) continue
+            if (status == 404) return null
+            if (status !in 200..299) {
+                throw ConnectorException(
+                    if (status == 429) "Spotify просит подождать — повторите через минуту" else "Spotify $status",
+                )
+            }
+            return mapSpotifyLyrics(json.parseToJsonElement(text).jsonObject)
         }
-        return mapSpotifyLyrics(json.parseToJsonElement(text).jsonObject)
+        return null
     }
 
     private suspend fun query(name: String, variables: JsonObject): JsonObject {
         val hash = hashFor(name)
         val (status, text) = post(name, variables, hash)
-        if (status == 400 && text.contains("PersistedQueryNotFound", true)) {
-            web.invalidateHashes()
-            val (againStatus, againText) = post(name, variables, hashFor(name))
-            if (againStatus !in 200..299) throw ConnectorException("Spotify pathfinder $againStatus")
-            return parseQuery(name, againText)
+        val missing = status == 404 || status == 412 || text.contains("PersistedQueryNotFound", true) ||
+            text.contains("unknown persisted", true)
+        if (missing) {
+            repeat(20) {
+                delay(250)
+                val retryHash = hashFor(name)
+                if (retryHash != hash) {
+                    val (againStatus, againText) = post(name, variables, retryHash)
+                    if (againStatus !in 200..299) throw ConnectorException("Spotify pathfinder $againStatus")
+                    return parseQuery(name, againText)
+                }
+            }
+            throw ConnectorException("Веб-плеер Spotify не знает запрос $name")
         }
         if (status !in 200..299) throw ConnectorException("Spotify pathfinder $status")
         return parseQuery(name, text)
@@ -419,7 +434,15 @@ class SpotifyPathfinder @Inject constructor(
                 }
             }
         }
-        return exchange("POST", "https://api-partner.spotify.com/pathfinder/v2/query", body.toString())
+        val payload = body.toString()
+        var last = 0 to ""
+        for (url in PATHFINDER_URLS) {
+            last = exchange("POST", url, payload)
+            if (last.first == 404 || last.first == 412) continue
+            if (last.second.contains("PersistedQueryNotFound", true) || last.second.contains("unknown persisted", true)) continue
+            if (last.first in 200..299) return last
+        }
+        return last
     }
 
     private suspend fun exchange(method: String, url: String, body: String?): Pair<Int, String> {
@@ -432,13 +455,9 @@ class SpotifyPathfinder @Inject constructor(
         return retry
     }
 
-    private suspend fun hashFor(name: String): String {
+    private fun hashFor(name: String): String {
+        QUERY_HASHES[name]?.let { return it }
         web.operationHash(name)?.let { return it }
-        web.invalidateHashes()
-        repeat(40) {
-            delay(250)
-            web.operationHash(name)?.let { return it }
-        }
         throw ConnectorException("Веб-плеер Spotify не знает запрос $name")
     }
 
@@ -551,5 +570,21 @@ class SpotifyPathfinder @Inject constructor(
         const val ALBUM_MAX = 1000
         const val LIBRARY_PAGE = 50
         const val LIBRARY_MAX = 2000
+
+        /** Defaults from packages/stream-connectors spotify-partner DEFAULT_QUERY_HASHES. */
+        private val QUERY_HASHES = mapOf(
+            "searchDesktop" to "2aea208278ba99da84ae7401453e819af4e07769c3c23c11d38127955c6860ba",
+            "searchTracks" to "1d021289df50166c61630e02f002ec91182b518e56bcd681ac6b0640390c0245",
+            "addToLibrary" to "896ebcb47815681340860d121cb5d494e157e2a78d3950385cd54e0393c67148",
+            "removeFromLibrary" to "896ebcb47815681340860d121cb5d494e157e2a78d3950385cd54e0393c67148",
+            "isInLibrary" to "d410781eb8ea7e1edce7c51368d5d2b6dca3c5391bd26b9ebca1cc9e1fadaddc",
+            "areEntitiesInLibrary" to "134337999233cc6fdd6b1e6dbf94841409f04a946c5c7b744b09ba0dfe5a85ed",
+        )
+        private val PATHFINDER_URLS = listOf(
+            "https://api-partner.spotify.com/pathfinder/v2/query",
+            "https://api-partner.spotify.com/pathfinder/v1/query",
+            "https://api-partner.spotify.com/pathfinder/v2/mutate",
+            "https://api-partner.spotify.com/pathfinder/v1/mutate",
+        )
     }
 }
