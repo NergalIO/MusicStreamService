@@ -392,14 +392,16 @@ class SpotifyPathfinder @Inject constructor(
     }
 
     private suspend fun query(name: String, variables: JsonObject): JsonObject {
-        val hash = hashFor(name)
+        val hash = resolveHash(name)
         val (status, text) = post(name, variables, hash)
         val missing = status == 404 || status == 412 || text.contains("PersistedQueryNotFound", true) ||
             text.contains("unknown persisted", true)
         if (missing) {
-            repeat(20) {
+            web.sniffOperationHashes(force = true)
+            if (name in LIBRARY_OPS) web.nudgeLibraryPathfinder()
+            repeat(24) {
                 delay(250)
-                val retryHash = hashFor(name)
+                val retryHash = resolveHash(name, allowSniff = false)
                 if (retryHash != hash) {
                     val (againStatus, againText) = post(name, variables, retryHash)
                     if (againStatus !in 200..299) throw ConnectorException("Spotify pathfinder $againStatus")
@@ -455,9 +457,17 @@ class SpotifyPathfinder @Inject constructor(
         return retry
     }
 
-    private fun hashFor(name: String): String {
+    private suspend fun resolveHash(name: String, allowSniff: Boolean = true): String {
         QUERY_HASHES[name]?.let { return it }
         web.operationHash(name)?.let { return it }
+        if (allowSniff) {
+            web.sniffOperationHashes()
+            web.operationHash(name)?.let { return it }
+            if (name in LIBRARY_OPS) {
+                web.nudgeLibraryPathfinder()
+                web.operationHash(name)?.let { return it }
+            }
+        }
         throw ConnectorException("Веб-плеер Spotify не знает запрос $name")
     }
 
@@ -570,6 +580,7 @@ class SpotifyPathfinder @Inject constructor(
         const val ALBUM_MAX = 1000
         const val LIBRARY_PAGE = 50
         const val LIBRARY_MAX = 2000
+        private val LIBRARY_OPS = setOf("libraryV3", "fetchLibraryTracks", "fetchPlaylist")
 
         /** Defaults from packages/stream-connectors spotify-partner DEFAULT_QUERY_HASHES. */
         private val QUERY_HASHES = mapOf(

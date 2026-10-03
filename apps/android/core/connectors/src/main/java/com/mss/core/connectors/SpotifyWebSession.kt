@@ -81,9 +81,11 @@ class SpotifyWebSession @Inject constructor(
     private val deviceWaiters = ConcurrentHashMap<String, CompletableDeferred<String>>()
     private val playWaiters = ConcurrentHashMap<String, CompletableDeferred<JSONObject>>()
     private val imageWaiters = ConcurrentHashMap<String, CompletableDeferred<String>>()
+    private val hashSniffWaiters = ConcurrentHashMap<String, CompletableDeferred<String>>()
     private val pageMutex = Mutex()
     @Volatile var onTrackEnded: ((String) -> Unit)? = null
     @Volatile private var bridgeScript: String? = null
+    @Volatile private var hashesSniffed = false
 
     init {
         DEFAULT_QUERY_HASHES.forEach { (name, hash) -> hashes[name] = hash }
@@ -122,7 +124,118 @@ class SpotifyWebSession @Inject constructor(
 
     fun rememberOperationHash(name: String, hash: String) {
         if (name.isBlank() || !HASH_RE.matches(hash)) return
-        hashes.putIfAbsent(name, hash)
+        hashes[name] = hash
+    }
+
+    /**
+     * Pull persisted-query hashes from the open.spotify.com JS bundles (same idea as
+     * desktop SpotifyInjectorSession.sniffHashes). Network hook alone only sees ops
+     * the user already triggered in the WebView.
+     */
+    suspend fun sniffOperationHashes(force: Boolean = false) {
+        if (hashesSniffed && !force) return
+        if (webView == null) return
+        ensureBridge()
+        val id = httpIds.incrementAndGet().toString()
+        val done = CompletableDeferred<String>()
+        hashSniffWaiters[id] = done
+        eval(
+            """
+            (async () => {
+              const id = ${JSONObject.quote(id)};
+              const found = [];
+              const seen = new Set();
+              const push = (name, hash) => {
+                if (!name || !/^[a-f0-9]{64}$/i.test(hash || '')) return;
+                const key = name + ':' + hash;
+                if (seen.has(key)) return;
+                seen.add(key);
+                found.push({ operationName: name, sha256Hash: hash });
+              };
+              const extract = (source) => {
+                if (!source || typeof source !== 'string') return;
+                const forward = /operationName["'\s:=]+["']([A-Za-z][A-Za-z0-9_]*)["'][\s\S]{0,500}?sha256Hash["'\s:=]+["']([a-f0-9]{64})["']/gi;
+                const reverse = /sha256Hash["'\s:=]+["']([a-f0-9]{64})["'][\s\S]{0,500}?operationName["'\s:=]+["']([A-Za-z][A-Za-z0-9_]*)["']/gi;
+                const named = /["'](addToLibrary|removeFromLibrary|isInLibrary|areEntitiesInLibrary|addItemsToLibrary|removeItemsFromLibrary|searchDesktop|searchV2|searchTracks|libraryV3|fetchLibraryTracks|fetchPlaylist|getAlbum|getTrack|queryArtistOverview|searchArtists)["']\s*:\s*["']([a-f0-9]{64})["']/g;
+                const nameValue = /name:\s*["']([A-Za-z][A-Za-z0-9_]+)["'][\s\S]{0,300}?sha256Hash["'\s:=]+["']([a-f0-9]{64})["']/gi;
+                const compact = /"([A-Za-z][A-Za-z0-9_]*)","(?:query|mutation)","([a-f0-9]{64})"/g;
+                let m;
+                while ((m = forward.exec(source))) push(m[1], m[2]);
+                while ((m = reverse.exec(source))) push(m[2], m[1]);
+                while ((m = named.exec(source))) push(m[1], m[2]);
+                while ((m = nameValue.exec(source))) push(m[1], m[2]);
+                while ((m = compact.exec(source))) push(m[1], m[2]);
+              };
+              try {
+                for (const script of document.scripts) {
+                  if (!script.src && script.textContent) extract(script.textContent);
+                }
+                const urls = [
+                  ...Array.from(document.scripts).map((s) => s.src),
+                  ...Array.from(document.querySelectorAll("link[rel='modulepreload'], link[rel='preload'][as='script']")).map((l) => l.href),
+                  ...performance.getEntriesByType('resource').map((e) => e.name),
+                ].filter((src) => /spotifycdn|web-player|xpui/i.test(src) && /\.js(\?|$)/i.test(src));
+                const ranked = [...new Set(urls)].sort((a, b) => {
+                  const score = (url) => {
+                    if (/web-player\.[a-f0-9]/i.test(url)) return 4;
+                    if (/web-player/i.test(url)) return 3;
+                    if (/xpui/i.test(url)) return 2;
+                    return 1;
+                  };
+                  return score(b) - score(a);
+                }).slice(0, 10);
+                for (const url of ranked) {
+                  try {
+                    const res = await fetch(url, { credentials: 'omit', signal: AbortSignal.timeout(8000) });
+                    if (!res.ok) continue;
+                    const text = await res.text();
+                    extract(text);
+                    if (found.some((item) => item.operationName === 'libraryV3' || item.operationName === 'fetchLibraryTracks' || item.operationName === 'fetchPlaylist')) break;
+                  } catch (e) {}
+                }
+              } catch (e) {}
+              MssSpotify.onHashes(id, JSON.stringify(found));
+            })();
+            """.trimIndent(),
+        )
+        try {
+            val raw = withTimeoutOrNull(20_000) { done.await() } ?: "[]"
+            val arr = org.json.JSONArray(raw)
+            for (i in 0 until arr.length()) {
+                val row = arr.optJSONObject(i) ?: continue
+                rememberOperationHash(row.optString("operationName"), row.optString("sha256Hash"))
+            }
+            hashesSniffed = true
+        } catch (_: Throwable) {
+            hashesSniffed = false
+        } finally {
+            hashSniffWaiters.remove(id)
+        }
+    }
+
+    /**
+     * Soft-navigate so the WebView fires real pathfinder calls and the fetch hook can capture hashes
+     * that bundle sniffing missed (library pages).
+     */
+    suspend fun nudgeLibraryPathfinder() {
+        if (webView == null) return
+        ensureBridge()
+        eval(
+            """
+            (async () => {
+              try {
+                if (!location.href.includes('open.spotify.com')) return;
+                const paths = ['/collection/tracks', '/collection/playlists'];
+                for (const path of paths) {
+                  history.pushState({}, '', path);
+                  window.dispatchEvent(new PopStateEvent('popstate'));
+                  await new Promise((r) => setTimeout(r, 900));
+                }
+              } catch (e) {}
+            })();
+            """.trimIndent(),
+        )
+        delay(2200)
     }
 
     fun invalidateHeaders() {
@@ -855,6 +968,11 @@ class SpotifyWebSession @Inject constructor(
         }
 
         @JavascriptInterface
+        fun onHashes(id: String, json: String) {
+            hashSniffWaiters.remove(id)?.complete(json)
+        }
+
+        @JavascriptInterface
         fun onHttp(id: String, status: Int, body: String) {
             httpWaiters.remove(id)?.complete(status to body)
         }
@@ -946,14 +1064,29 @@ class SpotifyWebSession @Inject constructor(
           (function () {
             if (window.__mssPathfinderHook) return;
             window.__mssPathfinderHook = true;
+            const capture = (url, body) => {
+              try {
+                if (!url || url.indexOf('api-partner.spotify.com/pathfinder') < 0) return;
+                if (typeof body === 'string' && body) {
+                  MssSpotify.onPathfinder(body);
+                  return;
+                }
+                const u = new URL(url, location.origin);
+                const operationName = u.searchParams.get('operationName');
+                const extensions = u.searchParams.get('extensions');
+                if (operationName && extensions) {
+                  MssSpotify.onPathfinder(JSON.stringify({
+                    operationName: operationName,
+                    extensions: JSON.parse(extensions),
+                  }));
+                }
+              } catch (e) {}
+            };
             const orig = window.fetch.bind(window);
             window.fetch = function (input, init) {
               try {
                 const url = typeof input === 'string' ? input : (input && input.url) || '';
-                if (url.indexOf('api-partner.spotify.com/pathfinder') >= 0 && init && init.body) {
-                  const body = typeof init.body === 'string' ? init.body : null;
-                  if (body) MssSpotify.onPathfinder(body);
-                }
+                capture(url, init && init.body);
               } catch (e) {}
               return orig(input, init);
             };

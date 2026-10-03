@@ -660,7 +660,7 @@ export function extractQueryHashes(source: string): { operationName: string; sha
   const reverse =
     /sha256Hash["'\s:=]+["']([a-f0-9]{64})["'][\s\S]{0,500}?operationName["'\s:=]+["']([A-Za-z][A-Za-z0-9_]*)["']/gi;
   const named =
-    /["'](addToLibrary|removeFromLibrary|isInLibrary|areEntitiesInLibrary|addItemsToLibrary|removeItemsFromLibrary|searchDesktop|searchV2|searchTracks)["']\s*:\s*["']([a-f0-9]{64})["']/g;
+    /["'](addToLibrary|removeFromLibrary|isInLibrary|areEntitiesInLibrary|addItemsToLibrary|removeItemsFromLibrary|searchDesktop|searchV2|searchTracks|libraryV3|fetchLibraryTracks|fetchPlaylist|getAlbum|getTrack|queryArtistOverview|searchArtists)["']\s*:\s*["']([a-f0-9]{64})["']/g;
   const nameValue =
     /name:\s*["']([A-Za-z][A-Za-z0-9_]+)["'][\s\S]{0,300}?sha256Hash["'\s:=]+["']([a-f0-9]{64})["']/gi;
   const compact = /"([A-Za-z][A-Za-z0-9_]*)","(?:query|mutation)","([a-f0-9]{64})"/g;
